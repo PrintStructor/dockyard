@@ -116,7 +116,7 @@ function initialize() {
         "
         @click="homeAll"
       >
-        <Home :size="15" /><span>ALL</span>
+        <Home :size="14" /><span>ALL</span>
       </button>
       <button
         class="subtle-button"

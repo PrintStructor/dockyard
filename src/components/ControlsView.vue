@@ -26,6 +26,7 @@ const axisRows = [
 const allTools = ref(false)
 const drafts = ref({})
 const submitted = ref({})
+const axisDrafts = ref({})
 const confirmMotors = ref(false)
 let confirmMotorsTimer = null
 
@@ -196,6 +197,59 @@ const position = axis => {
   return homed(axis) && value != null ? value.toLocaleString(locale.value, { maximumFractionDigits: 2 }) : '—'
 }
 
+const axisIndex = axis => ['x', 'y', 'z'].indexOf(axis)
+const axisLive = axis => {
+  const value = props.status?.position?.[axisIndex(axis)]
+  return homed(axis) && Number.isFinite(value) ? Number(value.toFixed(2)) : null
+}
+const axisMin = axis => {
+  const v = props.status?.axisMinimum?.[axisIndex(axis)]
+  return Number.isFinite(v) ? v : null
+}
+const axisMax = axis => {
+  const v = props.status?.axisMaximum?.[axisIndex(axis)]
+  return Number.isFinite(v) ? v : null
+}
+const axisDraftValue = axis => {
+  if (axisDrafts.value[axis] != null) return axisDrafts.value[axis]
+  const live = axisLive(axis)
+  return live == null ? '' : String(live)
+}
+const axisDirty = axis => {
+  if (axisDrafts.value[axis] == null) return false
+  if (axisDrafts.value[axis] === '') return true
+  const live = axisLive(axis)
+  return live == null || Math.abs(Number(axisDrafts.value[axis]) - live) > 1e-3
+}
+const axisValid = axis => {
+  const raw = axisDraftValue(axis)
+  if (raw === '') return false
+  const num = Number(raw)
+  const min = axisMin(axis)
+  const max = axisMax(axis)
+  return Number.isFinite(num) && min != null && max != null && num >= min && num <= max
+}
+
+async function applyAxisTarget(axis) {
+  if (!motion.value || !homed(axis) || !axisDirty(axis) || !axisValid(axis)) return
+  const target = Number(Number(axisDraftValue(axis)).toFixed(3))
+  const ok = await props.send({ action: 'move_to', axis, target })
+  if (ok) delete axisDrafts.value[axis]
+}
+
+watch(
+  () => [props.online, moving.value, props.status?.homedAxes],
+  ([isOnline, isMoving, homedAxes]) => {
+    if (!isOnline || isMoving) {
+      axisDrafts.value = {}
+      return
+    }
+    for (const axis of ['x', 'y', 'z']) {
+      if (!homedAxes?.includes(axis)) delete axisDrafts.value[axis]
+    }
+  },
+)
+
 const temperature = value => (value == null ? '—' : Math.round(value))
 
 const axisHomeReason = axis => quickHomeAxisReason(props.status, axis, props.online, props.pending)
@@ -229,13 +283,50 @@ watch(motion, allowed => {
       <article class="control-panel motion-panel">
         <h2><Move :size="20" />{{ t('Achsen & Bewegung') }}</h2>
         <div class="axis-readings">
-          <div v-for="axis in ['x', 'y', 'z']" :key="axis">
-            <span>{{ axis.toUpperCase() }}</span>
-            <strong>{{ position(axis) }} <small>mm</small></strong>
-            <span :class="{ 'text-lime': homed(axis) }">
-              {{ homed(axis) ? t('Referenziert') : t('Nicht referenziert') }}
-            </span>
-          </div>
+          <form
+            v-for="axis in ['x', 'y', 'z']"
+            :key="axis"
+            class="axis-reading-card"
+            :class="{ homed: homed(axis), dirty: axisDirty(axis) }"
+            novalidate
+            @submit.prevent="applyAxisTarget(axis)"
+          >
+            <span class="axis-reading-label">{{ axis.toUpperCase() }}</span>
+            <input
+              type="number"
+              step="0.1"
+              inputmode="decimal"
+              :min="axisMin(axis) ?? undefined"
+              :max="axisMax(axis) ?? undefined"
+              :value="axisDraftValue(axis)"
+              :disabled="!motion || !homed(axis) || axisMin(axis) == null || axisMax(axis) == null"
+              placeholder="—"
+              :aria-label="t('Zielposition für {0} in Millimetern', [axis.toUpperCase()])"
+              :title="
+                !homed(axis)
+                  ? t('Zuerst {0} homen.', [axis.toUpperCase()])
+                  : axisMin(axis) != null && axisMax(axis) != null
+                    ? t('Verfahrbereich: {0} bis {1} mm · Enter fährt an, Escape verwirft', [
+                        Math.round(axisMin(axis)),
+                        Math.round(axisMax(axis)),
+                      ])
+                    : ''
+              "
+              @input="axisDrafts[axis] = $event.target.value"
+              @keydown.esc="delete axisDrafts[axis]"
+              @blur="!axisDirty(axis) && delete axisDrafts[axis]"
+            />
+            <small class="axis-reading-unit">mm</small>
+            <button
+              class="apply-temperature axis-apply-btn"
+              type="submit"
+              :disabled="!motion || !homed(axis) || !axisDirty(axis) || !axisValid(axis)"
+              :aria-label="t('Zielposition für {0} anfahren', [axis.toUpperCase()])"
+              :title="t('Zielposition für {0} anfahren', [axis.toUpperCase()])"
+            >
+              <Check :size="13" />
+            </button>
+          </form>
         </div>
 
         <div class="motion-prep-bar">

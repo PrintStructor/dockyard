@@ -237,3 +237,35 @@ test('all-tools heating sets exactly six tools, leaves bed alone, and respects e
   raw.idle_timeout.state = 'Printing'
   assert.throws(() => commandFor({ action: 'temperature_all', target: 140 }, raw), /gesperrt/)
 })
+
+test('move_to validates homed axis, travel bounds, and preserves coordinate mode in absolute G1 moves', () => {
+  const raw = state()
+  const moveX = commandFor({ action: 'move_to', axis: 'x', target: 175.5 }, raw)
+  assert.match(moveX.body.script, /^SAVE_GCODE_STATE NAME=STORMTROOPER_UI_MOVE\nG90\nG1 X175\.5 F3000\nM400\nRESTORE_GCODE_STATE/)
+  assert.equal(moveX.label, 'X auf 175.5 mm')
+
+  const moveZ = commandFor({ action: 'move_to', axis: 'z', target: 50 }, raw)
+  assert.match(moveZ.body.script, /G90\nG1 Z50 F600\nM400/)
+  assert.equal(moveZ.label, 'Z auf 50 mm')
+
+  for (const bad of [
+    { action: 'move_to', axis: 'e', target: 10 },
+    { action: 'move_to', axis: 'x', target: -1 },
+    { action: 'move_to', axis: 'x', target: 356 },
+    { action: 'move_to', axis: 'y', target: 362 },
+    { action: 'move_to', axis: 'z', target: -6 },
+    { action: 'move_to', axis: 'z', target: 331 },
+    { action: 'move_to', axis: 'y', target: '100' },
+    { action: 'move_to', axis: 'x', target: Number.NaN },
+  ]) {
+    assert.throws(() => commandFor(bad, raw))
+  }
+
+  const unhomed = state()
+  unhomed.toolhead.homed_axes = 'xy'
+  assert.throws(() => commandFor({ action: 'move_to', axis: 'z', target: 20 }, unhomed), /homen/)
+
+  const printing = state()
+  printing.print_stats.state = 'printing'
+  assert.throws(() => commandFor({ action: 'move_to', axis: 'x', target: 100 }, printing), /gesperrt/)
+})

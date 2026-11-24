@@ -51,6 +51,7 @@ export function commandFor(input, raw) {
   const permitted = [
     'home',
     'jog',
+    'move_to',
     'temperature',
     'temperature_all',
     'heaters_off',
@@ -73,6 +74,7 @@ export function commandFor(input, raw) {
     : ({
         home: ['action', 'axis'],
         jog: ['action', 'axis', 'distance'],
+        move_to: ['action', 'axis', 'target'],
         temperature: ['action', 'heater', 'target'],
         temperature_all: ['action', 'target'],
         led: ['action', 'profile'],
@@ -152,7 +154,7 @@ export function commandFor(input, raw) {
     }
   }
 
-  const motion = ['home', 'jog', 'qgl', 'mesh', 'motors_off'].includes(action)
+  const motion = ['home', 'jog', 'move_to', 'qgl', 'mesh', 'motors_off'].includes(action)
   if (motion && raw['gcode_macro LOAD_WATCH']?.active === 1) {
     fail('Einlegehilfe ist scharf. Zuerst mit Fertig beenden.', 409)
   }
@@ -211,6 +213,26 @@ export function commandFor(input, raw) {
     const feed = input.axis === 'z' ? 300 : 1800
     script = `SAVE_GCODE_STATE NAME=STORMTROOPER_UI_JOG\nG91\nG1 ${axis}${input.distance} F${feed}\nM400\nRESTORE_GCODE_STATE NAME=STORMTROOPER_UI_JOG MOVE=0`
     label = `${axis} ${input.distance > 0 ? '+' : ''}${input.distance} mm`
+  } else if (action === 'move_to') {
+    if (!['x', 'y', 'z'].includes(input.axis) || !finite(input.target)) {
+      fail('Ungültige Zielposition.')
+    }
+    requireAxes(input.axis)
+    const i = ['x', 'y', 'z'].indexOf(input.axis)
+    const min = raw.toolhead?.axis_minimum?.[i]
+    const max = raw.toolhead?.axis_maximum?.[i]
+    if (![min, max].every(finite)) fail('Achsenposition oder Verfahrgrenzen unbekannt.', 409)
+    if (input.target < min || input.target > max) {
+      fail('Dieser Schritt überschreitet den Verfahrbereich.', 409)
+    }
+    const target = Number(input.target.toFixed(3)) || 0
+    if (target < min || target > max) {
+      fail('Dieser Schritt überschreitet den Verfahrbereich.', 409)
+    }
+    const axis = input.axis.toUpperCase()
+    const feed = input.axis === 'z' ? 600 : 3000
+    script = `SAVE_GCODE_STATE NAME=STORMTROOPER_UI_MOVE\nG90\nG1 ${axis}${target} F${feed}\nM400\nRESTORE_GCODE_STATE NAME=STORMTROOPER_UI_MOVE MOVE=0`
+    label = `${axis} auf ${target} mm`
   } else if (action === 'temperature') {
     if (
       !['heater_bed', 'extruder', 'extruder1', 'extruder2', 'extruder3', 'extruder4', 'extruder5'].includes(input.heater) ||

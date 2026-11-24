@@ -54,6 +54,7 @@ test('dynamic command feedback, guards and parameters are localized without chan
   assert.equal(translate('Fluss auf 95 %', 'en'), 'Flow to 95 %')
   assert.equal(translate('Z-Offset +0.010 mm', 'en'), 'Z offset +0.010 mm')
   assert.equal(translate('Objekt überspringen · Part_A', 'en'), 'Exclude object · Part_A')
+  assert.equal(translate('X auf 175.5 mm', 'en'), 'Move X to 175.5 mm')
 })
 
 test('saved language accepts supported choices and safely falls back with blocked storage', () => {

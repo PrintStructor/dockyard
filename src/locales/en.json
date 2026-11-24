@@ -890,5 +890,10 @@
   "Achsen bewegen": "Move axes",
   "Einzelne Achsen homen": "Home individual axes",
   "{0} = {1} mm · {0} erneut homen": "{0} = {1} mm · home {0} again",
-  "Ungültige Achse.": "Invalid axis."
+  "Ungültige Achse.": "Invalid axis.",
+  "{0} auf {1} mm": "Move {0} to {1} mm",
+  "Zielposition für {0} in Millimetern": "Target position for {0} in millimeters",
+  "Zielposition für {0} anfahren": "Move {0} to target position",
+  "Verfahrbereich: {0} bis {1} mm · Enter fährt an, Escape verwirft": "Travel range: {0} to {1} mm · Enter to move, Escape to discard",
+  "Ungültige Zielposition.": "Invalid target position."
 }

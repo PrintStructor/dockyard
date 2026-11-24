@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Printer, RefreshCw, Layers, Clock, FileCode2, ChevronRight, Lock, Unlock } from '@lucide/vue'
+import { Printer, RefreshCw, Layers, Clock, FileCode2, ChevronRight, Lock, Unlock, Expand, X } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import CockpitSelect from './CockpitSelect.vue'
 import PrintScene from './PrintScene.vue'
@@ -27,6 +27,15 @@ const showSupport = ref(true)
 const showGhost = ref(true)
 const followLiveLayer = ref(true)
 const manualLayer = ref(1)
+const thumbnailDialog = ref(null)
+
+function openThumbnail() {
+  if (thumbnailUrl.value) thumbnailDialog.value?.showModal()
+}
+
+function closeThumbnail() {
+  thumbnailDialog.value?.close()
+}
 
 let fetchAbort = null
 
@@ -226,7 +235,10 @@ function selectRecentJob(filename) {
   selectedFile.value = filename
 }
 
-watch(selectedFile, filename => loadSelectedFile(filename))
+watch(selectedFile, filename => {
+  closeThumbnail()
+  loadSelectedFile(filename)
+})
 
 watch(
   () => props.requestedFile,
@@ -360,14 +372,23 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="print-title-block">
-          <img
+          <button
             v-if="thumbnailUrl"
-            :src="thumbnailUrl"
-            class="print-thumbnail"
-            width="64"
-            height="64"
-            :alt="metadata?.name || ''"
-          />
+            type="button"
+            class="print-thumbnail-button"
+            :title="t('Vorschaubild vergrößern')"
+            :aria-label="t('Vorschaubild vergrößern')"
+            @click="openThumbnail"
+          >
+            <img
+              :src="thumbnailUrl"
+              class="print-thumbnail"
+              width="64"
+              height="64"
+              :alt="metadata?.name || ''"
+            />
+            <span class="print-thumbnail-zoom" aria-hidden="true"><Expand :size="12" /></span>
+          </button>
           <div class="print-title-copy">
             <h2>{{ metadata?.name || (selectedFile ? selectedFile.split('/').pop() : t('Kein Druck gewählt')) }}</h2>
             <p v-if="!isViewingActivePrint" class="print-preview-note">
@@ -500,5 +521,25 @@ onBeforeUnmount(() => {
         </ul>
       </details>
     </aside>
+
+    <dialog
+      ref="thumbnailDialog"
+      class="camera-dialog thumbnail-dialog"
+      @click="event => event.target === thumbnailDialog && closeThumbnail()"
+    >
+      <header>
+        <h2>{{ metadata?.name || (selectedFile ? selectedFile.split('/').pop() : '') }}</h2>
+        <button class="icon-button" type="button" :aria-label="t('Vorschaubild schließen')" @click="closeThumbnail">
+          <X :size="20" />
+        </button>
+      </header>
+      <div class="thumbnail-expanded-frame">
+        <img v-if="thumbnailUrl" :src="thumbnailUrl" :alt="metadata?.name || ''" />
+      </div>
+      <p v-if="metadata?.slicer">
+        {{ metadata.slicer }}{{ metadata.slicerVersion ? ` ${metadata.slicerVersion}` : '' }}
+        <template v-if="metadata?.layerCount"> · {{ t('{0} Layer', [metadata.layerCount]) }}</template>
+      </p>
+    </dialog>
   </section>
 </template>

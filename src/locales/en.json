@@ -527,5 +527,8 @@
   "Beendet": "Finished",
   "Gesamtzeit": "Total time",
   "Filament verbraucht": "Filament used",
-  "Druckjob aus der Liste wählen.": "Select a print job from the list."
+  "Druckjob aus der Liste wählen.": "Select a print job from the list.",
+  "Vorschaubild vergrößern": "Expand preview image",
+  "Vorschaubild schließen": "Close preview image",
+  "{0} Layer": "{0} layers"
 }

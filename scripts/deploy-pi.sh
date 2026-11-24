@@ -62,7 +62,10 @@ if [[ "${DEPLOY_DIR}" == /* || "${DEPLOY_DIR}" == *..* || ! "${DEPLOY_DIR}" =~ ^
   exit 1
 fi
 
-if [[ ! "${DEPLOY_PRINTER_URL}" =~ ^http://[A-Za-z0-9._:\[\]-]+$ ]]; then
+if ! node -e "
+  const u = new URL(process.argv[1]);
+  if (u.protocol !== 'http:' || u.username || u.password || u.pathname !== '/' || u.search || u.hash) process.exit(1);
+" "${DEPLOY_PRINTER_URL}" 2>/dev/null; then
   echo "Error: DEPLOY_PRINTER_URL must be an HTTP origin (e.g. http://127.0.0.1:1977)." >&2
   exit 1
 fi
@@ -220,7 +223,7 @@ SHORT_HOST="$(hostname -s)"
 
 READY=0
 for _ in $(seq 1 20); do
-  if curl -fsS -o /dev/null "http://127.0.0.1:${DEPLOY_PORT}/" \
+  if curl -fsS -o /dev/null "http://127.0.0.1:${DEPLOY_PORT}/" 2>/dev/null \
     && STATUS_JSON="$(curl -fsS "http://127.0.0.1:${DEPLOY_PORT}/api/status" 2>/dev/null)"; then
     READY=1
     break

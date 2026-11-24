@@ -1,5 +1,11 @@
 import { auxCapabilities, auxCommand, auxActions } from './aux-controls.mjs'
 import { toolCapabilities, toolActionCommand, toolActions } from './tool-actions.mjs'
+import {
+  calibrationActions,
+  calibrationActionKeys,
+  calibrationCapabilities,
+  calibrationCommand,
+} from './calibration.mjs'
 import { canHomeBeforeInitialization } from './status.mjs'
 import { allowedOrigins } from './config.mjs'
 
@@ -28,6 +34,7 @@ export function capabilities(raw) {
     mesh: !!config['bed_mesh'],
     ...toolCapabilities(config, raw),
     ...auxCapabilities(config),
+    ...calibrationCapabilities(config),
   }
 }
 
@@ -48,6 +55,7 @@ export function commandFor(input, raw) {
     'fan',
     ...toolActions,
     ...auxActions,
+    ...calibrationActions,
   ]
   if (!permitted.includes(action)) fail('Diese Aktion ist nicht verfügbar.')
 
@@ -62,6 +70,7 @@ export function commandFor(input, raw) {
         led: ['action', 'profile'],
         fan: ['action', 'fan', 'percent'],
         console: ['action', 'script'],
+        ...calibrationActionKeys,
       }[action] ?? ['action'])
   if (Object.keys(input).some(key => !keys.includes(key))) fail('Unbekannte Befehlsparameter.')
 
@@ -94,6 +103,7 @@ export function commandFor(input, raw) {
   }
 
   if (toolActions.includes(action)) return toolActionCommand(input, raw, capabilities(raw))
+  if (calibrationActions.includes(action)) return calibrationCommand(input, raw, capabilities(raw))
 
   if (action === 'fan') {
     const fans = capabilities(raw).fans

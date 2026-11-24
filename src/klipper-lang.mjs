@@ -113,7 +113,7 @@ const editorBaseTheme = EditorView.theme(
     },
     '.cm-gutters': {
       backgroundColor: 'var(--surface-subtle)',
-      color: '#63757d',
+      color: '#80949d',
       borderRight: '1px solid var(--line-subtle)',
       fontVariantNumeric: 'tabular-nums',
       userSelect: 'none',
@@ -181,7 +181,7 @@ const editorBaseTheme = EditorView.theme(
 const highlightStyle = HighlightStyle.define([
   { tag: t.heading, color: '#c5f76b', fontWeight: '600' },
   { tag: t.propertyName, color: '#a9d5e8' },
-  { tag: t.comment, color: '#6f828a', fontStyle: 'italic' },
+  { tag: t.comment, color: '#8397a0', fontStyle: 'italic' },
   { tag: t.number, color: '#f3c67b' },
   { tag: t.string, color: '#b7df9b' },
   { tag: t.atom, color: '#e8b382' },

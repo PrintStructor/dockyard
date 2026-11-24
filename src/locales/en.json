@@ -908,5 +908,12 @@
   "Klipper ist nicht bereit": "Klipper is not ready",
   "Für Z und QGL zuerst X/Y oder ALL homen.": "Home X/Y or ALL first for Z and QGL.",
   "Für QGL zuerst Z homen.": "Home Z first for QGL.",
-  "Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden.": "Click again to confirm · QGL must be run again afterwards."
+  "Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden.": "Click again to confirm · QGL must be run again afterwards.",
+  "Gesamt": "Full",
+  "Oben": "Top",
+  "Vorne": "Front",
+  "Drucker-Kamerawinkel": "Printer camera angle",
+  "Kameraperspektive": "Camera angle",
+  "{0} Werkzeugwechsel": "{0} tool changes",
+  "· aufgenommen": "· mounted"
 }

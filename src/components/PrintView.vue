@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Printer, RefreshCw, Layers, Clock, FileCode2, ChevronRight, Lock, Unlock, Expand, X, Play } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import { printControlReason } from '../print-control-state.mjs'
+import { computeLayerToolBands } from '../layer-ribbon.mjs'
 import CockpitSelect from './CockpitSelect.vue'
 import PrintScene from './PrintScene.vue'
 import LivePrintTuning from './LivePrintTuning.vue'
@@ -96,8 +97,19 @@ const currentLayerZ = computed(() => {
   return null
 })
 
+const TOOL_PALETTE = ['#c5f76b', '#6ed5e7', '#bca3ff', '#f3c67b', '#ff9a83', '#ed9fc8']
+
 const toolColors = computed(() =>
   Array.from({ length: 6 }, (_, id) => metadata.value?.tools?.[id]?.color ?? null),
+)
+
+const layerRibbon = computed(() => computeLayerToolBands(model.value?.segments, maxLayer.value))
+
+const bandColor = toolId =>
+  colorMode.value === 'tools' ? TOOL_PALETTE[toolId] : (toolColors.value[toolId] || TOOL_PALETTE[toolId])
+
+const activeLayerPercent = computed(() =>
+  maxLayer.value <= 1 ? 100 : Math.max(0, Math.min(100, ((activeClipLayer.value - 1) / (maxLayer.value - 1)) * 100)),
 )
 
 const usedToolsList = computed(() => {
@@ -342,6 +354,8 @@ onBeforeUnmount(() => {
         :show-support="showSupport"
         :is-live-job="isViewingActivePrint"
         :live-position="status?.position"
+        :active-tool="status?.active"
+        :exclude-objects="status?.excludeObjects"
         @update:color-mode="colorMode = $event"
         @update:show-support="showSupport = $event"
         @update:show-ghost="showGhost = $event"
@@ -355,6 +369,9 @@ onBeforeUnmount(() => {
             <strong>{{ t('Layer {0} / {1}', [activeClipLayer, maxLayer]) }}</strong>
             <span v-if="currentLayerZ != null" class="layer-scrubber-z">
               · {{ formatNumber(currentLayerZ, 2) }} mm
+            </span>
+            <span v-if="layerRibbon.toolChanges > 0" class="layer-tool-changes">
+              · {{ t('{0} Werkzeugwechsel', [layerRibbon.toolChanges]) }}
             </span>
           </span>
           <button
@@ -376,6 +393,28 @@ onBeforeUnmount(() => {
           >
             {{ t('Alle Layer zeigen') }}
           </button>
+        </div>
+        <div
+          v-if="layerRibbon.bands.length"
+          class="layer-tool-ribbon"
+          aria-hidden="true"
+        >
+          <span
+            v-for="(band, idx) in layerRibbon.bands"
+            :key="`${band.startLayer}-${band.tool}-${idx}`"
+            class="layer-tool-band"
+            :style="{
+              left: `${((band.startLayer - 1) / maxLayer) * 100}%`,
+              width: `${Math.max(0.4, ((band.endLayer - band.startLayer + 1) / maxLayer) * 100)}%`,
+              background: bandColor(band.tool),
+            }"
+            :title="
+              band.startLayer === band.endLayer
+                ? `T${band.tool} · Layer ${band.startLayer}`
+                : `T${band.tool} · Layer ${band.startLayer}–${band.endLayer}`
+            "
+          />
+          <span class="layer-ribbon-cursor" :style="{ left: `${activeLayerPercent}%` }" />
         </div>
         <input
           type="range"

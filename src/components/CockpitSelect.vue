@@ -20,9 +20,13 @@ const list = ref(null)
 const open = ref(false)
 const openUp = ref(false)
 const activeIndex = ref(-1)
+const instanceId = `cockpit-select-${Math.random().toString(36).slice(2, 9)}`
+const listId = `${instanceId}-list`
+const optionId = index => `${instanceId}-opt-${index}`
 
 const selectedIndex = computed(() => props.options.findIndex(item => item.value === props.modelValue))
 const selectedOption = computed(() => props.options[selectedIndex.value] ?? null)
+const activeOptionId = computed(() => (open.value && activeIndex.value >= 0 ? optionId(activeIndex.value) : undefined))
 
 function updateDirection() {
   if (!trigger.value || typeof window === 'undefined') return
@@ -65,10 +69,16 @@ function scrollActiveIntoView() {
 }
 
 function moveActive(delta) {
-  if (!props.options.length) return
-  const next = (activeIndex.value + delta + props.options.length) % props.options.length
-  activeIndex.value = next
-  nextTick(scrollActiveIntoView)
+  const len = props.options.length
+  if (!len) return
+  for (let step = 1; step <= len; step++) {
+    const candidate = (activeIndex.value + delta * step + len * step) % len
+    if (!props.options[candidate]?.disabled) {
+      activeIndex.value = candidate
+      nextTick(scrollActiveIntoView)
+      return
+    }
+  }
 }
 
 function onKeydown(event) {
@@ -142,6 +152,8 @@ onBeforeUnmount(() => {
       :aria-label="ariaLabel"
       aria-haspopup="listbox"
       :aria-expanded="open"
+      :aria-controls="open ? listId : undefined"
+      :aria-activedescendant="activeOptionId"
       @click="toggle"
       @keydown="onKeydown"
     >
@@ -153,6 +165,7 @@ onBeforeUnmount(() => {
 
     <ul
       v-if="open"
+      :id="listId"
       ref="list"
       class="cockpit-select-menu"
       role="listbox"
@@ -162,13 +175,15 @@ onBeforeUnmount(() => {
     >
       <li
         v-for="(option, index) in options"
+        :id="optionId(index)"
         :key="option.value"
         role="option"
         class="cockpit-select-option"
-        :class="{ selected: option.value === modelValue, active: index === activeIndex }"
+        :class="{ selected: option.value === modelValue, active: index === activeIndex, disabled: option.disabled }"
         :aria-selected="option.value === modelValue"
+        :aria-disabled="option.disabled || undefined"
         :lang="option.lang"
-        @mouseenter="activeIndex = index"
+        @mouseenter="!option.disabled && (activeIndex = index)"
         @click="selectOption(option)"
       >
         <span class="cockpit-select-option-text">

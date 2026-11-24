@@ -12,6 +12,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { Reflector } from 'three/addons/objects/Reflector.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { t, language } from '../i18n.mjs'
+import { nozzleThermalGlow } from '../thermal.mjs'
 
 const props = defineProps({
   selected: Number,
@@ -24,6 +25,7 @@ const emit = defineEmits(['select'])
 
 const viewport = ref(null)
 const mode = ref('tools')
+const printerPreset = ref('overview')
 const loading = ref(true)
 const failure = ref('')
 const labels = ref([])
@@ -34,6 +36,9 @@ let outline = null
 let bloom = null
 let lightData = null
 let floor = null
+let floorVeil = null
+let thermalGroup = null
+let thermalTexture = null
 let feeds = null
 let world = null
 let camera = null
@@ -126,7 +131,7 @@ function render(now) {
   if (moving || ledAnimating || changed) invalidate()
 }
 
-function fit(box, animate = true, detail = false, underside = false) {
+function fit(box, animate = true, detail = false, underside = false, dirOverride = null) {
   if (!box || box.isEmpty() || !camera) return
   box = box.clone()
   if (detail && !underside) {
@@ -140,11 +145,13 @@ function fit(box, animate = true, detail = false, underside = false) {
   let distance =
     Math.max(size.y / (2 * Math.tan(vfov / 2)), size.x / (2 * Math.tan(horizontal / 2)), size.z) *
     (detail ? 1.1 : mode.value === 'tools' ? 1.2 : 1.35)
-  const direction = underside
-    ? new THREE.Vector3(0, -1.4, 0.75).normalize()
-    : mode.value === 'printer'
-      ? new THREE.Vector3(0.9, 0.65, 1.3).normalize()
-      : new THREE.Vector3(0.07, 0.28, 1).normalize()
+  const direction = dirOverride
+    ? dirOverride.clone().normalize()
+    : underside
+      ? new THREE.Vector3(0, -1.4, 0.75).normalize()
+      : mode.value === 'printer'
+        ? new THREE.Vector3(0.9, 0.65, 1.3).normalize()
+        : new THREE.Vector3(0.07, 0.28, 1).normalize()
   if (underside) distance *= 0.9
   const toPosition = center.clone().addScaledVector(direction, distance)
 
@@ -182,7 +189,36 @@ function overviewBox() {
 
 function reset() {
   zoomedToTool = false
+  printerPreset.value = 'overview'
   if (currentModel) fit(overviewBox())
+}
+
+function focusPrinterPreset(preset) {
+  if (mode.value !== 'printer' || !currentModel) return
+  printerPreset.value = preset
+  if (preset === 'overview') {
+    fit(overviewBox(), true)
+    return
+  }
+  if (preset === 'dock') {
+    const dockBox = new THREE.Box3()
+    for (const box of Object.values(boxes.printer ?? {})) dockBox.union(box)
+    if (!dockBox.isEmpty()) {
+      dockBox.expandByVector(new THREE.Vector3(0.03, 0.025, 0.04))
+      fit(dockBox, true, false, false, new THREE.Vector3(0.08, 0.28, 1.0))
+      return
+    }
+  }
+  if (preset === 'shuttle') {
+    const full = overviewBox()
+    const center = full.getCenter(new THREE.Vector3())
+    const size = full.getSize(new THREE.Vector3())
+    const shuttleBox = new THREE.Box3(
+      new THREE.Vector3(center.x - size.x * 0.28, full.min.y + size.y * 0.16, center.z - size.z * 0.26),
+      new THREE.Vector3(center.x + size.x * 0.28, full.min.y + size.y * 0.66, center.z + size.z * 0.28),
+    )
+    fit(shuttleBox, true, false, false, new THREE.Vector3(0.55, 0.34, 1.0))
+  }
 }
 
 async function focusSelected() {
@@ -207,12 +243,14 @@ function visualSignature() {
     const leds = props.online ? tool?.leds : null
     const filamentOn = props.online && tool?.filamentEnabled === true && tool?.filamentDetected === true
     const color = filamentOn ? (tool?.material?.color ?? '#bec9cc') : ''
+    const thermalBucket = nozzleThermalGlow(tool?.temperature, props.online).bucket
     return [
       leds?.number?.join(',') ?? '',
       leds?.left?.join(',') ?? '',
       leds?.right?.join(',') ?? '',
       filamentOn ? '1' : '0',
       color,
+      String(thermalBucket),
     ].join('|')
   })
   return `${mode.value}:${props.selected}:${props.online ? 1 : 0}:${parts.join(';')}`
@@ -296,6 +334,24 @@ function highlight(force = false) {
       const tool = props.tools?.[mesh.userData.filament]
       mesh.visible = props.online && tool?.filamentEnabled === true && tool?.filamentDetected === true
       mesh.material.color.set(tool?.material?.color ?? '#bec9cc')
+    })
+  }
+
+  if (thermalGroup) {
+    thermalGroup.visible = mode.value === 'tools'
+    thermalGroup.children.forEach(node => {
+      const id = node.userData.thermalTool
+      if (!Number.isInteger(id)) return
+      const glow = nozzleThermalGlow(props.tools?.[id]?.temperature, props.online)
+      node.visible = glow.active
+      if (!glow.active) return
+      if (node.userData.thermalRole === 'tip') {
+        node.material.color.set(glow.tipHex)
+        node.material.opacity = Math.min(0.82, glow.intensity * 0.88)
+      } else {
+        node.material.color.set(glow.poolHex)
+        node.material.opacity = Math.min(0.55, glow.intensity * 0.56)
+      }
     })
   }
   invalidate()
@@ -385,7 +441,13 @@ async function loadModel(key, noFit = false) {
     currentModel = models[key]
     world.add(currentModel)
     floor.visible = key === 'tools'
+    if (floorVeil) floorVeil.visible = key === 'tools'
+    if (thermalGroup) {
+      thermalGroup.visible = key === 'tools'
+      if (key === 'tools') syncThermalPositions()
+    }
     feeds.visible = key === 'tools'
+    if (key === 'printer') printerPreset.value = 'overview'
     pickables.length = 0
     ledMeshes.length = 0
     currentModel.traverse(object => {
@@ -477,6 +539,130 @@ function contextLost(event) {
   failure.value = 'Die 3D-Ansicht wurde unterbrochen. Seite neu laden, um sie wiederherzustellen.'
 }
 
+function buildFloorVeil() {
+  const canvas = document.createElement('canvas')
+  canvas.width = 512
+  canvas.height = 256
+  const ctx = canvas.getContext('2d')
+
+  // Seamless studio cyclorama mask: subtle transparent core over Reflector fading to opaque #1b252a at edges.
+  ctx.fillStyle = '#1b252a'
+  ctx.fillRect(0, 0, 512, 256)
+
+  ctx.save()
+  ctx.globalCompositeOperation = 'destination-out'
+  ctx.translate(256, 128)
+  ctx.scale(1.0, 0.52)
+  const cutout = ctx.createRadialGradient(0, 0, 48, 0, 0, 238)
+  cutout.addColorStop(0, 'rgba(0, 0, 0, 0.90)')
+  cutout.addColorStop(0.55, 'rgba(0, 0, 0, 0.72)')
+  cutout.addColorStop(0.84, 'rgba(0, 0, 0, 0.22)')
+  cutout.addColorStop(1, 'rgba(0, 0, 0, 0)')
+  ctx.fillStyle = cutout
+  ctx.beginPath()
+  ctx.arc(0, 0, 240, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.restore()
+
+  // Subtle CNC bay datum ticks for T0–T5 along the bench front edge.
+  ctx.strokeStyle = 'rgba(128, 152, 162, 0.34)'
+  ctx.lineWidth = 1.25
+  for (let i = 0; i < 6; i++) {
+    const worldX = (i - 2.5) * 0.095
+    const px = Math.round(((worldX / 0.86) + 0.5) * 512) + 0.5
+    ctx.beginPath()
+    ctx.moveTo(px, 198)
+    ctx.lineTo(px, 212)
+    ctx.stroke()
+  }
+
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  const veil = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.86, 0.42),
+    new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false }),
+  )
+  veil.rotation.x = -Math.PI / 2
+  veil.position.set(0, -0.00005, 0.015)
+  veil.renderOrder = 1
+  return veil
+}
+
+function buildThermalGlowTexture() {
+  const canvas = document.createElement('canvas')
+  canvas.width = 128
+  canvas.height = 128
+  const ctx = canvas.getContext('2d')
+  const grad = ctx.createRadialGradient(64, 64, 4, 64, 64, 64)
+  grad.addColorStop(0, 'rgba(255, 255, 255, 1)')
+  grad.addColorStop(0.35, 'rgba(255, 255, 255, 0.55)')
+  grad.addColorStop(0.7, 'rgba(255, 255, 255, 0.14)')
+  grad.addColorStop(1, 'rgba(255, 255, 255, 0)')
+  ctx.fillStyle = grad
+  ctx.fillRect(0, 0, 128, 128)
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  return tex
+}
+
+function buildThermalGroup() {
+  thermalTexture = buildThermalGlowTexture()
+  const group = new THREE.Group()
+  for (let i = 0; i < 6; i++) {
+    const x = (i - 2.5) * 0.095
+    const tip = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: thermalTexture,
+        color: 0xf3c67b,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    )
+    tip.position.set(x, 0.012, 0.008)
+    tip.scale.set(0.036, 0.036, 1)
+    tip.visible = false
+    tip.renderOrder = 2
+    tip.userData = { thermalTool: i, thermalRole: 'tip' }
+    group.add(tip)
+
+    const pool = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.072, 0.072),
+      new THREE.MeshBasicMaterial({
+        map: thermalTexture,
+        color: 0xf3c67b,
+        transparent: true,
+        opacity: 0,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    )
+    pool.rotation.x = -Math.PI / 2
+    pool.position.set(x, 0.0002, 0.008)
+    pool.visible = false
+    pool.renderOrder = 2
+    pool.userData = { thermalTool: i, thermalRole: 'pool' }
+    group.add(pool)
+  }
+  return group
+}
+
+function syncThermalPositions() {
+  if (!thermalGroup) return
+  for (const node of thermalGroup.children) {
+    const id = node.userData.thermalTool
+    const box = boxes.tools?.[id]
+    if (!box) continue
+    const center = box.getCenter(new THREE.Vector3())
+    if (node.userData.thermalRole === 'tip') {
+      node.position.set(center.x, box.min.y + 0.011, center.z + 0.004)
+    } else {
+      node.position.set(center.x, 0.0002, center.z + 0.004)
+    }
+  }
+}
+
 function disposeModel(root) {
   const geometries = new Set()
   const materials = new Set()
@@ -520,13 +706,16 @@ onMounted(() => {
     composer.addPass(bloom)
     composer.addPass(new OutputPass())
 
-    world.add(new THREE.HemisphereLight(0xe3edff, 0x65716a, 3))
-    const key = new THREE.DirectionalLight(0xfff6e9, 4)
+    world.add(new THREE.HemisphereLight(0xe3edff, 0x65716a, 2.25))
+    const key = new THREE.DirectionalLight(0xfff6e9, 3.9)
     key.position.set(3, 5, 5)
     world.add(key)
-    const fill = new THREE.DirectionalLight(0xc5d4ef, 2)
+    const fill = new THREE.DirectionalLight(0xc5d4ef, 1.8)
     fill.position.set(-4, 2, -3)
     world.add(fill)
+    const rim = new THREE.DirectionalLight(0xd4ecff, 2.2)
+    rim.position.set(0, 1.9, -4.5)
+    world.add(rim)
 
     floor = new Reflector(new THREE.PlaneGeometry(0.76, 0.3), {
       textureWidth: 1024,
@@ -538,11 +727,24 @@ onMounted(() => {
     // OutlinePass renders depth/mask materials; these must not replace the mirror image.
     const reflect = floor.onBeforeRender
     floor.onBeforeRender = function (r, scene, cam, ...rest) {
-      if (!scene.overrideMaterial) reflect.call(this, r, scene, cam, ...rest)
+      if (scene.overrideMaterial) return
+      const veilWas = floorVeil?.visible ?? false
+      const thermalWas = thermalGroup?.visible ?? false
+      if (floorVeil) floorVeil.visible = false
+      if (thermalGroup) thermalGroup.visible = false
+      reflect.call(this, r, scene, cam, ...rest)
+      if (floorVeil) floorVeil.visible = veilWas
+      if (thermalGroup) thermalGroup.visible = thermalWas
     }
     floor.rotation.x = -Math.PI / 2
     floor.position.set(0, -0.0003, 0.015)
     world.add(floor)
+
+    floorVeil = buildFloorVeil()
+    world.add(floorVeil)
+
+    thermalGroup = buildThermalGroup()
+    world.add(thermalGroup)
 
     feeds = new THREE.Group()
     world.add(feeds)
@@ -628,6 +830,13 @@ onBeforeUnmount(() => {
   controls?.dispose()
   floor?.dispose()
   floor?.geometry.dispose()
+  if (floorVeil) {
+    floorVeil.geometry.dispose()
+    floorVeil.material.map?.dispose()
+    floorVeil.material.dispose()
+  }
+  if (thermalGroup) disposeModel(thermalGroup)
+  thermalTexture?.dispose()
   if (feeds) disposeModel(feeds)
   composer?.passes.forEach(pass => pass.dispose?.())
   composer?.dispose()
@@ -645,13 +854,38 @@ onBeforeUnmount(() => {
 <template>
   <section class="scene-panel" :aria-label="t('3D-Darstellung')">
     <div class="scene-toolbar">
-      <div class="segmented" :aria-label="t('3D-Modell')">
-        <button type="button" :aria-pressed="mode === 'tools'" @click="mode = 'tools'">
-          {{ t('Werkzeuge') }}
-        </button>
-        <button type="button" :aria-pressed="mode === 'printer'" @click="mode = 'printer'">
-          {{ t('Drucker') }}
-        </button>
+      <div class="scene-toolbar-left">
+        <div class="segmented" :aria-label="t('3D-Modell')">
+          <button type="button" :aria-pressed="mode === 'tools'" @click="mode = 'tools'">
+            {{ t('Werkzeuge') }}
+          </button>
+          <button type="button" :aria-pressed="mode === 'printer'" @click="mode = 'printer'">
+            {{ t('Drucker') }}
+          </button>
+        </div>
+        <div v-if="mode === 'printer' && ready" class="segmented scene-presets" :aria-label="t('Drucker-Kamerawinkel')">
+          <button
+            type="button"
+            :aria-pressed="printerPreset === 'overview'"
+            @click="focusPrinterPreset('overview')"
+          >
+            {{ t('Gesamt') }}
+          </button>
+          <button
+            type="button"
+            :aria-pressed="printerPreset === 'dock'"
+            @click="focusPrinterPreset('dock')"
+          >
+            Dock-Rail
+          </button>
+          <button
+            type="button"
+            :aria-pressed="printerPreset === 'shuttle'"
+            @click="focusPrinterPreset('shuttle')"
+          >
+            Shuttle
+          </button>
+        </div>
       </div>
       <div class="scene-actions">
         <button
@@ -702,7 +936,7 @@ onBeforeUnmount(() => {
             class="filament-mark"
             :style="{ '--filament-color': tools[label.id]?.material?.color ?? '#bec9cc' }"
             :title="t('Filament am Eingang erkannt')"
-          /><span v-if="online && label.id === detected" class="active-tool-mark"> {{ t('· aktiv') }}</span>
+          /><span v-if="online && label.id === detected" class="active-tool-mark"> {{ t('· aufgenommen') }}</span>
         </button>
       </template>
 

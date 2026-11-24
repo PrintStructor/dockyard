@@ -81,3 +81,37 @@ export function toolActionReason(status, action, tool, online = true, pending = 
 
   return ''
 }
+
+const MAINTENANCE_LABELS = [
+  ['load', 'Laden'],
+  ['unload', 'Entladen'],
+  ['clean', 'Clean'],
+  ['purge', 'Purge'],
+]
+
+export function maintenanceRestriction(status, tool, online = true, pending = false) {
+  const blocked = MAINTENANCE_LABELS.map(([id, label]) => ({
+    id,
+    label,
+    reason: toolActionReason(status, id, tool, online, pending),
+  })).filter(item => item.reason)
+
+  if (!blocked.length) return null
+
+  const firstReason = blocked[0].reason
+  if (blocked.length === MAINTENANCE_LABELS.length && blocked.every(item => item.reason === firstReason)) {
+    return {
+      actions: [],
+      reason:
+        firstReason === 'Zuerst alle Achsen homen.'
+          ? 'Für die einzelnen Werkzeugaktionen zuerst alle Achsen homen.'
+          : firstReason,
+    }
+  }
+
+  const sameReasonActions = blocked.filter(item => item.reason === firstReason).map(item => item.label)
+  return {
+    actions: sameReasonActions,
+    reason: firstReason,
+  }
+}

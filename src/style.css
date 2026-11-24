@@ -756,4 +756,23 @@ input::placeholder{color:var(--muted);opacity:1}
 }
 @media(max-width:560px){
   .header-divider{display:none}
+  .main-nav>button{font-size:12px}
+}
+
+/* 3D Showcase & touch target refinements */
+.scene-toolbar-left{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.scene-presets button{padding:7px 10px}
+.layer-tool-changes{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.layer-tool-ribbon{position:relative;height:6px;border-radius:3px;background:var(--surface-deep);border:1px solid var(--line-subtle);overflow:hidden;margin:2px 0 4px}
+.layer-tool-band{position:absolute;top:0;bottom:0;opacity:.92}
+.layer-ribbon-cursor{position:absolute;top:-1px;bottom:-1px;width:2px;margin-left:-1px;background:var(--text);pointer-events:none}
+.editable-temperature .temperature-tool-name{min-height:28px;padding:4px 0}
+.cockpit-select-option.disabled{opacity:.45;cursor:default}
+.app-shell.display-mode .editable-temperature .temperature-tool-name{min-height:44px}
+.app-shell.display-mode .segmented button{min-height:40px;padding:8px 12px;font-size:13px}
+.app-shell.display-mode .tool-label{min-height:36px;padding:8px 10px;font-size:12px}
+.app-shell.display-mode .graph-legend button{min-height:38px;padding:6px 10px;font-size:12px}
+@media(max-width:560px){
+  .scene-toolbar{flex-wrap:wrap;gap:6px}
+  .scene-presets button{padding:6px 8px;font-size:10px}
 }

@@ -37,3 +37,36 @@ export function thermalDisplay({ temperature, target, power, maxTemperature, onl
     marker: target > 0 ? target / scale : null,
   }
 }
+
+export function nozzleThermalGlow(temperature, online = true) {
+  if (!online || !Number.isFinite(temperature) || temperature < 50) {
+    return { active: false, bucket: 0, intensity: 0, tipHex: '#000000', poolHex: '#000000' }
+  }
+  const bucket = Math.min(300, Math.floor(temperature / 5) * 5)
+  const norm = Math.min(1, Math.max(0, (bucket - 50) / 230))
+  if (bucket < 110) {
+    return {
+      active: true,
+      bucket,
+      intensity: +(0.18 + norm * 0.85).toFixed(3),
+      tipHex: '#c46c3b',
+      poolHex: '#944a24',
+    }
+  }
+  if (bucket < 200) {
+    return {
+      active: true,
+      bucket,
+      intensity: +(0.32 + norm * 0.65).toFixed(3),
+      tipHex: '#e39b52',
+      poolHex: '#c87c35',
+    }
+  }
+  return {
+    active: true,
+    bucket,
+    intensity: +(0.52 + norm * 0.42).toFixed(3),
+    tipHex: '#f8d594',
+    poolHex: '#f3c67b',
+  }
+}

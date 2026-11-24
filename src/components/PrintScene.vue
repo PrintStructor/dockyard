@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import { RotateCcw, Focus, Grid3x3, Box, Layers, Eye, EyeOff } from '@lucide/vue'
+import { RotateCcw, Focus, Grid3x3, Box, Layers, Eye, EyeOff, Loader2 } from '@lucide/vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { t, language } from '../i18n.mjs'
@@ -16,6 +16,8 @@ const props = defineProps({
   showSupport: { type: Boolean, default: true },
   isLiveJob: Boolean,
   livePosition: Array,
+  activeTool: { type: Number, default: null },
+  excludeObjects: { type: Object, default: null },
 })
 
 const emit = defineEmits(['update:colorMode', 'update:showSupport', 'update:showGhost', 'reload'])
@@ -26,6 +28,7 @@ const TOOL_PALETTE = ['#c5f76b', '#6ed5e7', '#bca3ff', '#f3c67b', '#ff9a83', '#e
 
 const viewport = ref(null)
 const webglError = ref('')
+const cameraPreset = ref('iso')
 
 let renderer = null
 let scene = null
@@ -40,6 +43,8 @@ let ghostMaterial = null
 let activeGeometry = null
 let bedGroup = null
 let nozzleMarker = null
+let bedCrosshair = null
+let excludeGroup = null
 let frame = 0
 let running = false
 let visible = true
@@ -134,6 +139,7 @@ const VERTEX_SHADER = `
   varying vec3 vColor;
   varying vec3 vWorldPos;
   varying float vHeightV;
+  varying float vLayerIdx;
 
   vec3 pickToolColor(float idx) {
     if (idx < 0.5) return uToolColors[0];
@@ -192,6 +198,7 @@ const VERTEX_SHADER = `
     vWorldPos = worldPos;
     vNormal = worldNormal;
     vHeightV = position.z;
+    vLayerIdx = layerIdx;
     vColor = isSupport > 0.5 ? uSupportColor : pickToolColor(toolIdx);
 
     gl_Position = projectionMatrix * viewMatrix * vec4(worldPos, 1.0);
@@ -200,11 +207,14 @@ const VERTEX_SHADER = `
 
 const FRAGMENT_SHADER = `
   uniform float uMode;
+  uniform float uClipLayer;
+  uniform float uHasFrontier;
 
   varying vec3 vNormal;
   varying vec3 vColor;
   varying vec3 vWorldPos;
   varying float vHeightV;
+  varying float vLayerIdx;
 
   void main() {
     vec3 N = normalize(vNormal);
@@ -236,6 +246,13 @@ const FRAGMENT_SHADER = `
 
     vec3 color = diffuse * layerShade * bedAo + vec3(spec);
     color = color / (color + vec3(0.22)) * 1.12;
+
+    float isFrontier = uHasFrontier * step(abs(vLayerIdx - uClipLayer), 0.5);
+    if (isFrontier > 0.5) {
+      float fresnel = pow(1.0 - abs(dot(N, V)), 2.0);
+      color = color * 1.20 + vec3(0.09, 0.12, 0.09) * (0.45 + 0.55 * fresnel);
+    }
+
     gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
   }
 `
@@ -322,17 +339,99 @@ function buildNozzleMarker() {
   )
   cone.rotation.x = Math.PI
   cone.position.y = 4.2
+  cone.userData.role = 'tint'
   group.add(cone)
 
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(3.2, 4.4, 24),
-    new THREE.MeshBasicMaterial({ color: 0xc5f76b, side: THREE.DoubleSide, transparent: true, opacity: 0.7 }),
+    new THREE.MeshBasicMaterial({ color: 0xc5f76b, side: THREE.DoubleSide, transparent: true, opacity: 0.75 }),
   )
   ring.rotation.x = -Math.PI / 2
   ring.position.y = 0.25
+  ring.userData.role = 'tint'
   group.add(ring)
   group.visible = false
   return group
+}
+
+function buildBedCrosshair() {
+  const group = new THREE.Group()
+  const mat = new THREE.LineBasicMaterial({ color: 0xc5f76b, transparent: true, opacity: 0.32 })
+  const xLine = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-HALF_BED, 0.08, 0),
+      new THREE.Vector3(HALF_BED, 0.08, 0),
+    ]),
+    mat,
+  )
+  const yLine = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0.08, -HALF_BED),
+      new THREE.Vector3(0, 0.08, HALF_BED),
+    ]),
+    mat,
+  )
+  group.userData = { xLine, yLine, mat }
+  group.add(xLine, yLine)
+  group.visible = false
+  return group
+}
+
+function clearGroup(group) {
+  if (!group) return
+  while (group.children.length) {
+    const child = group.children[0]
+    child.geometry?.dispose?.()
+    child.material?.dispose?.()
+    group.remove(child)
+  }
+}
+
+function updateExcludeDatums() {
+  if (!excludeGroup) return
+  clearGroup(excludeGroup)
+  const ex = props.excludeObjects
+  if (!props.isLiveJob || !ex?.available || !Array.isArray(ex.objects) || !ex.objects.length) {
+    excludeGroup.visible = false
+    invalidate()
+    return
+  }
+  const excludedSet = new Set(ex.excluded ?? [])
+  for (const obj of ex.objects) {
+    if (!Array.isArray(obj.center) || obj.center.length < 2) continue
+    const [cx, cy] = obj.center
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue
+    const wx = cx - HALF_BED
+    const wz = -(cy - HALF_BED)
+    const isExcluded = excludedSet.has(obj.name)
+    const isCurrent = ex.current === obj.name
+    const color = isExcluded ? 0xb56563 : isCurrent ? 0xc5f76b : 0x8ea2ab
+    const opacity = isExcluded ? 0.72 : isCurrent ? 0.85 : 0.45
+
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(4.8, 5.8, 24),
+      new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, transparent: true, opacity }),
+    )
+    ring.rotation.x = -Math.PI / 2
+    ring.position.set(wx, 0.14, wz)
+    excludeGroup.add(ring)
+
+    if (isExcluded) {
+      const s = 4.2
+      const cross = new THREE.LineSegments(
+        new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(wx - s, 0.16, wz - s),
+          new THREE.Vector3(wx + s, 0.16, wz + s),
+          new THREE.Vector3(wx + s, 0.16, wz - s),
+          new THREE.Vector3(wx - s, 0.16, wz + s),
+        ]),
+        new THREE.LineBasicMaterial({ color: 0xb56563, transparent: true, opacity: 0.82 }),
+      )
+      excludeGroup.add(cross)
+    }
+  }
+  excludeGroup.visible = excludeGroup.children.length > 0
+  invalidate()
 }
 
 function resolvedPaletteVectors() {
@@ -356,15 +455,20 @@ function updateUniforms() {
   const clip = Math.min(props.clipLayer, maxLayer)
   const support = props.showSupport ? 1.0 : 0.0
 
+  const hasFrontier = clip < maxLayer ? 1.0 : 0.0
+
   solidMaterial.uniforms.uToolColors.value = palette
   solidMaterial.uniforms.uClipLayer.value = clip
   solidMaterial.uniforms.uShowSupport.value = support
+  solidMaterial.uniforms.uHasFrontier.value = hasFrontier
 
   ghostMaterial.uniforms.uToolColors.value = palette
   ghostMaterial.uniforms.uClipLayer.value = clip
   ghostMaterial.uniforms.uShowSupport.value = support
+  ghostMaterial.uniforms.uHasFrontier.value = 0.0
   if (ghostMesh) ghostMesh.visible = props.showGhost && clip < maxLayer
 
+  updateNozzle()
   invalidate()
 }
 
@@ -372,10 +476,31 @@ function updateNozzle() {
   if (!nozzleMarker) return
   const pos = props.livePosition
   if (props.isLiveJob && Array.isArray(pos) && [pos[0], pos[1], pos[2]].every(Number.isFinite)) {
-    nozzleMarker.position.set(pos[0] - HALF_BED, Math.max(0, pos[2]), -(pos[1] - HALF_BED))
+    const wx = pos[0] - HALF_BED
+    const wy = Math.max(0, pos[2])
+    const wz = -(pos[1] - HALF_BED)
+    const palette = resolvedPaletteVectors()
+    const toolVec =
+      Number.isInteger(props.activeTool) && props.activeTool >= 0 && props.activeTool < 6
+        ? palette[props.activeTool]
+        : null
+    const markerColor = toolVec ? new THREE.Color(toolVec.x, toolVec.y, toolVec.z) : new THREE.Color(0xc5f76b)
+
+    nozzleMarker.position.set(wx, wy, wz)
+    nozzleMarker.children.forEach(child => {
+      if (child.userData.role === 'tint') child.material.color.copy(markerColor)
+    })
     nozzleMarker.visible = true
+
+    if (bedCrosshair) {
+      bedCrosshair.userData.xLine.position.z = wz
+      bedCrosshair.userData.yLine.position.x = wx
+      bedCrosshair.userData.mat.color.copy(markerColor)
+      bedCrosshair.visible = true
+    }
   } else {
     nozzleMarker.visible = false
+    if (bedCrosshair) bedCrosshair.visible = false
   }
   invalidate()
 }
@@ -389,7 +514,7 @@ function modelBoundingBox() {
   )
 }
 
-function fitBox(box, animate = true, padding = 1.45) {
+function fitBox(box, animate = true, padding = 1.45, dirOverride = null) {
   if (!box || box.isEmpty() || !camera || !controls) return
   const center = box.getCenter(new THREE.Vector3())
   const size = box.getSize(new THREE.Vector3())
@@ -397,7 +522,7 @@ function fitBox(box, animate = true, padding = 1.45) {
   const vfov = THREE.MathUtils.degToRad(camera.fov)
   const hfov = 2 * Math.atan(Math.tan(vfov / 2) * camera.aspect)
   const dist = (radius / Math.sin(Math.min(vfov, hfov) / 2)) * (padding * 0.65)
-  const dir = new THREE.Vector3(0.68, 0.58, 1.0).normalize()
+  const dir = (dirOverride ? dirOverride.clone() : new THREE.Vector3(0.68, 0.58, 1.0)).normalize()
   const toPosition = center.clone().addScaledVector(dir, Math.max(45, dist))
 
   controls.minDistance = Math.max(12, radius * 0.35)
@@ -424,10 +549,26 @@ function fitBox(box, animate = true, padding = 1.45) {
 }
 
 function focusObject(animate = true) {
+  cameraPreset.value = 'iso'
   fitBox(modelBoundingBox(), animate, 1.38)
 }
 
+function focusPreset(preset) {
+  cameraPreset.value = preset
+  const box = hasModel.value
+    ? modelBoundingBox()
+    : new THREE.Box3(new THREE.Vector3(-HALF_BED, 0, -HALF_BED), new THREE.Vector3(HALF_BED, 50, HALF_BED))
+  if (preset === 'top') {
+    fitBox(box, true, 1.28, new THREE.Vector3(0.0, 1.0, 0.015))
+  } else if (preset === 'front') {
+    fitBox(box, true, 1.32, new THREE.Vector3(0.0, 0.14, 1.0))
+  } else {
+    fitBox(box, true, 1.38)
+  }
+}
+
 function focusBed(animate = true) {
+  cameraPreset.value = 'iso'
   const box = new THREE.Box3(new THREE.Vector3(-HALF_BED, 0, -HALF_BED), new THREE.Vector3(HALF_BED, 50, HALF_BED))
   fitBox(box, animate, 1.25)
 }
@@ -515,12 +656,20 @@ onMounted(() => {
     nozzleMarker = buildNozzleMarker()
     scene.add(nozzleMarker)
 
+    bedCrosshair = buildBedCrosshair()
+    scene.add(bedCrosshair)
+
+    excludeGroup = new THREE.Group()
+    excludeGroup.visible = false
+    scene.add(excludeGroup)
+
     const baseUniforms = mode => ({
       uToolColors: { value: resolvedPaletteVectors() },
       uSupportColor: { value: new THREE.Vector3(0.41, 0.49, 0.53) },
       uClipLayer: { value: 999999 },
       uMode: { value: mode },
       uShowSupport: { value: 1.0 },
+      uHasFrontier: { value: 0.0 },
     })
 
     solidMaterial = new THREE.ShaderMaterial({
@@ -562,6 +711,7 @@ onMounted(() => {
     focusBed(false)
     if (props.model) rebuildMesh()
     updateNozzle()
+    updateExcludeDatums()
   } catch {
     webglError.value = '3D ist in diesem Browser nicht verfügbar.'
   }
@@ -574,7 +724,8 @@ watch(
   updateUniforms,
   { deep: true },
 )
-watch(() => [props.isLiveJob, props.livePosition], updateNozzle, { deep: true })
+watch(() => [props.isLiveJob, props.livePosition, props.activeTool], updateNozzle, { deep: true })
+watch(() => [props.isLiveJob, props.excludeObjects], updateExcludeDatums, { deep: true })
 
 onBeforeUnmount(() => {
   disposed = true
@@ -599,6 +750,12 @@ onBeforeUnmount(() => {
       o.material?.dispose()
     })
   }
+  if (bedCrosshair) {
+    bedCrosshair.userData.xLine?.geometry?.dispose()
+    bedCrosshair.userData.yLine?.geometry?.dispose()
+    bedCrosshair.userData.mat?.dispose()
+  }
+  if (excludeGroup) clearGroup(excludeGroup)
   if (renderer) {
     renderer.domElement.removeEventListener('webglcontextlost', onContextLost)
     renderer.dispose()
@@ -609,21 +766,35 @@ onBeforeUnmount(() => {
 <template>
   <section class="scene-panel print-scene-panel" :aria-label="t('3D-Druckvorschau')">
     <div class="scene-toolbar">
-      <div class="segmented" :aria-label="t('Farbmodus')">
-        <button
-          type="button"
-          :aria-pressed="colorMode === 'filament'"
-          @click="emit('update:colorMode', 'filament')"
-        >
-          Filament
-        </button>
-        <button
-          type="button"
-          :aria-pressed="colorMode === 'tools'"
-          @click="emit('update:colorMode', 'tools')"
-        >
-          {{ t('Werkzeuge') }}
-        </button>
+      <div class="scene-toolbar-left">
+        <div class="segmented" :aria-label="t('Farbmodus')">
+          <button
+            type="button"
+            :aria-pressed="colorMode === 'filament'"
+            @click="emit('update:colorMode', 'filament')"
+          >
+            Filament
+          </button>
+          <button
+            type="button"
+            :aria-pressed="colorMode === 'tools'"
+            @click="emit('update:colorMode', 'tools')"
+          >
+            {{ t('Werkzeuge') }}
+          </button>
+        </div>
+
+        <div class="segmented scene-presets" :aria-label="t('Kameraperspektive')">
+          <button type="button" :disabled="!!webglError" :aria-pressed="cameraPreset === 'iso'" @click="focusPreset('iso')">
+            Iso
+          </button>
+          <button type="button" :disabled="!!webglError" :aria-pressed="cameraPreset === 'top'" @click="focusPreset('top')">
+            {{ t('Oben') }}
+          </button>
+          <button type="button" :disabled="!!webglError" :aria-pressed="cameraPreset === 'front'" @click="focusPreset('front')">
+            {{ t('Vorne') }}
+          </button>
+        </div>
       </div>
 
       <div class="scene-actions">
@@ -687,7 +858,8 @@ onBeforeUnmount(() => {
 
     <div ref="viewport" class="scene-viewport print-scene-viewport">
       <div v-if="loading || error || webglError || !hasModel" class="scene-loading" role="status">
-        <Box :size="26" />
+        <Loader2 v-if="loading && !webglError && !error" :size="26" class="spinning" />
+        <Box v-else :size="26" />
         <span>
           {{
             webglError

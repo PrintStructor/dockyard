@@ -40,7 +40,7 @@ import { usePrinter } from './usePrinter.js'
 import { useConsole } from './useConsole.js'
 import { useConfigEditor } from './useConfigEditor.js'
 import { auxActionReason } from './aux-action-state.mjs'
-import { toolActionReason, filamentToolIds, mountedToolId } from './tool-action-state.mjs'
+import { toolActionReason, filamentToolIds, mountedToolId, maintenanceRestriction } from './tool-action-state.mjs'
 import { toolState, heatState } from '../server/status.mjs'
 
 const ToolScene = defineAsyncComponent(() => import('./components/ToolScene.vue'))
@@ -226,10 +226,10 @@ function toggleLoadWatch() {
 const bulkReason = action => toolActionReason(status.value, action, undefined, online.value, pending.value)
 const filamentCount = computed(() => filamentToolIds(status.value).length)
 const actionRestriction = computed(() => {
-  const reason = toolActionReason(status.value, 'clean', selected.value, online.value, pending.value)
-  return reason === 'Zuerst alle Achsen homen.'
-    ? 'Für die einzelnen Werkzeugaktionen zuerst alle Achsen homen.'
-    : reason || ''
+  const item = maintenanceRestriction(status.value, selected.value, online.value, pending.value)
+  if (!item) return ''
+  if (!item.actions.length) return t(item.reason)
+  return `${item.actions.map(label => t(label)).join(', ')}: ${t(item.reason)}`
 })
 function bulkFilament(action) {
   if (!bulkReason(action)) send({ action })
@@ -429,7 +429,7 @@ async function acknowledgeUncertain() {
     <header class="masthead">
       <a class="brand" href="#" :aria-label="t('STORMTROOPER Werkzeugübersicht')" @click.prevent="tab = 'tools'">
         <img src="/voron-logo.svg" width="34" height="39" alt="VORON" />
-        <span>STORMTROOPER<small>VORON 2.4 <span class="brand-divider">/</span> 6-Toolchanger</small></span>
+        <span>STORMTROOPER<small>VORON 2.4 <span class="brand-divider" aria-hidden="true">/</span> 6-Toolchanger</small></span>
       </a>
       <div class="header-meta">
         <button
@@ -939,7 +939,7 @@ async function acknowledgeUncertain() {
                 :pending="pending"
                 @command="handleToolCommand"
               />
-              <p v-if="actionRestriction" class="tool-action-restriction" role="status">{{ t(actionRestriction) }}</p>
+              <p v-if="actionRestriction" class="tool-action-restriction" role="status">{{ actionRestriction }}</p>
             </div>
 
             <details class="calibration">
@@ -1126,10 +1126,10 @@ async function acknowledgeUncertain() {
       />
 
       <footer class="page-footer">
-        <span>STORMTROOPER <span class="footer-divider">/</span> {{ t('Lokale Druckerbedienung') }}</span>
+        <span>STORMTROOPER <span class="footer-divider" aria-hidden="true">/</span> {{ t('Lokale Druckerbedienung') }}</span>
         <span>
           Moonraker · {{ online ? t('verbunden') : t(connectionLabel).toLowerCase() }}
-          <span class="footer-divider">/</span> {{ t('CAD-Referenz') }}
+          <span class="footer-divider" aria-hidden="true">/</span> {{ t('CAD-Referenz') }}
         </span>
       </footer>
     </main>

@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { Lightbulb, RotateCw, Home } from '@lucide/vue'
+import { Lightbulb, RotateCw, Home, Wrench } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import {
   ledProfiles,
@@ -107,6 +107,7 @@ function initialize() {
 
 <template>
   <section class="initialize-control" :aria-label="t('Vorbereitung & Toolchanger')">
+    <h3><Wrench :size="15" />{{ t('Maschine & Vorbereitung') }}</h3>
     <div class="prep-actions">
       <button
         class="subtle-button"
@@ -222,8 +223,8 @@ function initialize() {
   </section>
 
   <section class="led-controls" :aria-label="t('LED-Befehle')">
-    <h3><Lightbulb :size="16" />LED Control</h3>
-    <div class="led-actions">
+    <h3><Lightbulb :size="15" />LED Control</h3>
+    <div class="led-actions" :data-count="main.length">
       <button
         v-for="profile in main"
         :key="profile.id"

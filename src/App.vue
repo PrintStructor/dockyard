@@ -848,19 +848,9 @@ async function acknowledgeUncertain() {
               />
             </article>
           </div>
-          <ConsoleView
-            v-if="tab === 'tools'"
-            compact
-            :status="status"
-            :online="online"
-            :pending="pending"
-            :send="send"
-            @open="tab = 'console'"
-          />
         </div>
 
-        <div class="inspector-column">
-          <aside class="inspector" :aria-label="t('Details zum ausgewählten Werkzeug')">
+        <aside class="inspector" :aria-label="t('Details zum ausgewählten Werkzeug')">
             <div class="inspector-title">
               <h2>T{{ selected }}</h2>
               <span class="selection-label">{{ t('Ausgewählt') }}</span>
@@ -958,17 +948,12 @@ async function acknowledgeUncertain() {
                 </div>
               </dl>
             </details>
-          </aside>
-
-          <section class="inspector-machine" :aria-label="t('Maschine & Vorbereitung')">
-            <h3 class="inspector-machine-title">{{ t('Maschine & Vorbereitung') }}</h3>
-            <LedControls :status="status" :online="online" :pending="pending" @command="send" />
 
             <details class="inspector-filament">
               <summary>
                 <span>{{ t('Filamentaktionen') }}</span>
                 <span v-if="online && status?.loadWatchActive" class="text-lime">{{ t('Einlegehilfe scharf') }}</span>
-                <ChevronRight :size="16" />
+                <ChevronRight :size="15" />
               </summary>
               <div class="tool-reference">
                 {{ t('Z relativ zum Initial-Tool') }}
@@ -1055,8 +1040,21 @@ async function acknowledgeUncertain() {
                 </button>
               </div>
             </details>
-          </section>
-        </div>
+          </aside>
+
+        <section class="tools-machine-panel" :aria-label="t('Maschine & Vorbereitung')">
+          <LedControls :status="status" :online="online" :pending="pending" @command="send" />
+        </section>
+
+        <ConsoleView
+          v-if="tab === 'tools'"
+          compact
+          :status="status"
+          :online="online"
+          :pending="pending"
+          :send="send"
+          @open="tab = 'console'"
+        />
       </section>
 
       <ControlsView

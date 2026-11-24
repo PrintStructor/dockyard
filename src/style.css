@@ -734,25 +734,55 @@ input::placeholder{color:var(--muted);opacity:1}
 .klipper-recovery-feedback{width:100%;font-size:12px;line-height:1.5;color:#d3ebbc}
 .klipper-recovery-feedback.failed{color:var(--amber)}
 
-.inspector-column{display:flex;flex-direction:column;gap:14px;min-width:0;align-self:start}
 .inspector-tool-actions{border-top:1px solid var(--line);margin-top:12px;padding-top:14px}
 .inspector-tool-actions h3{font-size:12px;font-weight:500;color:var(--muted);margin-bottom:10px}
 .inspector-tool-actions .tool-actions{padding:0;border:0;gap:7px}
 .inspector-tool-actions .tool-actions button{min-height:36px;font-size:12px}
 .tool-actions--mount{grid-template-columns:1fr;padding:7px 8px}
-.inspector-machine{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;display:flex;flex-direction:column;min-width:0}
-.inspector-machine-title{font-size:14px;font-weight:500;color:var(--text);margin:0 0 12px}
-.inspector-machine .initialize-control{margin-top:0;padding-top:0;border-top:0}
+
+.tools-layout{row-gap:14px}
+.tools-machine-panel{grid-column:1/-1;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px 20px;margin-top:0;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;min-width:0}
+.tools-layout>.console-panel.compact{grid-column:1/-1;margin-top:0}
+.tools-layout>.console-panel.compact:not(.collapsed){display:flex;flex-direction:column;height:340px;max-height:340px}
+.tools-layout>.console-panel.compact:not(.collapsed) .console-log{flex:1;min-height:0;height:0}
+.tools-machine-panel .initialize-control,
+.tools-machine-panel .led-controls{grid-column:auto;border-top:0;margin-top:0;padding:0;display:flex;flex-direction:column;min-width:0}
+.tools-machine-panel .initialize-control{padding-right:20px}
+.tools-machine-panel .led-controls{border-left:1px solid var(--line);padding-left:20px}
+.tools-machine-panel .initialize-control h3,
+.tools-machine-panel .led-controls h3{display:flex;align-items:center;gap:7px;font-size:14px;font-weight:500;color:var(--text);margin:0 0 12px}
+.tools-machine-panel .prep-axes-row{margin-bottom:7px}
+.tools-machine-panel .initialize-control>button{min-height:36px;padding:7px 8px}
+.tools-machine-panel .led-actions button{min-height:36px;padding:7px 6px}
+.tools-machine-panel .led-actions button:nth-child(3){grid-column:auto}
+.tools-machine-panel .led-actions[data-count="5"]{grid-template-columns:repeat(6,minmax(0,1fr))}
+.tools-machine-panel .led-actions[data-count="5"] button:nth-child(-n+3){grid-column:span 2}
+.tools-machine-panel .led-actions[data-count="5"] button:nth-child(n+4){grid-column:span 3}
+.tools-machine-panel .led-actions[data-count="3"]{grid-template-columns:repeat(3,minmax(0,1fr))}
+.tools-machine-panel .led-more{margin-top:7px}
+.tools-machine-panel .led-more button,
+.tools-machine-panel .cockpit-select-trigger{min-height:36px}
+.tools-machine-panel .initialize-control p,
+.tools-machine-panel .led-controls p{margin-top:auto;padding-top:10px}
 .initialize-control p.prep-note-warn{color:var(--amber)}
-@media(min-width:1500px){
-  .inspector-machine{padding:22px}
-}
+
+.inspector .inspector-filament{margin-top:0;padding-top:0}
+.inspector .inspector-filament:not([open]){height:auto;padding-top:0}
+.inspector .inspector-filament>summary{height:auto;min-height:0;padding:14px 0 2px;font-size:12px;color:var(--muted)}
+.inspector .inspector-filament[open]>summary{padding:14px 0 12px;margin-bottom:0;color:var(--text)}
+
 @media(max-width:1150px){
-  .inspector-machine{padding:16px 18px}
+  .tools-machine-panel{padding:14px 16px}
+  .tools-machine-panel .initialize-control{padding-right:14px}
+  .tools-machine-panel .led-controls{padding-left:14px}
 }
 @media(max-width:850px){
   .inspector-tool-actions{grid-column:1/-1}
-  .inspector-machine{padding:20px}
+}
+@media(max-width:700px){
+  .tools-machine-panel{grid-template-columns:1fr;padding:16px}
+  .tools-machine-panel .initialize-control{padding-right:0}
+  .tools-machine-panel .led-controls{border-left:0;border-top:1px solid var(--line);padding-left:0;padding-top:16px;margin-top:14px}
 }
 @media(max-width:560px){
   .header-divider{display:none}

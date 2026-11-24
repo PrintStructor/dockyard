@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {commandFor,capabilities} from '../server/control.mjs'
 import {normalizeStatus} from '../server/status.mjs'
-import {auxActionReason,ledProfiles,quickMotionReason} from '../src/aux-action-state.mjs'
+import {auxActionReason,ledProfiles,quickMotionReason,quickHomeAxisReason,quickJogReason} from '../src/aux-action-state.mjs'
 const state=()=>{
  const config={toolchanger:{},quad_gantry_level:{},'gcode_macro pause':{},'gcode_macro resume':{},'gcode_macro load_watch':{},'gcode_macro load_watch_stop':{},'gcode_macro load_filament':{},'delayed_gcode _load_watch_tick':{}}
  for(const p of ledProfiles)config[`gcode_macro ${p.macro.toLowerCase()}`]={}
@@ -58,6 +58,38 @@ test('quickMotionReason matches home, QGL and motors_off safety guards for Tools
 
  const noQgl=state();delete noQgl.configfile.settings.quad_gantry_level
  assert.match(quickMotionReason(make(noQgl),'qgl'),/konfiguriert/)
+})
+test('quickHomeAxisReason and quickJogReason enforce XY-before-Z homing and axis travel bounds',()=>{
+ const raw=state()
+ raw.toolhead.position=[100,100,20,0]
+ raw.toolhead.axis_minimum=[0,0,0,0]
+ raw.toolhead.axis_maximum=[350,350,330,0]
+ const make=r=>({...normalizeStatus(r),capabilities:capabilities(r)})
+
+ assert.equal(quickHomeAxisReason(make(raw),'x'),'')
+ assert.equal(quickHomeAxisReason(make(raw),'y'),'')
+ assert.equal(quickHomeAxisReason(make(raw),'z'),'')
+ assert.equal(quickJogReason(make(raw),'x',10),'')
+ assert.equal(quickJogReason(make(raw),'y',-10),'')
+ assert.equal(quickJogReason(make(raw),'z',-0.1),'')
+
+ // Z homing requires XY homed first
+ const onlyX=state();onlyX.toolhead.homed_axes='x'
+ assert.equal(quickHomeAxisReason(make(onlyX),'y'),'')
+ assert.match(quickHomeAxisReason(make(onlyX),'z'),/XY/)
+ assert.match(quickJogReason(make(onlyX),'y',1),/Y homen/)
+
+ // Travel bounds check
+ const atMin=state();atMin.toolhead.position=[0.5,345,0,0];atMin.toolhead.axis_minimum=[0,0,0,0];atMin.toolhead.axis_maximum=[350,350,330,0]
+ assert.match(quickJogReason(make(atMin),'x',-1),/Verfahrbereich/)
+ assert.equal(quickJogReason(make(atMin),'x',1),'')
+ assert.match(quickJogReason(make(atMin),'y',10),/Verfahrbereich/)
+ assert.match(quickJogReason(make(atMin),'z',-0.1),/Verfahrbereich/)
+ assert.equal(quickJogReason(make(atMin),'z',0.1),'')
+
+ // Detection mismatch blocks jog
+ const mismatch=state();mismatch.toolhead.position=[100,100,20,0];mismatch.toolhead.axis_minimum=[0,0,0,0];mismatch.toolhead.axis_maximum=[350,350,330,0];mismatch.toolchanger.detected_tool_number=2
+ assert.match(quickJogReason(make(mismatch),'x',1),/Werkzeugerkennung/)
 })
 test('pause and resume respect print state, while pause allows the installed tool-loss handler',()=>{
  const raw=state();assert.throws(()=>commandFor({action:'pause'},raw),/laufender/)

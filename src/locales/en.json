@@ -886,5 +886,8 @@
   "Ausgeblendet": "Hidden",
   "Direktlink für Drucker-Display (Kiosk-Browser)": "Direct link for printer display (kiosk browser)",
   "Kopiert": "Copied",
-  "URL kopieren": "Copy URL"
+  "URL kopieren": "Copy URL",
+  "Achsen bewegen": "Move axes",
+  "{0} = {1} mm · {0} erneut homen": "{0} = {1} mm · home {0} again",
+  "Ungültige Achse.": "Invalid axis."
 }

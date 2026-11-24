@@ -1,8 +1,14 @@
 <script setup>
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Lightbulb, RotateCw, Home } from '@lucide/vue'
-import { t } from '../i18n.mjs'
-import { ledProfiles, auxActionReason, quickMotionReason } from '../aux-action-state.mjs'
+import { t, locale } from '../i18n.mjs'
+import {
+  ledProfiles,
+  auxActionReason,
+  quickMotionReason,
+  quickHomeAxisReason,
+  quickJogReason,
+} from '../aux-action-state.mjs'
 import CockpitSelect from './CockpitSelect.vue'
 
 const props = defineProps({
@@ -13,6 +19,12 @@ const props = defineProps({
 
 const emit = defineEmits(['command'])
 
+const axisRows = [
+  { axis: 'x', neg: [-10, -1], pos: [1, 10] },
+  { axis: 'y', neg: [-10, -1], pos: [1, 10] },
+  { axis: 'z', neg: [-1, -0.1], pos: [0.1, 1] },
+]
+
 const extra = ref('')
 const confirmMotors = ref(false)
 let confirmMotorsTimer = null
@@ -21,7 +33,18 @@ const reason = action => auxActionReason(props.status, action, props.online, pro
 const homeReason = computed(() => quickMotionReason(props.status, 'home', props.online, props.pending))
 const qglReason = computed(() => quickMotionReason(props.status, 'qgl', props.online, props.pending))
 const motorsReason = computed(() => quickMotionReason(props.status, 'motors_off', props.online, props.pending))
-const allHomed = computed(() => [...'xyz'].every(axis => props.status?.homedAxes?.includes(axis)))
+const homed = axis => props.status?.homedAxes?.includes(axis) === true
+const allHomed = computed(() => [...'xyz'].every(homed))
+const axisHomeReason = axis => quickHomeAxisReason(props.status, axis, props.online, props.pending)
+const axisJogReason = (axis, distance) => quickJogReason(props.status, axis, distance, props.online, props.pending)
+const formatStep = value => `${value > 0 ? '+' : '−'}${Math.abs(value).toLocaleString(locale.value)}`
+const axisPosition = axis => {
+  const index = ['x', 'y', 'z'].indexOf(axis)
+  const val = props.status?.position?.[index]
+  return homed(axis) && Number.isFinite(val)
+    ? val.toLocaleString(locale.value, { maximumFractionDigits: 2 })
+    : null
+}
 const available = id => props.status?.capabilities?.ledProfiles?.includes(id)
 const main = computed(() => ledProfiles.slice(0, 5).filter(profile => available(profile.id)))
 const others = computed(() => ledProfiles.slice(5).filter(profile => available(profile.id)))
@@ -57,6 +80,14 @@ function led(profile) {
 
 function homeAll() {
   if (!homeReason.value) emit('command', { action: 'home', axis: 'all' })
+}
+
+function homeAxis(axis) {
+  if (!axisHomeReason(axis)) emit('command', { action: 'home', axis })
+}
+
+function jogAxis(axis, distance) {
+  if (!axisJogReason(axis, distance)) emit('command', { action: 'jog', axis, distance })
 }
 
 function runQgl() {
@@ -186,6 +217,53 @@ function initialize() {
         <span v-if="confirmMotors" class="prep-confirm-mark">?</span>
       </button>
     </div>
+
+    <div class="axis-jog-stack" :aria-label="t('Achsen bewegen')">
+      <div v-for="row in axisRows" :key="row.axis" class="axis-jog-row">
+        <button
+          v-for="dist in row.neg"
+          :key="dist"
+          type="button"
+          class="axis-jog-btn"
+          :disabled="!!axisJogReason(row.axis, dist)"
+          :title="axisJogReason(row.axis, dist) ? t(axisJogReason(row.axis, dist)) : `${row.axis.toUpperCase()} ${formatStep(dist)} mm`"
+          :aria-label="`${row.axis.toUpperCase()} ${formatStep(dist)} mm`"
+          @click="jogAxis(row.axis, dist)"
+        >
+          {{ formatStep(dist) }}
+        </button>
+        <button
+          type="button"
+          class="axis-home-btn"
+          :class="{ 'axis-homed': homed(row.axis) && online }"
+          :disabled="!!axisHomeReason(row.axis)"
+          :title="
+            axisHomeReason(row.axis)
+              ? t(axisHomeReason(row.axis))
+              : axisPosition(row.axis) != null
+                ? t('{0} = {1} mm · {0} erneut homen', [row.axis.toUpperCase(), axisPosition(row.axis)])
+                : t('{0} homen', [row.axis.toUpperCase()])
+          "
+          :aria-label="t('{0} homen', [row.axis.toUpperCase()])"
+          @click="homeAxis(row.axis)"
+        >
+          {{ row.axis.toUpperCase() }}
+        </button>
+        <button
+          v-for="dist in row.pos"
+          :key="dist"
+          type="button"
+          class="axis-jog-btn"
+          :disabled="!!axisJogReason(row.axis, dist)"
+          :title="axisJogReason(row.axis, dist) ? t(axisJogReason(row.axis, dist)) : `${row.axis.toUpperCase()} ${formatStep(dist)} mm`"
+          :aria-label="`${row.axis.toUpperCase()} ${formatStep(dist)} mm`"
+          @click="jogAxis(row.axis, dist)"
+        >
+          {{ formatStep(dist) }}
+        </button>
+      </div>
+    </div>
+
     <button
       class="subtle-button"
       type="button"

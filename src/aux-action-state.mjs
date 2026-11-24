@@ -128,3 +128,27 @@ export function quickMotionReason(status, action, online = true, pending = false
 
   return 'Unbekannte Aktion.'
 }
+
+export function quickHomeAxisReason(status, axis, online = true, pending = false) {
+  const base = quickMotionReason(status, 'home', online, pending)
+  if (base) return base
+  if (!['x', 'y', 'z'].includes(axis)) return 'Ungültige Achse.'
+  if (axis === 'z' && !(status.homedAxes?.includes('x') && status.homedAxes?.includes('y'))) {
+    return 'Zuerst XY homen.'
+  }
+  return ''
+}
+
+export function quickJogReason(status, axis, distance, online = true, pending = false) {
+  const base = quickMotionReason(status, 'motors_off', online, pending)
+  if (base) return base
+  const index = ['x', 'y', 'z'].indexOf(axis)
+  if (index === -1) return 'Ungültige Achse.'
+  if (!status.homedAxes?.includes(axis)) return `Zuerst ${axis.toUpperCase()} homen.`
+  const pos = status.position?.[index]
+  const min = status.axisMinimum?.[index]
+  const max = status.axisMaximum?.[index]
+  if (![pos, min, max].every(Number.isFinite)) return 'Achsenposition oder Verfahrgrenzen unbekannt.'
+  if (pos + distance < min || pos + distance > max) return 'Dieser Schritt überschreitet den Verfahrbereich.'
+  return ''
+}

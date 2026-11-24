@@ -46,6 +46,9 @@ test('dynamic command feedback, guards and parameters are localized without chan
     translate('T{0}: {1}. {2}', 'en', [2, 'Wechseln', 'T1 parken und T2 aufnehmen']),
     'T2: Switch. Park T1 and pick up T2',
   )
+  assert.equal(translate('Gewünschte Lüfterleistung für {0}', 'en', ['Bettlüfter']), 'Target fan speed for Bed fans')
+  assert.equal(translate('CPAP Part Fan auf 75 %', 'en'), 'CPAP Part Fan to 75 %')
+  assert.equal(translate('Nicht initialisiert', 'en'), 'Uninitialized')
 })
 
 test('saved language accepts supported choices and safely falls back with blocked storage', () => {

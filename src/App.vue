@@ -34,7 +34,7 @@ import { usePrinter } from './usePrinter.js'
 import { useConsole } from './useConsole.js'
 import { useConfigEditor } from './useConfigEditor.js'
 import { auxActionReason } from './aux-action-state.mjs'
-import { toolActionReason, filamentToolIds } from './tool-action-state.mjs'
+import { toolActionReason, filamentToolIds, mountedToolId } from './tool-action-state.mjs'
 import { toolState, heatState } from '../server/status.mjs'
 
 const ToolScene = defineAsyncComponent(() => import('./components/ToolScene.vue'))
@@ -167,6 +167,7 @@ const activityLabel = computed(() => {
 })
 
 const selected = ref(0)
+let lastMountedTool = undefined
 const controlContext = ref('Achsen homen, schrittweise bewegen und Temperaturen einstellen.')
 const controlsSubtitle = computed(() =>
   pending.value || !online.value ? controlContext.value : (feedback.value?.message ?? controlContext.value),
@@ -176,7 +177,24 @@ const scene = ref(null)
 async function selectTool(id) {
   selected.value = id
   await nextTick()
-  scene.value?.focusSelected()
+  if (tab.value === 'tools') scene.value?.focusSelected()
+}
+
+watch(
+  () => mountedToolId(status.value),
+  next => {
+    if (next === undefined || next === lastMountedTool) return
+    lastMountedTool = next
+    if (next != null) selectTool(next)
+  },
+  { immediate: true },
+)
+
+async function handleToolCommand(command) {
+  const ok = await send(command)
+  if (ok && ['select', 'pickup'].includes(command.action) && Number.isInteger(command.tool)) {
+    selectTool(command.tool)
+  }
 }
 
 const tools = computed(() => status.value?.tools ?? Array.from({ length: 6 }, (_, id) => ({ id })))
@@ -591,7 +609,7 @@ async function acknowledgeUncertain() {
                 </span>
                 <span class="tool-z-offset"><span>ΔZ</span>{{ zOffset(tool) }}</span>
               </button>
-              <ToolActions :tool="tool.id" :status="status" :online="online" :pending="pending" @command="send" />
+              <ToolActions :tool="tool.id" :status="status" :online="online" :pending="pending" @command="handleToolCommand" />
             </article>
           </div>
           <ConsoleView

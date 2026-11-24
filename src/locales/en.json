@@ -808,5 +808,13 @@
   "Für Parken/Pickup/Wechsel muss die aktuelle Z-Position höchstens 300 mm sein.": "Parking, pickup or switching requires the current Z position to be at most 300 mm.",
   "Vorbereitung & Toolchanger": "Preparation & toolchanger",
   "Alle Achsen referenziert · erneut homen": "All axes homed · home again",
-  "QGL ist nicht konfiguriert.": "QGL is not configured."
+  "QGL ist nicht konfiguriert.": "QGL is not configured.",
+  "Startet": "Starting",
+  "Heruntergefahren": "Shutdown",
+  "Getrennt": "Disconnected",
+  "Nicht initialisiert": "Uninitialized",
+  "Initialisiert": "Initializing",
+  "Wechselt": "Changing",
+  "CPAP Part Fan": "CPAP Part Fan",
+  "Gewünschte Lüfterleistung für {0}": "Target fan speed for {0}"
 }

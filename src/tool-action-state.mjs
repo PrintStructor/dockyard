@@ -1,3 +1,18 @@
+export function mountedToolId(status) {
+  if (!status) return undefined
+  if (Number.isInteger(status.active) && status.active >= 0 && status.active <= 5) return status.active
+  if (
+    status.active == null &&
+    !status.detectionConflict &&
+    Number.isInteger(status.detected) &&
+    status.detected >= 0 &&
+    status.detected <= 5
+  ) {
+    return status.detected
+  }
+  return null
+}
+
 export const filamentToolIds = status =>
   (status?.tools ?? [])
     .filter(tool => tool.filamentEnabled === true && tool.filamentDetected === true)

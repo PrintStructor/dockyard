@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { commandFor, capabilities } from '../server/control.mjs'
 import { normalizeStatus } from '../server/status.mjs'
-import { toolActionReason } from '../src/tool-action-state.mjs'
+import { toolActionReason, mountedToolId } from '../src/tool-action-state.mjs'
 const state = () => {
  const config = Object.fromEntries(['park_toolhead','pickup_tool','clean_nozzle','purge_nozzle','load_filament','unload_filament','unload_all','_load_settings','_unload_settings','_goto_purge_pos','_purge_pos'].map(name => [`gcode_macro ${name}`,{gcode:'installed'}]))
  config['gcode_macro _load_settings'].variable_temp_default='240'
@@ -69,15 +69,31 @@ test('maintenance blocks stale prerequisites, conflict, print/pause, watcher, mi
  const raw=state();raw['filament_switch_sensor T1_filament_sensor'].filament_detected=false;assert.throws(()=>commandFor({action:'purge',tool:1},raw),/Filament/)
  const status={...normalizeStatus(state()),capabilities:capabilities(state())};assert.match(toolActionReason(status,'clean',1,false),/aktuellen/);assert.match(toolActionReason(status,'clean',1,true,true),/Befehl/)
 })
-test('fan controls expose generic fans only and normalize configured maximum power',()=>{
- const raw=state();raw['fan_generic fan0']={speed:.36}
+test('fan controls expose real generic fans with clear labels, hide OrcaSlicer dummy fan3 and normalize max power',()=>{
+ const raw=state()
+ raw.configfile.settings['fan_generic fan3']={max_power:1}
+ raw['fan_generic fan3']={speed:0}
+ raw['fan_generic fan0']={speed:.36}
+ const caps=capabilities(raw)
+ assert.deepEqual(caps.fans,[
+  {name:'fan0',label:'CPAP Part Fan'},
+  {name:'BedFans',label:'Bettlüfter'},
+ ])
  assert.equal(normalizeStatus(raw).fans.find(f=>f.name==='fan0').percent,50)
  assert.equal(normalizeStatus(raw).fans.find(f=>f.name==='BedFans').percent,null)
  assert.equal(commandFor({action:'fan',fan:'BedFans',percent:50},raw).body.script,'SET_FAN_SPEED FAN=BedFans SPEED=0.5')
  assert.throws(()=>commandFor({action:'fan',fan:'bedfans',percent:50},raw))
+ assert.throws(()=>commandFor({action:'fan',fan:'fan3',percent:50},raw))
  for(const percent of [0,25,50,100]) assert.equal(commandFor({action:'fan',fan:'fan0',percent},raw).body.script,`SET_FAN_SPEED FAN=fan0 SPEED=${percent/100}`)
  for(const fan of ['t0_hotend_fan','fan0\nM112','missing'])assert.throws(()=>commandFor({action:'fan',fan,percent:50},raw))
  for(const percent of [-1,101,'50',.5])assert.throws(()=>commandFor({action:'fan',fan:'fan0',percent},raw))
+})
+test('mountedToolId tracks the physically mounted tool for automatic UI selection on tool switches',()=>{
+ assert.equal(mountedToolId(null),undefined)
+ assert.equal(mountedToolId({active:2,detected:2,detectionConflict:false}),2)
+ assert.equal(mountedToolId({active:null,detected:null,detectionConflict:false}),null)
+ assert.equal(mountedToolId({active:null,detected:1,detectionConflict:false}),1)
+ assert.equal(mountedToolId({active:null,detected:1,detectionConflict:true}),null)
 })
 test('macro defaults come from live variables, respect limits and cannot be overridden by UI parameters',()=>{
  const raw=state();raw['gcode_macro _LOAD_SETTINGS'].temp_default=225

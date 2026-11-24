@@ -142,6 +142,25 @@ const printLabel = computed(
     })[props.status?.printState] ?? 'Unbekannt',
 )
 
+const statusStateLabels = {
+  ready: 'Bereit',
+  startup: 'Startet',
+  shutdown: 'Heruntergefahren',
+  error: 'Fehler',
+  disconnected: 'Getrennt',
+  uninitialized: 'Nicht initialisiert',
+  initializing: 'Initialisiert',
+  changing: 'Wechselt',
+  unknown: 'Unbekannt',
+}
+
+function formatState(value) {
+  if (!value) return t('Unbekannt')
+  const key = String(value).toLowerCase()
+  if (Object.hasOwn(statusStateLabels, key)) return t(statusStateLabels[key])
+  return key.charAt(0).toUpperCase() + key.slice(1)
+}
+
 const isPrintActive = computed(() => props.online && ['printing', 'paused'].includes(props.status?.printState))
 const printProgressPercent = computed(() =>
   Number.isFinite(props.status?.progress) ? Math.round(Math.max(0, Math.min(1, props.status.progress)) * 100) : null,
@@ -196,7 +215,7 @@ const hostCaption = computed(() => {
           <div class="system-metric-cell">
             <span>{{ t('Host-Laufzeit') }}</span>
             <strong>{{ formatUptime(overview?.uptimeSeconds) }}</strong>
-            <small v-if="overview?.klippy?.state">Klippy · {{ overview.klippy.state }}</small>
+            <small v-if="overview?.klippy?.state">Klippy · {{ formatState(overview.klippy.state) }}</small>
           </div>
         </template>
       </div>
@@ -224,7 +243,7 @@ const hostCaption = computed(() => {
       <article class="system-panel">
         <h2>{{ t('Druckerstatus') }}</h2>
         <dl class="measurements">
-          <div><dt>Klipper</dt><dd>{{ effectiveKlipperState ?? t('Unbekannt') }}</dd></div>
+          <div><dt>Klipper</dt><dd>{{ formatState(effectiveKlipperState) }}</dd></div>
           <div><dt>{{ t('Druckstatus') }}</dt><dd>{{ t(printLabel) }}</dd></div>
           <div v-if="status?.filename"><dt>{{ t('Druckdatei') }}</dt><dd>{{ status.filename }}</dd></div>
           <div v-if="isPrintActive && printProgressPercent != null">
@@ -235,7 +254,7 @@ const hostCaption = computed(() => {
             <dt>{{ t('Druckzeit') }}</dt>
             <dd>{{ formatDuration(status.printDuration) }}</dd>
           </div>
-          <div><dt>Toolchanger</dt><dd>{{ status?.toolchangerState ?? t('Unbekannt') }}</dd></div>
+          <div><dt>Toolchanger</dt><dd>{{ formatState(status?.toolchangerState) }}</dd></div>
           <div>
             <dt>{{ t('Aktives Werkzeug') }}</dt>
             <dd>{{ status?.active == null ? t('Unbekannt') : `T${status.active}` }}</dd>

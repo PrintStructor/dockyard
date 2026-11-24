@@ -460,10 +460,10 @@ watch(motion, allowed => {
         </form>
 
         <form class="bed-editor" @submit.prevent="applyTarget('bed')">
-          <div class="heat-heading">
-            <h3>{{ t('Druckbett') }}</h3>
-            <div class="bed-temperature-entry">
-              <span>{{ temperature(status?.bed?.temperature) }} /</span>
+          <div class="bed-top-row">
+            <div class="editable-temperature bed-temperature-row" :class="{ dirty: dirty('bed') }">
+              <h3 class="bed-title">{{ t('Druckbett') }}</h3>
+              <span class="temperature-reading">{{ temperature(status?.bed?.temperature) }}<small> / </small></span>
               <input
                 :aria-label="t('Zieltemperatur für das Druckbett in Grad Celsius')"
                 :title="t('Aktuelles Ziel: {0} °C', [temperature(liveTarget('bed'))])"
@@ -479,7 +479,7 @@ watch(motion, allowed => {
                 @input="editTarget('bed', $event.target.value)"
                 @keydown.esc="delete drafts.bed"
               />
-              <small>°C</small>
+              <small class="temperature-unit">°C</small>
               <button
                 class="apply-temperature"
                 type="submit"
@@ -490,29 +490,27 @@ watch(motion, allowed => {
                 <Check :size="14" />
               </button>
             </div>
-          </div>
-
-          <div class="bed-preset-actions">
-            <div class="temperature-presets" :aria-label="t('Druckbett-Presets')">
-              <button
-                v-for="preset in presets"
-                :key="preset.name"
-                type="button"
-                :disabled="preset.bed == null || limitFor('bed') == null || preset.bed > limitFor('bed')"
-                @click="drafts.bed = String(preset.bed)"
-              >
-                {{ preset.name }}<span>{{ preset.bed ?? '—' }} °C</span>
-              </button>
-            </div>
             <button
               type="button"
-              class="subtle-button"
+              class="subtle-button bed-cooldown"
               :disabled="!enabled || limitFor('bed') == null"
               :title="t('Nur das Druckbett ausschalten')"
               :aria-label="t('Cooldown nur für das Druckbett')"
               @click="coolBed"
             >
               <Snowflake :size="14" />Cooldown
+            </button>
+          </div>
+
+          <div class="temperature-presets bed-presets" :aria-label="t('Druckbett-Presets')">
+            <button
+              v-for="preset in presets"
+              :key="preset.name"
+              type="button"
+              :disabled="preset.bed == null || limitFor('bed') == null || preset.bed > limitFor('bed')"
+              @click="drafts.bed = String(preset.bed)"
+            >
+              {{ preset.name }}<span>{{ preset.bed ?? '—' }} °C</span>
             </button>
           </div>
         </form>

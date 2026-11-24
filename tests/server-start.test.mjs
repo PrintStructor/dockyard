@@ -5,6 +5,27 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { parseAllowedOrigins } from '../server/config.mjs'
 import { resolveStaticPath, createProductionServer } from '../server/start.mjs'
+import { resolveVoyagerUrl } from '../src/voyager-url.mjs'
+
+test('resolveVoyagerUrl uses explicit URL or derives same-host port 1977 when unset/auto', () => {
+  assert.equal(
+    resolveVoyagerUrl('http://printer.example:1977', { protocol: 'http:', hostname: '127.0.0.1' }),
+    'http://printer.example:1977',
+  )
+  assert.equal(
+    resolveVoyagerUrl('auto', { protocol: 'http:', hostname: 'printer.local' }),
+    'http://printer.local:1977',
+  )
+  assert.equal(
+    resolveVoyagerUrl('', { protocol: 'https:', hostname: 'voron.example' }),
+    'https://voron.example:1977',
+  )
+  assert.equal(
+    resolveVoyagerUrl(undefined, { protocol: 'http:', hostname: '::1' }),
+    'http://[::1]:1977',
+  )
+  assert.equal(resolveVoyagerUrl('auto', null), 'http://127.0.0.1:1977')
+})
 
 test('parseAllowedOrigins validates strict HTTP(S) origins without paths or credentials', () => {
   assert.deepEqual(parseAllowedOrigins(''), [])

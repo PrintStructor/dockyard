@@ -54,8 +54,22 @@ npm start
 
 To run the cockpit directly on your printer host (e.g. Raspberry Pi with Node.js >= 22.12):
 
-1. Build the frontend once (`npm ci && npm run build`).
-2. Configure `HOST=0.0.0.0`, `PORT=4173`, `PRINTER_URL=http://127.0.0.1:1977` and explicit trusted LAN origins in `ALLOWED_ORIGINS` (e.g. `ALLOWED_ORIGINS=http://printer.local:4173`).
+### Option A — 1-command deploy over SSH (isolated Node 22 + user-level systemd)
+
+```sh
+./scripts/deploy-pi.sh printer.local
+```
+
+This runs `npm test` and `VITE_VOYAGER_URL=auto npm run build` locally, installs an isolated SHA256-verified Node.js 22 LTS runtime into `~/.local/node22` on the host (leaving system `/usr/bin/node` untouched), syncs only runtime files (`dist/`, `server/`, `src/`, `package.json`), generates a host-local `.env.local` with detected LAN origins, and manages [deploy/stormtrooper-cockpit.user.service.example](deploy/stormtrooper-cockpit.user.service.example) under `~/.config/systemd/user/stormtrooper-cockpit.service`. Existing printer services (Klipper, Moonraker, HelixScreen, Mainsail, Voyager, Crowsnest) are never modified. For 24/7 operation across SSH exits and reboots, enable systemd user linger once on the host:
+
+```sh
+sudo loginctl enable-linger "$USER"
+```
+
+### Option B — Manual / system-wide systemd service
+
+1. Build the frontend once (`npm ci && VITE_VOYAGER_URL=auto npm run build`).
+2. Configure `HOST=0.0.0.0` (or `HOST=::` for dual-stack IPv4/IPv6), `PORT=4173`, `PRINTER_URL=http://127.0.0.1:1977` and explicit trusted LAN origins in `ALLOWED_ORIGINS` (e.g. `ALLOWED_ORIGINS=http://printer.local:4173`).
 3. Start via `npm start` or adapt the example systemd unit in [deploy/stormtrooper-cockpit.service.example](deploy/stormtrooper-cockpit.service.example).
 
 The backend checks exact request origins against loopback and `ALLOWED_ORIGINS`, plus `X-Cockpit-Request: 1` and JSON content-type. It has no remote authentication layer: keep it on a trusted local network rather than exposing it to the internet.

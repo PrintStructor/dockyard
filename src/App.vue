@@ -41,6 +41,7 @@ import { useConsole } from './useConsole.js'
 import { useConfigEditor } from './useConfigEditor.js'
 import { auxActionReason } from './aux-action-state.mjs'
 import { toolActionReason, filamentToolIds, mountedToolId, maintenanceRestriction } from './tool-action-state.mjs'
+import { resolveVoyagerUrl } from './voyager-url.mjs'
 import { toolState, heatState } from '../server/status.mjs'
 
 const ToolScene = defineAsyncComponent(() => import('./components/ToolScene.vue'))
@@ -73,7 +74,7 @@ watch(
 )
 
 const configEditor = useConfigEditor()
-const voyagerUrl = import.meta.env.VITE_VOYAGER_URL || 'http://127.0.0.1:1977'
+const voyagerUrl = resolveVoyagerUrl(import.meta.env.VITE_VOYAGER_URL)
 const validTabs = ['tools', 'controls', 'print', 'history', 'cameras', 'console', 'system']
 const validSystemSubtabs = ['overview', 'config', 'calibration', 'maintenance']
 

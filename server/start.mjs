@@ -121,7 +121,8 @@ if (isEntrypoint) {
   process.on('SIGTERM', shutdown)
 
   server.listen(serverPort, serverHost, () => {
-    console.log(`STORMTROOPER cockpit listening on http://${serverHost}:${serverPort}/`)
+    const displayHost = serverHost.includes(':') && !serverHost.startsWith('[') ? `[${serverHost}]` : serverHost
+    console.log(`STORMTROOPER cockpit listening on http://${displayHost}:${serverPort}/`)
     console.log(`Printer origin: ${printerUrl}`)
     if (allowedOrigins.length) console.log(`Trusted origins: ${allowedOrigins.join(', ')}`)
   })

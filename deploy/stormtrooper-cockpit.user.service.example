@@ -1,0 +1,27 @@
+# User-level systemd service for hosting STORMTROOPER Cockpit on a printer host (Node.js >= 22.12).
+# Keeps the service isolated from system packages and untouched by root services (e.g. HelixScreen).
+#
+# Install to:
+#   ~/.config/systemd/user/stormtrooper-cockpit.service
+# Put private runtime config (HOST, PORT, PRINTER_URL, ALLOWED_ORIGINS) into:
+#   ~/stormtrooper-toolchanger-cockpit/.env.local
+# Enable & start:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now stormtrooper-cockpit
+# Keep running after SSH logout and across reboots (one-time, requires sudo):
+#   sudo loginctl enable-linger "$USER"
+
+[Unit]
+Description=STORMTROOPER Toolchanger Cockpit
+
+[Service]
+Type=simple
+WorkingDirectory=%h/stormtrooper-toolchanger-cockpit
+Environment=NODE_ENV=production
+EnvironmentFile=-%h/stormtrooper-toolchanger-cockpit/.env.local
+ExecStart=%h/.local/node22/bin/node %h/stormtrooper-toolchanger-cockpit/server/start.mjs
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

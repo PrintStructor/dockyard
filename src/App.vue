@@ -18,6 +18,7 @@ import {
   Play,
   Loader2,
   Printer,
+  History,
 } from '@lucide/vue'
 import { t, locale, language, setLanguage } from './i18n.mjs'
 import ControlsView from './components/ControlsView.vue'
@@ -37,6 +38,7 @@ import { toolState, heatState } from '../server/status.mjs'
 
 const ToolScene = defineAsyncComponent(() => import('./components/ToolScene.vue'))
 const PrintView = defineAsyncComponent(() => import('./components/PrintView.vue'))
+const HistoryView = defineAsyncComponent(() => import('./components/HistoryView.vue'))
 
 const languageOptions = [
   { value: 'de', label: 'DE · Deutsch', lang: 'de' },
@@ -59,9 +61,15 @@ watch(
 )
 
 const voyagerUrl = import.meta.env.VITE_VOYAGER_URL || 'http://127.0.0.1:1977'
-const validTabs = ['tools', 'controls', 'print', 'cameras', 'console', 'system']
+const validTabs = ['tools', 'controls', 'print', 'history', 'cameras', 'console', 'system']
 const tab = ref(validTabs.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'tools')
 watch(tab, value => history.replaceState(null, '', `#${value}`))
+const requestedPrintFile = ref('')
+
+function openPrintFile(filename) {
+  requestedPrintFile.value = filename
+  tab.value = 'print'
+}
 
 const recoveryChecked = ref(false)
 watch(
@@ -239,6 +247,7 @@ const pageHeading = computed(
       tools: 'Deine Werkzeuge. Im Blick.',
       controls: 'Drucker bedienen.',
       print: 'Druck & 3D-Vorschau.',
+      history: 'Druckverlauf.',
       cameras: 'Blick in den Drucker.',
       console: 'Direkt mit Klipper.',
       system: 'System & Sensoren.',
@@ -250,6 +259,7 @@ const pageSubtitle = computed(() => {
   return {
     tools: 'Werkzeug auswählen und seinen aktuellen Zustand prüfen.',
     print: 'Aktuellen Druck oder G-Code-Dateien als 3D-Modell prüfen.',
+    history: 'Vergangene Druckjobs, Laufzeiten, Filamentverbrauch und Werkzeugnutzung.',
     cameras: 'Tophat und Druckbett · kontinuierliche Livestreams.',
     console: 'G-Code und Makros senden. Antworten direkt mitlesen.',
     system: 'Status und Messwerte direkt von deinem Toolchanger.',
@@ -339,6 +349,14 @@ async function acknowledgeUncertain() {
         @click="tab = 'print'"
       >
         <Printer :size="17" />{{ t('Druck') }}
+      </button>
+      <button
+        type="button"
+        :class="{ active: tab === 'history' }"
+        :aria-current="tab === 'history' ? 'page' : undefined"
+        @click="tab = 'history'"
+      >
+        <History :size="17" />{{ t('Verlauf') }}
       </button>
       <button
         type="button"
@@ -743,7 +761,9 @@ async function acknowledgeUncertain() {
         @context="controlContext = $event"
       />
 
-      <PrintView v-if="tab === 'print'" :status="status" :online="online" />
+      <PrintView v-if="tab === 'print'" :status="status" :online="online" :requested-file="requestedPrintFile" />
+
+      <HistoryView v-if="tab === 'history'" :online="online" @open-print="openPrintFile" />
 
       <section v-if="tab === 'tools' || tab === 'cameras'" class="camera-section" :aria-label="t('Druckerkameras')">
         <div v-if="tab === 'tools'" class="section-heading">

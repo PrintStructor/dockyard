@@ -8,6 +8,7 @@ import PrintScene from './PrintScene.vue'
 const props = defineProps({
   status: Object,
   online: Boolean,
+  requestedFile: String,
 })
 
 const files = ref([])
@@ -151,7 +152,9 @@ async function loadFiles() {
     files.value = data.files ?? []
     recentJobs.value = data.recentJobs ?? []
 
-    if (!selectedFile.value) {
+    if (props.requestedFile) {
+      selectRecentJob(props.requestedFile)
+    } else if (!selectedFile.value) {
       const activePath = isPrintActive.value ? props.status?.printFilename : ''
       if (activePath) {
         selectedFile.value = activePath
@@ -224,6 +227,15 @@ function selectRecentJob(filename) {
 }
 
 watch(selectedFile, filename => loadSelectedFile(filename))
+
+watch(
+  () => props.requestedFile,
+  filename => {
+    if (filename && filename !== selectedFile.value) {
+      selectRecentJob(filename)
+    }
+  },
+)
 
 watch(
   () => [props.status?.printState, props.status?.printFilename],

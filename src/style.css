@@ -244,3 +244,57 @@ input::placeholder{color:var(--muted);opacity:1}.jog-heading{flex-wrap:wrap}.jog
 @media(max-width:1150px){.print-layout{grid-template-columns:minmax(0,1fr) 290px;gap:14px}.print-scene-viewport{height:400px}}
 @media(max-width:850px){.print-layout{grid-template-columns:1fr}.print-inspector{display:flex}}
 @media(max-width:560px){.print-scene-viewport{height:300px}.language-control .cockpit-select{min-width:110px}}
+
+/* History tab: single horizontal totals strip, filter toolbar, master/detail job table. */
+.history-view{display:flex;flex-direction:column;gap:16px}
+.history-totals-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.history-total-cell{padding:14px 18px;display:flex;flex-direction:column;gap:5px;border-right:1px solid var(--line);min-width:0}
+.history-total-cell:last-child{border-right:0}
+.history-total-cell span{font-size:11px;color:var(--muted)}
+.history-total-cell strong{font-size:20px;font-weight:500;letter-spacing:-.025em;font-variant-numeric:tabular-nums;color:#edf1ed;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.history-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.history-search{display:flex;align-items:center;gap:8px;flex:1;min-width:210px;background:#131b1f;border:1px solid #4c5d64;border-radius:8px;padding:0 10px;min-height:38px}
+.history-search:focus-within{border-color:var(--lime)}
+.history-search svg{color:var(--muted)}
+.history-search input{flex:1;min-width:0;border:0;background:transparent;padding:6px 0;min-height:34px;font-size:13px;outline:none}
+.history-search input::-webkit-search-cancel-button{display:none}
+.history-search-clear{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:4px;color:var(--muted)}
+.history-search-clear:hover{color:#edf1ed;background:#263339}
+.history-status-filter button{padding:6px 11px;font-size:12px}
+.history-tool-filter{width:170px;flex-shrink:0}
+.history-error{display:flex;align-items:center;gap:10px;padding:10px 14px;border:1px solid #766543;border-radius:10px;background:#2d2a20;color:var(--amber);font-size:12px}
+.history-error button{margin-left:auto}
+.history-layout{display:grid;grid-template-columns:minmax(0,1fr) 324px;gap:20px;align-items:start}
+.history-list-panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;min-width:0}
+.history-rows{list-style:none;margin:0;padding:0}
+.history-rows>li{border-bottom:1px solid #263137}
+.history-rows>li:last-child{border-bottom:0}
+.history-row{display:grid;grid-template-columns:40px minmax(0,1fr) auto auto;gap:14px;align-items:center;width:100%;padding:12px 16px;text-align:left;transition:background .12s ease}
+.history-row:hover{background:#212c32}
+.history-row.selected{background:var(--lime-tint)}
+.history-row:focus-visible{outline-offset:-3px}
+.history-thumb{width:40px;height:40px;border-radius:6px;border:1px solid var(--line);background:#12191d;object-fit:contain;flex-shrink:0}
+.history-thumb-fallback{display:flex;align-items:center;justify-content:center;color:var(--muted)}
+.history-row-main{display:flex;flex-direction:column;gap:4px;min-width:0}
+.history-row-name{font-size:13px;font-weight:500;color:#edf1ed;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.history-row.selected .history-row-name{color:var(--lime)}
+.history-row-sub{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.history-row.selected .history-row-sub{color:#b9ce9f}
+.history-row-tools{display:inline-flex;align-items:center;gap:5px;flex-wrap:wrap}
+.history-tool-chip{display:inline-flex;align-items:center;gap:4px;padding:1px 6px;border-radius:4px;border:1px solid #3c4b52;background:#151d21;color:#d6e0e2;font-size:10px;font-weight:500}
+.history-tool-dot{width:7px;height:7px;border-radius:50%;border:1px solid #8a9ea6;flex-shrink:0}
+.history-row-status{display:inline-flex;align-items:center;gap:5px;padding:4px 8px;border-radius:5px;font-size:11px;font-weight:500;white-space:nowrap;background:#243036;color:#c9d5d8}
+.history-row-status.completed,.history-row-status.in_progress{background:var(--lime-tint);color:var(--lime)}
+.history-row-status.cancelled,.history-row-status.interrupted,.history-row-status.error{background:#342c1d;color:var(--amber)}
+.history-row-metrics{display:flex;flex-direction:column;align-items:flex-end;gap:2px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.history-row-metrics strong{font-size:12px;font-weight:500;color:#edf1ed}
+.history-row-metrics small{font-size:11px;color:var(--muted)}
+.history-row.selected .history-row-metrics small{color:#b9ce9f}
+.history-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:48px 20px;color:var(--muted);font-size:13px;text-align:center}
+.history-footer{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.history-inspector{position:sticky;top:18px;display:flex;flex-direction:column;gap:14px}
+.history-3d-button{margin-top:0;width:100%}
+.history-file-missing{font-size:11px;color:var(--muted);margin-top:-6px}
+@media(max-width:1150px){.history-layout{grid-template-columns:minmax(0,1fr) 290px;gap:14px}.history-total-cell{padding:12px 14px}.history-total-cell strong{font-size:18px}}
+@media(max-width:850px){.history-totals-strip{grid-template-columns:repeat(2,minmax(0,1fr))}.history-total-cell{border-bottom:1px solid var(--line)}.history-total-cell:nth-child(2n){border-right:0}.history-total-cell:nth-last-child(-n+2){border-bottom:0}.history-layout{grid-template-columns:1fr}.history-inspector{position:static;display:flex}}
+@media(max-width:560px){.history-row{grid-template-columns:36px minmax(0,1fr);gap:10px;padding:11px 12px}.history-thumb{width:36px;height:36px}.history-row-status{grid-column:2;justify-self:start}.history-row-metrics{grid-column:2;flex-direction:row;align-items:center;gap:10px;justify-self:start}.history-tool-filter{width:100%}.history-status-filter{width:100%;display:grid;grid-template-columns:repeat(4,1fr)}.history-status-filter button{padding:6px 4px;font-size:11px}}

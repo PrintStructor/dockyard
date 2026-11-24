@@ -11,6 +11,7 @@ import {
   normalizePrintMetadata,
   fetchGcodeMeshBinary,
 } from './gcode-mesh.mjs'
+import { normalizeHistoryTotals, normalizeHistoryJob } from './history.mjs'
 import { printerUrl as printer } from './config.mjs'
 
 const objects = [
@@ -44,6 +45,8 @@ let effectObjects = []
 let fanObjects = []
 let capabilityCache = null
 let capabilityAt = 0
+let gcodeFileSetCache = null
+let gcodeFileSetAt = 0
 let liveCapabilityRef = { config: null, load: null, unload: null, fans: '', value: null }
 let currentJob = null
 let activeJobAbort = null
@@ -400,6 +403,7 @@ export function printerMiddleware(req, res, next) {
     path !== '/api/console' &&
     path !== '/api/presets' &&
     path !== '/api/temperature-history' &&
+    path !== '/api/history' &&
     !camera &&
     !printRoute
   ) {
@@ -416,6 +420,57 @@ export function printerMiddleware(req, res, next) {
 
   ;(async () => {
     try {
+      if (path === '/api/history') {
+        const rawLimit = Number(parsedUrl.searchParams.get('limit') ?? 40)
+        const rawStart = Number(parsedUrl.searchParams.get('start') ?? 0)
+        const limit = Number.isInteger(rawLimit) && rawLimit >= 1 && rawLimit <= 100 ? rawLimit : 40
+        const start = Number.isInteger(rawStart) && rawStart >= 0 ? rawStart : 0
+
+        const needFiles = !gcodeFileSetCache || Date.now() - gcodeFileSetAt > 30_000
+        const [listRes, totalsRes, filesRes] = await Promise.all([
+          fetch(`${printer}/server/history/list?limit=${limit}&start=${start}&order=desc`, {
+            signal: AbortSignal.timeout(7000),
+          }),
+          start === 0
+            ? fetch(`${printer}/server/history/totals`, { signal: AbortSignal.timeout(5000) }).catch(() => null)
+            : Promise.resolve(null),
+          needFiles
+            ? fetch(`${printer}/server/files/list?root=gcodes`, { signal: AbortSignal.timeout(6000) }).catch(() => null)
+            : Promise.resolve(null),
+        ])
+
+        if (!listRes.ok) throw new Error('Druckverlauf nicht erreichbar.')
+        const listJson = await listRes.json()
+        const result = listJson.result ?? {}
+
+        if (filesRes?.ok) {
+          const filesJson = await filesRes.json().catch(() => null)
+          if (Array.isArray(filesJson?.result)) {
+            gcodeFileSetCache = new Set(filesJson.result.map(item => item?.path).filter(Boolean))
+            gcodeFileSetAt = Date.now()
+          }
+        }
+
+        let totals = null
+        if (totalsRes?.ok) {
+          const totalsJson = await totalsRes.json().catch(() => null)
+          totals = normalizeHistoryTotals(totalsJson?.result)
+        }
+
+        const jobs = (Array.isArray(result.jobs) ? result.jobs : [])
+          .map(job => normalizeHistoryJob(job, gcodeFileSetCache))
+          .filter(Boolean)
+
+        return json(200, {
+          count: jobs.length,
+          hasMore: jobs.length >= limit,
+          start,
+          limit,
+          totals,
+          jobs,
+        })
+      }
+
       if (printRoute) {
         const sub = printRoute[1]
         if (sub === 'files') {

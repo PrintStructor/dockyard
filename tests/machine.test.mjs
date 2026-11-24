@@ -1,5 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { Readable } from 'node:stream'
+import { printerMiddleware, control, getControlState } from '../server/printer.mjs'
 import {
   MAX_CONFIG_BYTES,
   LOG_TAIL_BYTES,
@@ -475,4 +477,106 @@ test('validateLogPath, normalizeLogList and parseLogTail handle traversal, 416/e
   assert.equal(capped.truncated, true)
 
   assert.equal(encodeMoonrakerPath('Margt NEW/macros.cfg'), 'Margt%20NEW/macros.cfg')
+})
+
+function invokeMiddleware(method, url, { headers = {}, body = '' } = {}) {
+  return new Promise(resolve => {
+    const req = Readable.from(body ? [Buffer.from(body)] : [])
+    req.method = method
+    req.url = url
+    req.headers = headers
+    const resHeaders = {}
+    const chunks = []
+    const res = {
+      statusCode: 200,
+      headersSent: false,
+      destroyed: false,
+      setHeader(k, v) {
+        resHeaders[k.toLowerCase()] = v
+      },
+      getHeader(k) {
+        return resHeaders[k.toLowerCase()]
+      },
+      on() {},
+      end(chunk) {
+        if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)))
+        const rawBody = Buffer.concat(chunks).toString('utf8')
+        let json = null
+        try {
+          json = JSON.parse(rawBody)
+        } catch {}
+        resolve({ status: this.statusCode, headers: resHeaders, body: rawBody, json })
+      },
+      destroy() {
+        this.destroyed = true
+      },
+    }
+    printerMiddleware(req, res, () => resolve({ status: 404, headers: resHeaders, body: 'next', json: null }))
+  })
+}
+
+test('printerMiddleware enforces origin/header CSRF and method checks on /api/system write routes', async () => {
+  for (const path of ['/api/system/config/save', '/api/system/service/restart', '/api/system/updates/refresh']) {
+    const getRes = await invokeMiddleware('GET', path)
+    assert.equal(getRes.status, 405, `GET ${path} must return 405`)
+
+    const noHeaders = await invokeMiddleware('POST', path, { body: '{}' })
+    assert.equal(noHeaders.status, 403, `POST ${path} without origin/header must return 403`)
+  }
+})
+
+test('printerMiddleware rejects path traversal on /api/system read routes with 400', async () => {
+  const cfg = await invokeMiddleware('GET', '/api/system/config/file?path=../etc/passwd')
+  assert.equal(cfg.status, 400)
+
+  const img = await invokeMiddleware('GET', '/api/system/calibration/shaketune-image?path=../printer.cfg')
+  assert.equal(img.status, 400)
+
+  const tail = await invokeMiddleware('GET', '/api/system/logs/tail?path=../etc/passwd')
+  assert.equal(tail.status, 400)
+
+  const dl = await invokeMiddleware('GET', '/api/system/logs/download?path=../etc/passwd')
+  assert.equal(dl.status, 400)
+})
+
+test('control clears job cleanly instead of locking uncertain when a restartsKlipper calibration disconnects', async t => {
+  class DroppingWs {
+    constructor() {
+      this.readyState = 0
+      setImmediate(() => {
+        this.readyState = 1
+        this.onopen?.()
+      })
+    }
+    send() {
+      setImmediate(() => {
+        this.readyState = 3
+        this.onclose?.()
+      })
+    }
+    close() {
+      this.readyState = 3
+    }
+  }
+
+  t.mock.method(globalThis, 'fetch', async () => ({
+    ok: true,
+    json: async () => ({
+      result: {
+        objects: [],
+        status: {
+          webhooks: { state: 'ready' },
+          print_stats: { state: 'standby' },
+          idle_timeout: { state: 'Idle' },
+          toolhead: { homed_axes: 'xyz' },
+          toolchanger: { has_detection: true, tool_number: 0, detected_tool_number: 0, status: 'ready' },
+          configfile: { settings: { 'gcode_macro nudge_calibrate_ring_xy': {} } },
+        },
+      },
+    }),
+  }))
+
+  const result = await control({ action: 'calibrate_nudge_ring' }, { WebSocketImpl: DroppingWs })
+  assert.match(result.message, /Klipper startet neu/)
+  assert.equal(getControlState().job, null)
 })

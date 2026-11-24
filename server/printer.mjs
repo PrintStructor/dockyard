@@ -12,6 +12,27 @@ import {
   fetchGcodeMeshBinary,
 } from './gcode-mesh.mjs'
 import { normalizeHistoryTotals, normalizeHistoryJob } from './history.mjs'
+import {
+  MAX_CONFIG_BYTES,
+  LOG_TAIL_BYTES,
+  LOG_TAIL_MAX_LINES,
+  validateConfigPath,
+  classifyConfigFile,
+  normalizeConfigList,
+  validateWritableConfigPath,
+  validateConfigContent,
+  checkExpectedModified,
+  buildConfigUploadFormData,
+  validateRestartTarget,
+  evaluateMachineWriteGuard,
+  normalizeSystemOverview,
+  normalizeUpdateStatus,
+  validateLogPath,
+  normalizeLogList,
+  parseLogTail,
+  encodeMoonrakerPath,
+} from './machine.mjs'
+import { validateShakeTuneImagePath, normalizeCalibrationData } from './calibration.mjs'
 import { printerUrl as printer } from './config.mjs'
 
 const objects = [
@@ -28,6 +49,7 @@ const objects = [
   'gcode_macro LOAD_WATCH',
   'gcode_macro _LOAD_SETTINGS',
   'gcode_macro _UNLOAD_SETTINGS',
+  'gcode_macro _BEACON_BATCH_STATE',
   ...Array.from({ length: 6 }, (_, i) => `neopixel et${i}_leds`),
   ...['Chamber', 'raspberry_pi', 'Octopus', 'rp2350', 'beacon_coil'].map(sensor => `temperature_sensor ${sensor}`),
   ...Array.from({ length: 6 }, (_, i) => [
@@ -151,8 +173,8 @@ async function query(withConfig = false) {
   if (withConfig) {
     capabilityCache = capabilities(data.result.status)
     capabilityAt = Date.now()
-    configCache = data.result.status.configfile
-    effectObjects = Object.keys(configCache.settings ?? {}).filter(name => name.startsWith('led_effect '))
+    configCache = data.result.status.configfile ?? null
+    effectObjects = Object.keys(configCache?.settings ?? {}).filter(name => name.startsWith('led_effect '))
   }
   return { ...data.result.status, configfile: configCache }
 }
@@ -268,7 +290,7 @@ export async function control(input, options = {}) {
   const runJob = async () => {
     let issued = false
     try {
-      const stepTimeoutMs = 600_000
+      const stepTimeoutMs = command.timeoutMs ?? 600_000
       if (Array.isArray(command.steps) && command.steps.length > 0) {
         for (let index = 0; index < command.steps.length; index++) {
           if (abortController.signal.aborted) throw new AbortedCommandError()
@@ -316,6 +338,17 @@ export async function control(input, options = {}) {
         }
         live.notify()
         throw error
+      }
+      if (
+        command.restartsKlipper &&
+        issued &&
+        /(disconnect|restart|unterbrochen|geschlossen|beendet)/i.test(error?.message || '')
+      ) {
+        if (currentJob === job) currentJob = null
+        const message = `${command.label}: abgeschlossen — Klipper startet neu.`
+        lastResult = { id: job.id, ok: true, label: command.label, message, at: new Date().toISOString() }
+        live.notify()
+        return { message }
       }
       if (currentJob === job) {
         if (issued) {
@@ -381,6 +414,114 @@ function streamCamera(id, res) {
   res.on('close', () => upstream.destroy())
 }
 
+function streamLogDownload(relPath, res) {
+  const upstream = http.get(`${printer}/server/files/logs/${encodeMoonrakerPath(relPath)}`, response => {
+    if (response.statusCode !== 200) {
+      response.destroy()
+      res.statusCode = response.statusCode === 404 ? 404 : 502
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ error: 'Logdatei nicht verfügbar.' }))
+      return
+    }
+    res.statusCode = 200
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="${relPath}"`)
+    if (response.headers['content-length']) {
+      res.setHeader('Content-Length', response.headers['content-length'])
+    }
+    res.flushHeaders?.()
+    response.pipe(res)
+    response.on('error', () => res.destroy())
+    response.on('aborted', () => res.destroy())
+  })
+  upstream.setTimeout(30_000, () => upstream.destroy(new Error('Log-Download unterbrochen')))
+  upstream.on('error', () => {
+    if (!res.headersSent) {
+      res.statusCode = 502
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ error: 'Logdatei konnte nicht geladen werden.' }))
+    } else {
+      res.destroy()
+    }
+  })
+  res.on('close', () => upstream.destroy())
+}
+
+async function probeMachineWriteGuard(allowUncertainRecovery = false) {
+  let queryStatus = 503
+  let queryData = null
+  try {
+    const qRes = await fetch(
+      `${printer}/printer/objects/query?print_stats&webhooks&idle_timeout`,
+      { signal: AbortSignal.timeout(5000) },
+    )
+    queryStatus = qRes.status
+    if (qRes.ok) {
+      const qJson = await qRes.json().catch(() => null)
+      queryData = qJson?.result?.status ?? null
+    }
+  } catch {
+    queryStatus = 503
+  }
+
+  let serverInfo = null
+  if (queryStatus !== 200 || !queryData?.print_stats?.state) {
+    try {
+      const infoRes = await fetch(`${printer}/server/info`, { signal: AbortSignal.timeout(5000) })
+      if (infoRes.ok) {
+        const infoJson = await infoRes.json().catch(() => null)
+        serverInfo = infoJson?.result ?? null
+      }
+    } catch {
+      serverInfo = null
+    }
+  }
+
+  return evaluateMachineWriteGuard({
+    queryStatus,
+    queryData,
+    serverInfo,
+    job: getControlState().job,
+    allowUncertainRecovery,
+  })
+}
+
+async function executeRestartTarget(spec) {
+  if (spec.kind === 'klipper') {
+    const response = await fetch(`${printer}/printer/restart`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!response.ok) throw new ControlError(`Klipper-Neustart fehlgeschlagen (HTTP ${response.status}).`, 502)
+    return
+  }
+  if (spec.kind === 'firmware') {
+    const response = await fetch(`${printer}/printer/firmware_restart`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!response.ok) throw new ControlError(`Firmware-Neustart fehlgeschlagen (HTTP ${response.status}).`, 502)
+    return
+  }
+  const response = await fetch(
+    `${printer}/machine/services/restart?service=${encodeURIComponent(spec.service)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ service: spec.service }),
+      signal: AbortSignal.timeout(10_000),
+    },
+  )
+  // Restarting moonraker itself can close the HTTP socket right after accepting the restart.
+  if (!response.ok && spec.service !== 'moonraker') {
+    throw new ControlError(`Dienst-Neustart fehlgeschlagen (HTTP ${response.status}).`, 502)
+  }
+}
+
 export function printerMiddleware(req, res, next) {
   const parsedUrl = new URL(req.url, 'http://localhost')
   const path = parsedUrl.pathname
@@ -396,6 +537,9 @@ export function printerMiddleware(req, res, next) {
 
   const camera = path.match(/^\/api\/camera\/(tophat|heatbed)(?:\/(stream|webrtc))?$/)
   const printRoute = path.match(/^\/api\/print\/(files|metadata|thumbnail|model)$/)
+  const systemRoute = path.match(
+    /^\/api\/system\/(overview|calibration|calibration\/shaketune-image|config\/list|config\/file|config\/save|service\/restart|updates|updates\/refresh|logs\/list|logs\/tail|logs\/download)$/,
+  )
   if (
     path !== '/api/status' &&
     path !== '/api/control' &&
@@ -405,21 +549,342 @@ export function printerMiddleware(req, res, next) {
     path !== '/api/temperature-history' &&
     path !== '/api/history' &&
     !camera &&
-    !printRoute
+    !printRoute &&
+    !systemRoute
   ) {
     return json(404, { error: 'Unbekannter Endpunkt' })
   }
 
-  const write = path === '/api/control' || camera?.[2] === 'webrtc'
+  const systemSub = systemRoute?.[1]
+  const write =
+    path === '/api/control' ||
+    camera?.[2] === 'webrtc' ||
+    systemSub === 'config/save' ||
+    systemSub === 'service/restart' ||
+    systemSub === 'updates/refresh'
   if (req.method !== (write ? 'POST' : 'GET')) return json(405, { error: 'Methode nicht erlaubt.' })
   if (write && !sameOriginRequest(req)) {
     return json(403, { error: 'Befehle sind nur aus dieser lokalen Oberfläche erlaubt.' })
   }
   if (path === '/api/events') return live.handle(req, res)
   if (camera?.[2] === 'stream') return streamCamera(camera[1], res)
+  if (systemSub === 'logs/download') {
+    const logPath = validateLogPath(parsedUrl.searchParams.get('path'))
+    if (!logPath) return json(400, { error: 'Ungültiger Logpfad.' })
+    return streamLogDownload(logPath, res)
+  }
 
   ;(async () => {
     try {
+      if (systemRoute) {
+        if (systemSub === 'overview') {
+          const [procRes, sysRes, infoRes] = await Promise.all([
+            fetch(`${printer}/machine/proc_stats`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
+            fetch(`${printer}/machine/system_info`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
+            fetch(`${printer}/server/info`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
+          ])
+          if (!procRes?.ok && !sysRes?.ok && !infoRes?.ok) {
+            throw new Error('Moonraker-Systemdaten nicht erreichbar.')
+          }
+          const procJson = procRes?.ok ? await procRes.json().catch(() => null) : null
+          const sysJson = sysRes?.ok ? await sysRes.json().catch(() => null) : null
+          const infoJson = infoRes?.ok ? await infoRes.json().catch(() => null) : null
+          return json(
+            200,
+            normalizeSystemOverview({
+              procStats: procJson?.result ?? null,
+              systemInfo: sysJson?.result?.system_info ?? null,
+              serverInfo: infoJson?.result ?? null,
+            }),
+          )
+        }
+
+        if (systemSub === 'calibration') {
+          const [listRes, filesRes] = await Promise.all([
+            fetch(`${printer}/printer/objects/list`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
+            fetch(`${printer}/server/files/list?root=config`, { signal: AbortSignal.timeout(6000) }).catch(() => null),
+          ])
+          const availableObjects = listRes?.ok
+            ? (await listRes.json().catch(() => null))?.result?.objects ?? []
+            : []
+          const availSet = new Set(availableObjects)
+          const wanted = [
+            'bed_mesh',
+            'quad_gantry_level',
+            'beacon',
+            'tools_calibrate',
+            'save_variables',
+            'gcode_macro _BEACON_BATCH_STATE',
+            'toolchanger',
+            'temperature_sensor beacon_coil',
+            ...Array.from({ length: 6 }, (_, i) => [i ? `extruder${i}` : 'extruder', `tool T${i}`]).flat(),
+          ].filter(name => availSet.size === 0 || availSet.has(name))
+
+          const queryStr = [...wanted.map(encodeURIComponent), 'configfile=settings'].join('&')
+          const qRes = await fetch(`${printer}/printer/objects/query?${queryStr}`, {
+            signal: AbortSignal.timeout(6000),
+          })
+          if (!qRes.ok) throw new Error('Kalibrierungsdaten nicht erreichbar.')
+          const qJson = await qRes.json()
+          const filesJson = filesRes?.ok ? await filesRes.json().catch(() => null) : null
+          return json(
+            200,
+            normalizeCalibrationData({
+              rawStatus: qJson?.result?.status ?? {},
+              configFiles: filesJson?.result ?? [],
+            }),
+          )
+        }
+
+        if (systemSub === 'calibration/shaketune-image') {
+          const imgPath = validateShakeTuneImagePath(parsedUrl.searchParams.get('path'))
+          if (!imgPath) throw new ControlError('Ungültiger Bildpfad.', 400)
+          const response = await fetch(`${printer}/server/files/config/${encodeMoonrakerPath(imgPath)}`, {
+            signal: AbortSignal.timeout(8000),
+          })
+          if (!response.ok || !response.headers.get('content-type')?.startsWith('image/png')) {
+            throw new Error('ShakeTune-Diagramm nicht verfügbar.')
+          }
+          const bytes = Buffer.from(await response.arrayBuffer())
+          if (bytes.length > 8 * 1024 * 1024) throw new Error('Diagramm zu groß.')
+          res.setHeader('Content-Type', 'image/png')
+          res.setHeader('Cache-Control', 'private, max-age=3600')
+          res.end(bytes)
+          return
+        }
+
+        if (systemSub === 'config/list') {
+          const response = await fetch(`${printer}/server/files/list?root=config`, {
+            signal: AbortSignal.timeout(7000),
+          })
+          if (!response.ok) throw new Error('Konfigurationsdateien nicht erreichbar.')
+          const data = await response.json()
+          return json(200, { files: normalizeConfigList(data?.result ?? []) })
+        }
+
+        if (systemSub === 'config/file') {
+          const relPath = validateConfigPath(parsedUrl.searchParams.get('path'))
+          if (!relPath) throw new ControlError('Ungültiger Konfigurationspfad.', 400)
+          const [listRes, fileRes] = await Promise.all([
+            fetch(`${printer}/server/files/list?root=config`, { signal: AbortSignal.timeout(6000) }),
+            fetch(`${printer}/server/files/config/${encodeMoonrakerPath(relPath)}`, {
+              signal: AbortSignal.timeout(8000),
+            }),
+          ])
+          if (!fileRes.ok) {
+            throw new ControlError('Konfigurationsdatei nicht gefunden.', fileRes.status === 404 ? 404 : 502)
+          }
+          const bytes = Buffer.from(await fileRes.arrayBuffer())
+          if (bytes.length > MAX_CONFIG_BYTES) {
+            throw new ControlError('Konfigurationsdatei überschreitet das Limit von 512 KB.', 413)
+          }
+          if (bytes.includes(0)) {
+            throw new ControlError('Binärdatei kann nicht im Texteditor geöffnet werden.', 400)
+          }
+          const listJson = listRes.ok ? await listRes.json().catch(() => null) : null
+          const rawEntry = (listJson?.result ?? []).find(item => item?.path === relPath) ?? {
+            path: relPath,
+            size: bytes.length,
+            modified: null,
+            permissions: 'r',
+          }
+          const meta = classifyConfigFile(rawEntry)
+          return json(200, {
+            path: relPath,
+            content: bytes.toString('utf8'),
+            size: bytes.length,
+            modified: meta?.modified ?? null,
+            readonly: meta ? meta.readonly : true,
+            isBackup: meta?.isBackup ?? false,
+            isScript: meta?.isScript ?? false,
+          })
+        }
+
+        if (systemSub === 'config/save') {
+          const payload = await readJson(req, MAX_CONFIG_BYTES + 80_000)
+          if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+            throw new ControlError('Ungültige Speicheranfrage.', 400)
+          }
+          await probeMachineWriteGuard(true)
+          const listRes = await fetch(`${printer}/server/files/list?root=config`, {
+            signal: AbortSignal.timeout(6000),
+          })
+          if (!listRes.ok) throw new Error('Konfigurationsliste nicht erreichbar.')
+          const listJson = await listRes.json()
+          const entry = (listJson?.result ?? []).find(item => item?.path === payload.path) ?? null
+          const { path: validPath } = validateWritableConfigPath(payload.path, entry)
+          const content = validateConfigContent(payload.content)
+          checkExpectedModified({
+            expectedModified: payload.expectedModified,
+            currentModified: entry?.modified,
+            force: payload.force === true,
+          })
+
+          const restartOption = payload.restart ?? 'none'
+          if (!['none', 'klipper_restart', 'moonraker', 'crowsnest'].includes(restartOption)) {
+            throw new ControlError('Ungültige Neustart-Option.', 400)
+          }
+
+          let restartSpec = null
+          if (restartOption !== 'none') {
+            const sysRes = await fetch(`${printer}/machine/system_info`, { signal: AbortSignal.timeout(5000) }).catch(
+              () => null,
+            )
+            const sysJson = sysRes?.ok ? await sysRes.json().catch(() => null) : null
+            const avail = sysJson?.result?.system_info?.available_services ?? ['klipper', 'moonraker', 'crowsnest']
+            restartSpec = validateRestartTarget(restartOption, avail)
+          }
+
+          const uploadRes = await fetch(`${printer}/server/files/upload`, {
+            method: 'POST',
+            body: buildConfigUploadFormData(validPath, content),
+            signal: AbortSignal.timeout(10_000),
+          })
+          if (!uploadRes.ok) {
+            const errJson = await uploadRes.json().catch(() => null)
+            throw new ControlError(
+              errJson?.error?.message ?? `Speichern fehlgeschlagen (HTTP ${uploadRes.status}).`,
+              502,
+            )
+          }
+          const uploadJson = await uploadRes.json().catch(() => null)
+          let newModified =
+            Number.isFinite(uploadJson?.item?.modified)
+              ? uploadJson.item.modified
+              : Number.isFinite(uploadJson?.result?.item?.modified)
+                ? uploadJson.result.item.modified
+                : null
+          if (newModified == null) {
+            const refreshRes = await fetch(`${printer}/server/files/list?root=config`, {
+              signal: AbortSignal.timeout(5000),
+            }).catch(() => null)
+            const refreshJson = refreshRes?.ok ? await refreshRes.json().catch(() => null) : null
+            const updatedEntry = (refreshJson?.result ?? []).find(item => item?.path === validPath)
+            if (Number.isFinite(updatedEntry?.modified)) newModified = updatedEntry.modified
+          }
+
+          let restarted = null
+          if (restartSpec) {
+            try {
+              await executeRestartTarget(restartSpec)
+              restarted = restartOption
+            } catch (restartErr) {
+              if (restartSpec.service === 'moonraker') {
+                restarted = restartOption
+              } else {
+                throw new ControlError(
+                  `Datei gespeichert, aber Neustart fehlgeschlagen: ${restartErr.message}`,
+                  502,
+                )
+              }
+            }
+          }
+
+          return json(200, {
+            saved: true,
+            path: validPath,
+            modified: newModified,
+            restarted,
+            message: restarted
+              ? `${validPath} gespeichert · Neustart ausgelöst.`
+              : `${validPath} gespeichert.`,
+          })
+        }
+
+        if (systemSub === 'service/restart') {
+          const payload = await readJson(req, 4000)
+          const target = payload?.target
+          const sysRes = await fetch(`${printer}/machine/system_info`, { signal: AbortSignal.timeout(5000) }).catch(
+            () => null,
+          )
+          const sysJson = sysRes?.ok ? await sysRes.json().catch(() => null) : null
+          const avail = sysJson?.result?.system_info?.available_services ?? []
+          const spec = validateRestartTarget(target, avail)
+          const allowUncertainRecovery = ['klipper_restart', 'firmware_restart', 'klipper'].includes(target)
+          await probeMachineWriteGuard(allowUncertainRecovery)
+
+          try {
+            await executeRestartTarget(spec)
+          } catch (restartErr) {
+            if (spec.service !== 'moonraker') throw restartErr
+          }
+
+          return json(200, {
+            ok: true,
+            target,
+            message: `${spec.label}: ausgelöst. Verbindung wird automatisch neu aufgebaut.`,
+          })
+        }
+
+        if (systemSub === 'updates') {
+          const response = await fetch(`${printer}/machine/update/status`, {
+            signal: AbortSignal.timeout(8000),
+          })
+          if (!response.ok) throw new Error('Update-Status nicht erreichbar.')
+          const data = await response.json()
+          return json(200, normalizeUpdateStatus(data?.result ?? {}))
+        }
+
+        if (systemSub === 'updates/refresh') {
+          await readJson(req, 4000).catch(() => ({}))
+          await probeMachineWriteGuard(false)
+          const response = await fetch(`${printer}/machine/update/refresh`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}',
+            signal: AbortSignal.timeout(30_000),
+          })
+          if (!response.ok) throw new Error(`Update-Prüfung fehlgeschlagen (HTTP ${response.status}).`)
+          const data = await response.json()
+          return json(200, normalizeUpdateStatus(data?.result ?? {}))
+        }
+
+        if (systemSub === 'logs/list') {
+          const response = await fetch(`${printer}/server/files/list?root=logs`, {
+            signal: AbortSignal.timeout(7000),
+          })
+          if (!response.ok) throw new Error('Logdateien nicht erreichbar.')
+          const data = await response.json()
+          return json(200, { logs: normalizeLogList(data?.result ?? []) })
+        }
+
+        if (systemSub === 'logs/tail') {
+          const logPath = validateLogPath(parsedUrl.searchParams.get('path'))
+          if (!logPath) throw new ControlError('Ungültiger Logpfad.', 400)
+          const url = `${printer}/server/files/logs/${encodeMoonrakerPath(logPath)}`
+          const response = await fetch(url, {
+            headers: { Range: `bytes=-${LOG_TAIL_BYTES}` },
+            signal: AbortSignal.timeout(8000),
+          })
+          if (response.status === 416) {
+            return json(
+              200,
+              parseLogTail({ text: '', totalBytes: 0, fetchedBytes: 0, statusCode: 416, maxLines: LOG_TAIL_MAX_LINES }),
+            )
+          }
+          if (!response.ok && response.status !== 206) {
+            throw new ControlError('Logdatei nicht verfügbar.', response.status === 404 ? 404 : 502)
+          }
+          const buf = Buffer.from(await response.arrayBuffer())
+          let totalBytes = buf.length
+          const contentRange = response.headers.get('content-range')
+          const match = contentRange?.match(/\/(\d+)$/)
+          if (match) totalBytes = Number(match[1])
+          else if (response.headers.get('content-length')) totalBytes = Number(response.headers.get('content-length'))
+
+          return json(
+            200,
+            parseLogTail({
+              text: buf.toString('utf8'),
+              totalBytes,
+              fetchedBytes: buf.length,
+              statusCode: response.status,
+              maxLines: LOG_TAIL_MAX_LINES,
+            }),
+          )
+        }
+      }
+
       if (path === '/api/history') {
         const rawLimit = Number(parsedUrl.searchParams.get('limit') ?? 40)
         const rawStart = Number(parsedUrl.searchParams.get('start') ?? 0)
@@ -649,7 +1114,10 @@ export function printerMiddleware(req, res, next) {
       res.setHeader('Content-Type', response.headers.get('content-type'))
       res.end(bytes)
     } catch (error) {
-      json(error.status ?? 502, { error: error.message || 'Verbindung zum Drucker fehlgeschlagen.' })
+      const payload = { error: error.message || 'Verbindung zum Drucker fehlgeschlagen.' }
+      if (error.code) payload.code = error.code
+      if (error.currentModified !== undefined) payload.currentModified = error.currentModified
+      json(error.status ?? 502, payload)
     }
   })()
 }

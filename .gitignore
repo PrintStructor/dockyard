@@ -5,6 +5,7 @@ dist/
 *.local.md
 .DS_Store
 .impeccable/
+.superpowers/
 PRODUCT.md
 DESIGN.md
 VERIFICATION.md

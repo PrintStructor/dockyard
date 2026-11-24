@@ -25,7 +25,7 @@ export function parseAllowedOrigins(raw = '') {
     .map(entry => parseHttpOrigin(entry, 'ALLOWED_ORIGINS entry', true))
 }
 
-export const printerUrl = parseHttpOrigin(process.env.PRINTER_URL || 'http://127.0.0.1:1977', 'PRINTER_URL')
+export const printerUrl = parseHttpOrigin(process.env.PRINTER_URL || 'http://127.0.0.1', 'PRINTER_URL')
 export const serverHost = (process.env.HOST || '127.0.0.1').trim() || '127.0.0.1'
 
 const parsedPort = Number(process.env.PORT || 4173)

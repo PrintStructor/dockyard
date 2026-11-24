@@ -166,9 +166,9 @@ onMounted(async () => {
     const data = await response.json()
     if (!response.ok) throw new Error(data.error)
     presets.value = data.presets
-    if (!data.presets.length) presetError.value = 'Keine ABS-, PLA- oder PETG-Presets in Voyager gespeichert.'
+    if (!data.presets.length) presetError.value = 'Keine ABS-, PLA- oder PETG-Presets gespeichert.'
   } catch (error) {
-    if (error.name !== 'AbortError') presetError.value = 'Voyager-Presets gerade nicht erreichbar.'
+    if (error.name !== 'AbortError') presetError.value = 'Temperatur-Presets gerade nicht erreichbar.'
   }
 })
 

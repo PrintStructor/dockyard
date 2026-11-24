@@ -5,26 +5,69 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { parseAllowedOrigins } from '../server/config.mjs'
 import { resolveStaticPath, createProductionServer } from '../server/start.mjs'
-import { resolveVoyagerUrl } from '../src/voyager-url.mjs'
+import { resolveMainsailUrl } from '../src/printer-ui-url.mjs'
+import { normalizePresets } from '../server/presets.mjs'
 
-test('resolveVoyagerUrl uses explicit URL or derives same-host port 1977 when unset/auto', () => {
+test('resolveMainsailUrl uses explicit URL or derives same-host root URL when unset/auto', () => {
   assert.equal(
-    resolveVoyagerUrl('http://printer.example:1977', { protocol: 'http:', hostname: '127.0.0.1' }),
-    'http://printer.example:1977',
+    resolveMainsailUrl('http://printer.example/', { protocol: 'http:', hostname: '127.0.0.1' }),
+    'http://printer.example/',
   )
   assert.equal(
-    resolveVoyagerUrl('auto', { protocol: 'http:', hostname: 'printer.local' }),
-    'http://printer.local:1977',
+    resolveMainsailUrl('auto', { protocol: 'http:', hostname: 'printer.local' }),
+    'http://printer.local/',
   )
   assert.equal(
-    resolveVoyagerUrl('', { protocol: 'https:', hostname: 'voron.example' }),
-    'https://voron.example:1977',
+    resolveMainsailUrl('', { protocol: 'https:', hostname: 'voron.example' }),
+    'https://voron.example/',
   )
   assert.equal(
-    resolveVoyagerUrl(undefined, { protocol: 'http:', hostname: '::1' }),
-    'http://[::1]:1977',
+    resolveMainsailUrl(undefined, { protocol: 'http:', hostname: '::1' }),
+    'http://[::1]/',
   )
-  assert.equal(resolveVoyagerUrl('auto', null), 'http://127.0.0.1:1977')
+  assert.equal(resolveMainsailUrl('auto', null), 'http://127.0.0.1/')
+})
+
+test('normalizePresets prefers Mainsail presets, falls back to legacy DB and safe defaults', () => {
+  const fromMainsail = normalizePresets({
+    mainsail: {
+      presets: {
+        a: {
+          name: 'ABS all tools & bed',
+          values: {
+            heater_bed: { bool: true, value: '110' },
+            extruder: { bool: true, value: '260' },
+            extruder1: { bool: true, value: '260' },
+            extruder2: { bool: true, value: '260' },
+            extruder3: { bool: true, value: '260' },
+            extruder4: { bool: true, value: '260' },
+            extruder5: { bool: true, value: '260' },
+          },
+        },
+        b: {
+          name: 'BEACON ABS',
+          values: { heater_bed: { bool: true, value: '110' }, extruder: { bool: true, value: '150' } },
+        },
+      },
+    },
+    legacy: [{ name: 'PLA', temps: { extruder: 215, heater_bed: 65 } }],
+  })
+  assert.deepEqual(fromMainsail, [
+    { name: 'ABS', bed: 110, tools: [260, 260, 260, 260, 260, 260] },
+    { name: 'PLA', bed: 65, tools: [215, 215, 215, 215, 215, 215] },
+    { name: 'PETG', bed: 80, tools: [240, 240, 240, 240, 240, 240] },
+  ])
+
+  const defaultsOnly = normalizePresets()
+  assert.equal(defaultsOnly.length, 3)
+  assert.deepEqual(
+    defaultsOnly.map(p => [p.name, p.bed, p.tools[0]]),
+    [
+      ['ABS', 110, 255],
+      ['PLA', 60, 210],
+      ['PETG', 80, 240],
+    ],
+  )
 })
 
 test('parseAllowedOrigins validates strict HTTP(S) origins without paths or credentials', () => {

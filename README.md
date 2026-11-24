@@ -1,12 +1,12 @@
 # STORMTROOPER Toolchanger Cockpit
 
-A local **German / English** cockpit for a six-tool VORON 2.4 running Klipper, Moonraker and Voyager. Vue 3 + Three.js, with real CAD geometry, live tool/LED states, printer controls and a console.
+A local **German / English** cockpit for a six-tool VORON 2.4 running Klipper, Moonraker and Mainsail. Vue 3 + Three.js, with real CAD geometry, live tool/LED states, printer controls and a console.
 
 ![English cockpit preview with simulated printer data](docs/cockpit-en.png)
 
 *Preview uses simulated data; no printer commands were sent for verification.*
 
-This is an independent, printer-specific application, not a Voyager fork or a universal toolchanger configuration. It does not install or replace your printer macros.
+This is an independent, printer-specific application, not a Mainsail fork or a universal toolchanger configuration. It does not install or replace your printer macros.
 
 ## Features
 
@@ -34,7 +34,7 @@ npm ci
 cp .env.example .env.local
 ```
 
-Edit `.env.local` to point to your printer's **Voyager nginx origin**, which exposes Moonraker API routes, `/websocket`, and `/webcam` / `/webcam2`. Set `VITE_VOYAGER_URL` to the Voyager URL reachable by your browser. The example points to loopback; replace it when running on another machine. `.env.local` stays out of Git.
+Edit `.env.local` to point to your printer's **Mainsail nginx origin** (port 80), which exposes Moonraker API routes, `/websocket`, and `/webcam` / `/webcam2`. Set `VITE_MAINSAIL_URL` to the Mainsail URL reachable by your browser (or `auto` when hosted directly on the printer). The example points to loopback; replace it when running on another machine. `.env.local` stays out of Git.
 
 ```sh
 npm run dev
@@ -60,7 +60,7 @@ To run the cockpit directly on your printer host (e.g. Raspberry Pi with Node.js
 ./scripts/deploy-pi.sh printer.local
 ```
 
-This runs `npm test` and `VITE_VOYAGER_URL=auto npm run build` locally, installs an isolated SHA256-verified Node.js 22 LTS runtime into `~/.local/node22` on the host (leaving system `/usr/bin/node` untouched), syncs only runtime files (`dist/`, `server/`, `src/`, `package.json`), generates a host-local `.env.local` with detected LAN origins, and manages [deploy/stormtrooper-cockpit.user.service.example](deploy/stormtrooper-cockpit.user.service.example) under `~/.config/systemd/user/stormtrooper-cockpit.service`. Existing printer services (Klipper, Moonraker, HelixScreen, Mainsail, Voyager, Crowsnest) are never modified. For 24/7 operation across SSH exits and reboots, enable systemd user linger once on the host:
+This runs `npm test` and `VITE_MAINSAIL_URL=auto npm run build` locally, installs an isolated SHA256-verified Node.js 22 LTS runtime into `~/.local/node22` on the host (leaving system `/usr/bin/node` untouched), syncs only runtime files (`dist/`, `server/`, `src/`, `package.json`), generates a host-local `.env.local` with detected LAN origins, and manages [deploy/stormtrooper-cockpit.user.service.example](deploy/stormtrooper-cockpit.user.service.example) under `~/.config/systemd/user/stormtrooper-cockpit.service`. Existing printer services (Klipper, Moonraker, HelixScreen, Mainsail, Crowsnest) are never modified. For 24/7 operation across SSH exits and reboots, enable systemd user linger once on the host:
 
 ```sh
 sudo loginctl enable-linger "$USER"
@@ -68,8 +68,8 @@ sudo loginctl enable-linger "$USER"
 
 ### Option B — Manual / system-wide systemd service
 
-1. Build the frontend once (`npm ci && VITE_VOYAGER_URL=auto npm run build`).
-2. Configure `HOST=0.0.0.0` (or `HOST=::` for dual-stack IPv4/IPv6), `PORT=4173`, `PRINTER_URL=http://127.0.0.1:1977` and explicit trusted LAN origins in `ALLOWED_ORIGINS` (e.g. `ALLOWED_ORIGINS=http://printer.local:4173`).
+1. Build the frontend once (`npm ci && VITE_MAINSAIL_URL=auto npm run build`).
+2. Configure `HOST=0.0.0.0` (or `HOST=::` for dual-stack IPv4/IPv6), `PORT=4173`, `PRINTER_URL=http://127.0.0.1` and explicit trusted LAN origins in `ALLOWED_ORIGINS` (e.g. `ALLOWED_ORIGINS=http://printer.local:4173`).
 3. Start via `npm start` or adapt the example systemd unit in [deploy/stormtrooper-cockpit.service.example](deploy/stormtrooper-cockpit.service.example).
 
 The backend checks exact request origins against loopback and `ALLOWED_ORIGINS`, plus `X-Cockpit-Request: 1` and JSON content-type. It has no remote authentication layer: keep it on a trusted local network rather than exposing it to the internet.

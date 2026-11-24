@@ -16,7 +16,7 @@ WorkingDirectory=/home/pi/stormtrooper-toolchanger-cockpit
 Environment=NODE_ENV=production
 Environment=HOST=0.0.0.0
 Environment=PORT=4173
-Environment=PRINTER_URL=http://127.0.0.1:1977
+Environment=PRINTER_URL=http://127.0.0.1
 # Set explicit trusted LAN origin(s) matching the browser address bar:
 Environment=ALLOWED_ORIGINS=http://printer.local:4173
 ExecStart=/usr/bin/node /home/pi/stormtrooper-toolchanger-cockpit/server/start.mjs

@@ -36,6 +36,7 @@ import {
   encodeMoonrakerPath,
 } from './machine.mjs'
 import { validateShakeTuneImagePath, normalizeCalibrationData } from './calibration.mjs'
+import { normalizePresets } from './presets.mjs'
 import { printerUrl as printer } from './config.mjs'
 
 const objects = [
@@ -1267,30 +1268,17 @@ export function printerMiddleware(req, res, next) {
       }
 
       if (path === '/api/presets') {
-        const response = await fetch(`${printer}/server/database/item?namespace=voyager-ui&key=settings.presets`, {
-          signal: AbortSignal.timeout(5000),
-        })
-        if (!response.ok) throw new Error('Voyager-Presets nicht erreichbar.')
-        const data = await response.json()
-        const presets = data.result?.value
-        if (!Array.isArray(presets)) throw new Error('Keine Voyager-Presets vorhanden.')
-        const temperature = value => (Number.isFinite(value) && value >= 0 ? value : null)
-        return json(200, {
-          presets: ['ABS', 'PLA', 'PETG'].flatMap(name => {
-            const preset = presets.find(entry => entry.name?.toUpperCase() === name)
-            return preset
-              ? [
-                  {
-                    name,
-                    bed: temperature(preset.temps?.heater_bed),
-                    tools: Array.from({ length: 6 }, (_, id) =>
-                      temperature(preset.temps?.[id ? `extruder${id}` : 'extruder'] ?? preset.temps?.extruder),
-                    ),
-                  },
-                ]
-              : []
-          }),
-        })
+        const [mainsailRes, legacyRes] = await Promise.all([
+          fetch(`${printer}/server/database/item?namespace=mainsail&key=presets`, {
+            signal: AbortSignal.timeout(5000),
+          }).catch(() => null),
+          fetch(`${printer}/server/database/item?namespace=voyager-ui&key=settings.presets`, {
+            signal: AbortSignal.timeout(5000),
+          }).catch(() => null),
+        ])
+        const mainsail = mainsailRes?.ok ? (await mainsailRes.json().catch(() => null))?.result?.value : null
+        const legacy = legacyRes?.ok ? (await legacyRes.json().catch(() => null))?.result?.value : null
+        return json(200, { presets: normalizePresets({ mainsail, legacy }) })
       }
 
       if (path === '/api/console') {

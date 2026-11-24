@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # Deploy STORMTROOPER Toolchanger Cockpit to a Raspberry Pi / Linux printer host.
-# - Builds locally with VITE_VOYAGER_URL=auto (no private IPs baked into dist/).
+# - Builds locally with VITE_MAINSAIL_URL=auto (no private IPs baked into dist/).
 # - Installs isolated Node.js 22 LTS into ~/.local/node22 (never touches /usr/bin/node).
 # - Syncs runtime files only (dist/, server/, src/, package.json) — zero node_modules on Pi.
 # - Runs as a user-level systemd service (~/.config/systemd/user/stormtrooper-cockpit.service).
-# - Never touches HelixScreen, Klipper, Moonraker, Mainsail, Voyager or Crowsnest.
+# - Never touches HelixScreen, Klipper, Moonraker, Mainsail or Crowsnest.
 #
 # Usage:
 #   ./scripts/deploy-pi.sh [host]
@@ -16,7 +16,7 @@ set -euo pipefail
 #   DEPLOY_USER=pi                     SSH user (default: pi)
 #   DEPLOY_DIR=stormtrooper-toolchanger-cockpit
 #   DEPLOY_PORT=4173                   Cockpit listen port (default: 4173)
-#   DEPLOY_PRINTER_URL=http://127.0.0.1:1977
+#   DEPLOY_PRINTER_URL=http://127.0.0.1
 #   SKIP_TESTS=0                       Set to 1 to skip local `npm test`
 #   REFRESH_ENV=0                      Set to 1 to regenerate remote .env.local ALLOWED_ORIGINS
 
@@ -30,7 +30,7 @@ DEPLOY_USER="${DEPLOY_USER:-pi}"
 DEPLOY_HOST="${1:-${DEPLOY_HOST:-}}"
 DEPLOY_DIR="${DEPLOY_DIR:-stormtrooper-toolchanger-cockpit}"
 DEPLOY_PORT="${DEPLOY_PORT:-4173}"
-DEPLOY_PRINTER_URL="${DEPLOY_PRINTER_URL:-http://127.0.0.1:1977}"
+DEPLOY_PRINTER_URL="${DEPLOY_PRINTER_URL:-http://127.0.0.1}"
 SKIP_TESTS="${SKIP_TESTS:-0}"
 REFRESH_ENV="${REFRESH_ENV:-0}"
 
@@ -66,18 +66,18 @@ if ! node -e "
   const u = new URL(process.argv[1]);
   if (u.protocol !== 'http:' || u.username || u.password || u.pathname !== '/' || u.search || u.hash) process.exit(1);
 " "${DEPLOY_PRINTER_URL}" 2>/dev/null; then
-  echo "Error: DEPLOY_PRINTER_URL must be an HTTP origin (e.g. http://127.0.0.1:1977)." >&2
+  echo "Error: DEPLOY_PRINTER_URL must be an HTTP origin (e.g. http://127.0.0.1)." >&2
   exit 1
 fi
 
 TARGET="${DEPLOY_USER}@${DEPLOY_HOST}"
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=8)
 
-echo "==> [1/6] Running local checks & production build (VITE_VOYAGER_URL=auto)..."
+echo "==> [1/6] Running local checks & production build (VITE_MAINSAIL_URL=auto)..."
 if [[ "${SKIP_TESTS}" != "1" ]]; then
   npm test
 fi
-VITE_VOYAGER_URL=auto npm run build
+VITE_MAINSAIL_URL=auto npm run build
 
 echo "==> [2/6] Verifying SSH access to ${TARGET}..."
 ssh "${SSH_OPTS[@]}" "${TARGET}" "true"

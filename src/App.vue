@@ -41,7 +41,7 @@ import { useConsole } from './useConsole.js'
 import { useConfigEditor } from './useConfigEditor.js'
 import { auxActionReason } from './aux-action-state.mjs'
 import { toolActionReason, filamentToolIds, mountedToolId, maintenanceRestriction } from './tool-action-state.mjs'
-import { resolveVoyagerUrl } from './voyager-url.mjs'
+import { resolveMainsailUrl } from './printer-ui-url.mjs'
 import { toolState, heatState } from '../server/status.mjs'
 
 const ToolScene = defineAsyncComponent(() => import('./components/ToolScene.vue'))
@@ -74,7 +74,7 @@ watch(
 )
 
 const configEditor = useConfigEditor()
-const voyagerUrl = resolveVoyagerUrl(import.meta.env.VITE_VOYAGER_URL)
+const mainsailUrl = resolveMainsailUrl(import.meta.env.VITE_MAINSAIL_URL)
 const validTabs = ['tools', 'controls', 'print', 'history', 'cameras', 'console', 'system']
 const validSystemSubtabs = ['overview', 'config', 'calibration', 'maintenance']
 
@@ -557,8 +557,8 @@ async function acknowledgeUncertain() {
       >
         <Terminal :size="17" />{{ t('Konsole') }}
       </button>
-      <a class="voyager-link" :href="voyagerUrl" target="_blank" rel="noopener">
-        {{ t('Voyager öffnen') }}<ArrowUpRight :size="16" />
+      <a class="mainsail-link" :href="mainsailUrl" target="_blank" rel="noopener">
+        {{ t('Mainsail öffnen') }}<ArrowUpRight :size="16" />
       </a>
     </nav>
 

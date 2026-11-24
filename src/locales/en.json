@@ -871,5 +871,20 @@
   "Ungültiger Objektname.": "Invalid object name.",
   "Objekt ist im aktuellen Druck nicht vorhanden.": "Object does not exist in the current print.",
   "Objekt wurde bereits übersprungen.": "Object has already been excluded.",
-  "Unbekannte Druckaktion.": "Unknown print action."
+  "Unbekannte Druckaktion.": "Unknown print action.",
+  "Display-Modus beenden": "Exit display mode",
+  "Display-Modus aktivieren": "Enable display mode",
+  "Display-Modus aktiv (Touch-Ansicht ohne Kameras) · Klicken zum Beenden": "Display mode active (touch view without cameras) · click to exit",
+  "Display-Modus für Drucker-Touchscreen (ohne Kameras)": "Display mode for printer touchscreen (without cameras)",
+  "Drucker-Display & Ansicht": "Printer display & view",
+  "Kompakte Touch-Ansicht ohne Kamerastreams für ein Display direkt am Drucker.": "Compact touch view without camera streams for a display mounted on the printer.",
+  "Display-Modus (Touch / Kiosk)": "Display mode (Touch / Kiosk)",
+  "Größere Touch-Flächen, kompakte Kopfleiste und keine Kameras.": "Larger touch targets, compact header, and no cameras.",
+  "Kamerastreams im Cockpit": "Camera streams in cockpit",
+  "Ausgeblendete Kameras öffnen keinerlei WebRTC- oder MJPEG-Verbindungen.": "Hidden cameras do not open any WebRTC or MJPEG connections.",
+  "Sichtbar": "Visible",
+  "Ausgeblendet": "Hidden",
+  "Direktlink für Drucker-Display (Kiosk-Browser)": "Direct link for printer display (kiosk browser)",
+  "Kopiert": "Copied",
+  "URL kopieren": "Copy URL"
 }

@@ -622,3 +622,65 @@ input::placeholder{color:var(--muted);opacity:1}.jog-heading{flex-wrap:wrap}.jog
   .live-tuning.compact .live-tuning-grid{grid-template-columns:1fr}
   .print-job-bar-actions{width:100%;margin-left:0;justify-content:flex-end}
 }
+
+/* Phase 3: Printer Display / Kiosk mode (zero cameras + touch-first chrome). */
+.display-toggle-btn{width:36px;height:36px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--muted)}
+.display-toggle-btn:hover{color:var(--text);border-color:var(--line-strong);background:var(--surface-raised)}
+.display-toggle-btn.active{border-color:var(--lime);background:var(--lime-tint);color:var(--lime)}
+
+.operation-layout.no-cameras{grid-template-columns:minmax(0,1fr)}
+.controls-bottom-row{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) 296px;gap:12px;align-items:stretch}
+.controls-bottom-row>.temperature-graph{min-width:0}
+.controls-bottom-row>.fan-panel{align-self:start}
+@media(max-width:850px){
+  .controls-bottom-row{grid-template-columns:1fr}
+  .controls-bottom-row>.temperature-graph .graph-plot{position:static;height:210px}
+}
+
+.system-display-panel{grid-column:1/-1}
+.display-settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.display-setting-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface-subtle)}
+.display-setting-row strong{display:block;font-size:13px;font-weight:500;color:var(--text)}
+.display-setting-row p{margin-top:4px;font-size:11px;line-height:1.45;color:var(--muted)}
+.display-switch-btn{min-width:116px;justify-content:center;flex-shrink:0}
+.display-switch-btn.active{border-color:var(--lime);background:var(--lime-tint);color:var(--lime)}
+.kiosk-url-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:11px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface-deep)}
+.kiosk-url-bar>div{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}
+.kiosk-url-bar code{font-family:var(--font-mono);font-size:12px;color:var(--lime);overflow-wrap:anywhere}
+@media(max-width:850px){
+  .display-settings-grid{grid-template-columns:1fr}
+}
+
+.app-shell.display-mode{padding:0 18px}
+.app-shell.display-mode .masthead{height:60px;gap:12px}
+.app-shell.display-mode .brand{font-size:15px}
+.app-shell.display-mode .brand small{display:none}
+.app-shell.display-mode .main-nav{min-height:46px;gap:20px}
+.app-shell.display-mode .main-nav>button{min-height:46px;padding-bottom:10px;font-size:13px}
+.app-shell.display-mode .voyager-link,.app-shell.display-mode .page-footer{display:none}
+.app-shell.display-mode main{padding-top:14px;padding-bottom:18px}
+.app-shell.display-mode .page-heading{margin-bottom:12px}
+.app-shell.display-mode .page-heading h1{font-size:20px}
+.app-shell.display-mode:not(.controls-active) .page-heading p{display:none}
+.app-shell.display-mode .scene-viewport{height:clamp(220px,34dvh,340px)}
+.app-shell.display-mode .print-scene-viewport{height:clamp(260px,42dvh,400px)}
+.app-shell.display-mode button,.app-shell.display-mode .tool-choice{user-select:none;-webkit-user-select:none}
+.app-shell.display-mode .tool-actions button,
+.app-shell.display-mode .led-actions button,
+.app-shell.display-mode .prep-actions button,
+.app-shell.display-mode .initialize-control>button,
+.app-shell.display-mode .homing-buttons button,
+.app-shell.display-mode .jog,
+.app-shell.display-mode .motion-actions button,
+.app-shell.display-mode .live-tuning-actions button,
+.app-shell.display-mode .tuning-z-buttons button,
+.app-shell.display-mode .fan-actions button,
+.app-shell.display-mode .cockpit-select-trigger,
+.app-shell.display-mode .print-start-btn,
+.app-shell.display-mode .print-start-confirm,
+.app-shell.display-mode .history-reprint-btn{min-height:42px}
+.app-shell.display-mode input[type=range]{min-height:30px}
+@media(max-width:560px){
+  .app-shell.display-mode{padding:0 12px}
+  .app-shell.display-mode .masthead{height:auto;min-height:96px;padding:10px 0}
+}

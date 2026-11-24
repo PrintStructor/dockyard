@@ -12,6 +12,7 @@ const props = defineProps({
   pending: Boolean,
   selected: Number,
   send: Function,
+  showCameras: { type: Boolean, default: true },
 })
 
 const emit = defineEmits(['command', 'select', 'refresh', 'context'])
@@ -222,7 +223,7 @@ watch(motion, allowed => {
 </script>
 
 <template>
-  <section class="operation-layout" :aria-label="t('Drucker bedienen')">
+  <section class="operation-layout" :class="{ 'no-cameras': !showCameras }" :aria-label="t('Drucker bedienen')">
     <div class="controls-layout">
       <article class="control-panel motion-panel">
         <h2><Move :size="20" />{{ t('Achsen & Bewegung') }}</h2>
@@ -518,10 +519,14 @@ watch(motion, allowed => {
         <p v-if="presetError" class="preset-note">{{ t(presetError) }}</p>
       </article>
 
-      <TemperatureGraph :online="online" :status="status" />
+      <div v-if="!showCameras" class="controls-bottom-row">
+        <TemperatureGraph :online="online" :status="status" />
+        <FanControl :status="status" :online="online" :pending="pending" :send="send" />
+      </div>
+      <TemperatureGraph v-else :online="online" :status="status" />
     </div>
 
-    <aside class="control-cameras" :aria-label="t('Livekameras während der Bedienung')">
+    <aside v-if="showCameras" class="control-cameras" :aria-label="t('Livekameras während der Bedienung')">
       <CameraView id="tophat" name="Tophat" description="Bauraum" />
       <CameraView id="heatbed" name="Druckbett" description="Druckfläche" />
       <FanControl :status="status" :online="online" :pending="pending" :send="send" />

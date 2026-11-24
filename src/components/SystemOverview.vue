@@ -7,9 +7,14 @@ import {
   RefreshCw,
   RotateCw,
   Server,
+  Monitor,
+  CameraOff,
+  Camera,
+  Copy,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import { computeSystemState } from '../system-state.mjs'
+import { displayMode, showCameras, setDisplayMode, setCamerasHidden } from '../display-mode.mjs'
 
 const props = defineProps({
   status: { type: Object, default: null },
@@ -28,10 +33,31 @@ const emit = defineEmits(['refresh-overview', 'restarted'])
 const confirmingTarget = ref('')
 const restartingTarget = ref('')
 const restartFeedback = ref(null)
+const copiedKioskUrl = ref(false)
 let confirmTimer = null
+let copyTimer = null
+
+const kioskUrl = computed(() => {
+  if (typeof globalThis.location === 'undefined') return '?display=1'
+  return `${globalThis.location.origin}${globalThis.location.pathname}?display=1`
+})
+
+async function copyKioskUrl() {
+  try {
+    await navigator.clipboard.writeText(kioskUrl.value)
+    copiedKioskUrl.value = true
+    clearTimeout(copyTimer)
+    copyTimer = setTimeout(() => {
+      copiedKioskUrl.value = false
+    }, 2500)
+  } catch {
+    copiedKioskUrl.value = false
+  }
+}
 
 onBeforeUnmount(() => {
   if (confirmTimer) clearTimeout(confirmTimer)
+  if (copyTimer) clearTimeout(copyTimer)
 })
 
 const computedState = computed(() =>
@@ -406,6 +432,64 @@ const hostCaption = computed(() => {
           </div>
         </div>
         <p v-else class="muted" style="margin-top: 0">{{ t('Keine verwalteten Systemdienste gemeldet.') }}</p>
+      </article>
+
+      <article class="system-panel system-display-panel">
+        <div class="system-panel-head">
+          <div>
+            <h2>{{ t('Drucker-Display & Ansicht') }}</h2>
+            <p>{{ t('Kompakte Touch-Ansicht ohne Kamerastreams für ein Display direkt am Drucker.') }}</p>
+          </div>
+        </div>
+
+        <div class="display-settings-grid">
+          <div class="display-setting-row">
+            <div>
+              <strong>{{ t('Display-Modus (Touch / Kiosk)') }}</strong>
+              <p>{{ t('Größere Touch-Flächen, kompakte Kopfleiste und keine Kameras.') }}</p>
+            </div>
+            <button
+              type="button"
+              class="subtle-button display-switch-btn"
+              :class="{ active: displayMode }"
+              :aria-pressed="displayMode"
+              @click="setDisplayMode(!displayMode)"
+            >
+              <Monitor :size="14" />
+              {{ displayMode ? t('Aktiv') : t('Aus') }}
+            </button>
+          </div>
+
+          <div class="display-setting-row">
+            <div>
+              <strong>{{ t('Kamerastreams im Cockpit') }}</strong>
+              <p>{{ t('Ausgeblendete Kameras öffnen keinerlei WebRTC- oder MJPEG-Verbindungen.') }}</p>
+            </div>
+            <button
+              type="button"
+              class="subtle-button display-switch-btn"
+              :class="{ active: showCameras }"
+              :aria-pressed="showCameras"
+              @click="setCamerasHidden(showCameras)"
+            >
+              <Camera v-if="showCameras" :size="14" />
+              <CameraOff v-else :size="14" />
+              {{ showCameras ? t('Sichtbar') : t('Ausgeblendet') }}
+            </button>
+          </div>
+        </div>
+
+        <div class="kiosk-url-bar">
+          <div>
+            <span class="field-label">{{ t('Direktlink für Drucker-Display (Kiosk-Browser)') }}</span>
+            <code>{{ kioskUrl }}</code>
+          </div>
+          <button type="button" class="subtle-button" @click="copyKioskUrl">
+            <Check v-if="copiedKioskUrl" :size="14" class="text-lime" />
+            <Copy v-else :size="14" />
+            {{ copiedKioskUrl ? t('Kopiert') : t('URL kopieren') }}
+          </button>
+        </div>
       </article>
     </div>
   </div>

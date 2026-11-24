@@ -19,8 +19,10 @@ import {
   Loader2,
   Printer,
   History,
+  Monitor,
 } from '@lucide/vue'
 import { t, locale, language, setLanguage } from './i18n.mjs'
+import { displayMode, showCameras, toggleDisplayMode, sanitizeTabForCameras } from './display-mode.mjs'
 import ControlsView from './components/ControlsView.vue'
 import ConsoleView from './components/ConsoleView.vue'
 import LedControls from './components/LedControls.vue'
@@ -75,7 +77,8 @@ const validSystemSubtabs = ['overview', 'config', 'calibration', 'maintenance']
 function parseRouteHash(rawHash) {
   const clean = (rawHash || '').replace(/^#/, '')
   const [mainTab, sub] = clean.split('/')
-  const nextTab = validTabs.includes(mainTab) ? mainTab : 'tools'
+  const rawTab = validTabs.includes(mainTab) ? mainTab : 'tools'
+  const nextTab = sanitizeTabForCameras(rawTab, showCameras.value)
   const nextSub = nextTab === 'system' && validSystemSubtabs.includes(sub) ? sub : 'overview'
   return { nextTab, nextSub }
 }
@@ -84,10 +87,18 @@ const initialRoute = parseRouteHash(location.hash)
 const tab = ref(initialRoute.nextTab)
 const systemSubtab = ref(initialRoute.nextSub)
 
-watch([tab, systemSubtab], ([nextTab, nextSub]) => {
-  const targetHash = nextTab === 'system' && nextSub !== 'overview' ? `#system/${nextSub}` : `#${nextTab}`
-  if (location.hash !== targetHash) history.replaceState(null, '', targetHash)
+watch(showCameras, visible => {
+  if (!visible && tab.value === 'cameras') tab.value = 'tools'
 })
+
+watch(
+  [tab, systemSubtab],
+  ([nextTab, nextSub]) => {
+    const targetHash = nextTab === 'system' && nextSub !== 'overview' ? `#system/${nextSub}` : `#${nextTab}`
+    if (location.hash !== targetHash) history.replaceState(null, '', targetHash)
+  },
+  { immediate: true },
+)
 
 function handleHashChange() {
   const { nextTab, nextSub } = parseRouteHash(location.hash)
@@ -337,13 +348,28 @@ async function acknowledgeUncertain() {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'controls-active': tab === 'controls' }">
+  <div class="app-shell" :class="{ 'controls-active': tab === 'controls', 'display-mode': displayMode }">
     <header class="masthead">
       <a class="brand" href="#" :aria-label="t('STORMTROOPER Werkzeugübersicht')" @click.prevent="tab = 'tools'">
         <img src="/voron-logo.svg" width="34" height="39" alt="VORON" />
         <span>STORMTROOPER<small>VORON 2.4 <span class="brand-divider">/</span> 6-Toolchanger</small></span>
       </a>
       <div class="header-meta">
+        <button
+          type="button"
+          class="icon-button display-toggle-btn"
+          :class="{ active: displayMode }"
+          :aria-pressed="displayMode"
+          :aria-label="displayMode ? t('Display-Modus beenden') : t('Display-Modus aktivieren')"
+          :title="
+            displayMode
+              ? t('Display-Modus aktiv (Touch-Ansicht ohne Kameras) · Klicken zum Beenden')
+              : t('Display-Modus für Drucker-Touchscreen (ohne Kameras)')
+          "
+          @click="toggleDisplayMode"
+        >
+          <Monitor :size="16" />
+        </button>
         <div class="language-control">
           <CockpitSelect
             :model-value="language"
@@ -422,6 +448,7 @@ async function acknowledgeUncertain() {
         <History :size="17" />{{ t('Verlauf') }}
       </button>
       <button
+        v-if="showCameras"
         type="button"
         :class="{ active: tab === 'cameras' }"
         :aria-current="tab === 'cameras' ? 'page' : undefined"
@@ -848,6 +875,7 @@ async function acknowledgeUncertain() {
         :pending="pending"
         :selected="selected"
         :send="send"
+        :show-cameras="showCameras"
         @select="selectTool"
         @command="send"
         @refresh="refresh"
@@ -873,7 +901,7 @@ async function acknowledgeUncertain() {
         @print-started="openPrintFile"
       />
 
-      <section v-if="tab === 'tools' || tab === 'cameras'" class="camera-section" :aria-label="t('Druckerkameras')">
+      <section v-if="showCameras && (tab === 'tools' || tab === 'cameras')" class="camera-section" :aria-label="t('Druckerkameras')">
         <div v-if="tab === 'tools'" class="section-heading">
           <h2>{{ t('Am Drucker') }}</h2>
           <span>{{ t('Live aus beiden Kameras') }}</span>

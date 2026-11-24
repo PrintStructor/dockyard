@@ -1,0 +1,11 @@
+--- a/klippy/extras/toolchanger.py
++++ b/klippy/extras/toolchanger.py
+@@ -336,6 +336,8 @@
+                 'name': self.name,
+                 'status': self.status,
+                 'tool': self.active_tool.name if self.active_tool else None,
++                'initial_tool': self.initial_tool.name if self.initial_tool else None,
++                'initial_tool_number': self.initial_tool.tool_number if self.initial_tool else -1,
+                 'tool_number': self.active_tool.tool_number if self.active_tool else -1,
+                 'detected_tool': self.detected_tool.name if self.detected_tool else None,
+                 'detected_tool_number': self.detected_tool.tool_number if self.detected_tool else -1,

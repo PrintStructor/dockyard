@@ -1,0 +1,27 @@
+# Example systemd service for hosting STORMTROOPER Cockpit on a printer host (Node.js >= 22.12).
+# Adapt User, WorkingDirectory, ExecStart (Node path) and Environment before installing to:
+#   /etc/systemd/system/stormtrooper-cockpit.service
+# Then run:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now stormtrooper-cockpit
+
+[Unit]
+Description=STORMTROOPER Toolchanger Cockpit
+After=network-online.target moonraker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/stormtrooper-toolchanger-cockpit
+Environment=NODE_ENV=production
+Environment=HOST=0.0.0.0
+Environment=PORT=4173
+Environment=PRINTER_URL=http://127.0.0.1:1977
+# Set explicit trusted LAN origin(s) matching the browser address bar:
+Environment=ALLOWED_ORIGINS=http://printer.local:4173
+ExecStart=/usr/bin/node /home/pi/stormtrooper-toolchanger-cockpit/server/start.mjs
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

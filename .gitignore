@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env*
+!.env.example
+*.local.md
+.DS_Store
+.impeccable/
+PRODUCT.md
+DESIGN.md
+VERIFICATION.md
+patches/applied-status-patch.json
+preview-*.png
+verification-*.json
+*.log

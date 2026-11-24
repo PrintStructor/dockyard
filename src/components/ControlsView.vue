@@ -1,7 +1,8 @@
 <script setup>
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
-import { Home, Move, Thermometer, Power, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Snowflake, Check } from '@lucide/vue'
+import { Home, Move, Thermometer, Snowflake, Check } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
+import { quickHomeAxisReason, quickJogReason } from '../aux-action-state.mjs'
 import FanControl from './FanControl.vue'
 import CameraView from './CameraView.vue'
 import TemperatureGraph from './TemperatureGraph.vue'
@@ -17,7 +18,11 @@ const props = defineProps({
 
 const emit = defineEmits(['command', 'select', 'refresh', 'context'])
 
-const step = ref(1)
+const axisRows = [
+  { axis: 'x', neg: [-100, -10, -1], pos: [1, 10, 100] },
+  { axis: 'y', neg: [-100, -10, -1], pos: [1, 10, 100] },
+  { axis: 'z', neg: [-10, -1, -0.1], pos: [0.1, 1, 10] },
+]
 const allTools = ref(false)
 const drafts = ref({})
 const submitted = ref({})
@@ -193,16 +198,12 @@ const position = axis => {
 
 const temperature = value => (value == null ? '—' : Math.round(value))
 
-function canJog(axis, direction) {
-  if (!motion.value || !homed(axis)) return false
-  const i = ['x', 'y', 'z'].indexOf(axis)
-  const pos = props.status?.position?.[i]
-  const min = props.status?.axisMinimum?.[i]
-  const max = props.status?.axisMaximum?.[i]
-  return [pos, min, max].every(Number.isFinite) && pos + step.value * direction >= min && pos + step.value * direction <= max
+const axisHomeReason = axis => quickHomeAxisReason(props.status, axis, props.online, props.pending)
+const axisJogReason = (axis, distance) => quickJogReason(props.status, axis, distance, props.online, props.pending)
+const formatStep = value => `${value > 0 ? '+' : '−'}${Math.abs(value).toLocaleString(locale.value)}`
+const jogStep = (axis, distance) => {
+  if (!axisJogReason(axis, distance)) emit('command', { action: 'jog', axis, distance })
 }
-
-const jog = (axis, sign) => emit('command', { action: 'jog', axis, distance: step.value * sign })
 
 const restriction = computed(() => {
   if (!props.online) return 'Bedienung gesperrt: keine aktuellen Druckerdaten.'
@@ -237,114 +238,126 @@ watch(motion, allowed => {
           </div>
         </div>
 
-        <div class="homing-buttons">
+        <div class="motion-prep-bar">
           <button
-            class="primary-control"
+            class="subtle-button"
+            :class="{ 'prep-done': allHomed && online }"
             type="button"
             :disabled="!homing"
+            :aria-label="t('Alle Achsen homen')"
+            :title="
+              allHomed
+                ? t('Alle Achsen referenziert · erneut homen')
+                : t('Alle Achsen homen')
+            "
             @click="emit('command', { action: 'home', axis: 'all' })"
           >
-            <Home :size="17" />{{ t('Alle homen') }}
+            <Home :size="15" /><span>ALL</span>
           </button>
           <button
-            v-for="axis in ['x', 'y', 'z']"
-            :key="axis"
+            class="subtle-button"
+            :class="{ 'prep-done': status?.qglApplied && online }"
+            type="button"
+            :disabled="!motion || !allHomed || !status?.capabilities?.qgl"
+            :title="
+              status?.qglApplied ? t('Bereits ausgerichtet · QGL erneut ausführen') : t('Gantry ausrichten')
+            "
+            :aria-label="
+              status?.qglApplied
+                ? t('Gantry bereits ausgerichtet. QGL erneut ausführen')
+                : t('Gantry ausrichten · QGL')
+            "
+            @click="emit('command', { action: 'qgl' })"
+          >
+            <span>QGL</span>
+          </button>
+          <button
             class="subtle-button"
             type="button"
-            :disabled="!homing || (axis === 'z' && !(homed('x') && homed('y')))"
-            @click="emit('command', { action: 'home', axis })"
+            :disabled="!motion || !allHomed || !status?.capabilities?.mesh"
+            :title="t('Bett vermessen')"
+            :aria-label="t('Bett vermessen')"
+            @click="emit('command', { action: 'mesh' })"
           >
-            {{ t('{0} homen', [axis.toUpperCase()]) }}
+            <span>Bed Mesh</span>
+          </button>
+          <button
+            class="subtle-button prep-motors-btn"
+            :class="{ 'confirm-danger': confirmMotors }"
+            type="button"
+            :disabled="!motion"
+            :aria-label="confirmMotors ? t('Wirklich lösen?') : t('Motoren lösen')"
+            :title="
+              confirmMotors
+                ? t('Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden')
+                : status?.qglApplied
+                  ? t('Motoren lösen · Gantry senkt sich ab (QGL geht verloren)')
+                  : t('Motoren lösen')
+            "
+            @click="releaseMotors"
+            @blur="resetMotorsConfirm"
+            @keydown.esc="resetMotorsConfirm"
+          >
+            <svg class="motor-off-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <defs>
+                <mask id="motor-off-cut-controls">
+                  <rect width="24" height="24" fill="white" />
+                  <line x1="2" y1="2" x2="22" y2="22" stroke="black" stroke-width="4.4" stroke-linecap="round" />
+                </mask>
+              </defs>
+              <path
+                d="M7 4v2h3v2H7l-2 2v3H3v-3H1v8h2v-3h2v3h3l2 2h8v-4h2v3h3V9h-3v3h-2V8h-6V6h3V4H7z"
+                fill="currentColor"
+                mask="url(#motor-off-cut-controls)"
+              />
+              <line x1="2.5" y1="2.5" x2="21.5" y2="21.5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" />
+            </svg>
+            <span v-if="confirmMotors" class="prep-confirm-mark">?</span>
           </button>
         </div>
 
-        <div class="jog-heading">
-          <h3>{{ t('Bewegen') }}</h3>
-          <div class="segmented" :aria-label="t('Schrittweite')">
+        <div class="axis-jog-stack controls-axis-stack" :aria-label="t('Achsen bewegen')">
+          <div v-for="row in axisRows" :key="row.axis" class="axis-jog-row controls-axis-row">
             <button
-              v-for="value in [0.1, 1, 10, 25, 50, 100]"
-              :key="value"
+              v-for="dist in row.neg"
+              :key="dist"
               type="button"
-              :aria-pressed="step === value"
-              @click="step = value"
+              class="axis-jog-btn"
+              :disabled="!!axisJogReason(row.axis, dist)"
+              :title="axisJogReason(row.axis, dist) ? t(axisJogReason(row.axis, dist)) : `${row.axis.toUpperCase()} ${formatStep(dist)} mm`"
+              :aria-label="`${row.axis.toUpperCase()} ${formatStep(dist)} mm`"
+              @click="jogStep(row.axis, dist)"
             >
-              {{ value.toLocaleString(locale) }} mm
+              {{ formatStep(dist) }}
             </button>
-          </div>
-        </div>
-
-        <div class="jog-controls">
-          <div class="xy-pad">
-            <button class="jog y-plus" type="button" :disabled="!canJog('y', 1)" @click="jog('y', 1)">
-              <ArrowUp :size="18" />Y+
-            </button>
-            <button class="jog x-minus" type="button" :disabled="!canJog('x', -1)" @click="jog('x', -1)">
-              <ArrowLeft :size="18" />X−
-            </button>
-            <span class="pad-center">XY</span>
-            <button class="jog x-plus" type="button" :disabled="!canJog('x', 1)" @click="jog('x', 1)">
-              X+<ArrowRight :size="18" />
-            </button>
-            <button class="jog y-minus" type="button" :disabled="!canJog('y', -1)" @click="jog('y', -1)">
-              <ArrowDown :size="18" />Y−
-            </button>
-          </div>
-
-          <div class="z-pad">
-            <button class="jog" type="button" :disabled="!canJog('z', 1)" @click="jog('z', 1)">
-              <ArrowUp :size="18" />Z+
-            </button>
-            <span class="pad-center">Z</span>
-            <button class="jog" type="button" :disabled="!canJog('z', -1)" @click="jog('z', -1)">
-              <ArrowDown :size="18" />Z−
-            </button>
-          </div>
-
-          <div class="motion-actions">
             <button
-              class="subtle-button"
-              :class="{ 'confirm-danger': confirmMotors }"
               type="button"
-              :disabled="!motion"
+              class="axis-home-btn"
+              :class="{ 'axis-homed': homed(row.axis) && online }"
+              :disabled="!!axisHomeReason(row.axis)"
               :title="
-                confirmMotors
-                  ? t('Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden')
-                  : status?.qglApplied
-                    ? t('Motoren lösen · Gantry senkt sich ab (QGL geht verloren)')
-                    : t('Motoren lösen')
+                axisHomeReason(row.axis)
+                  ? t(axisHomeReason(row.axis))
+                  : homed(row.axis)
+                    ? t('{0} = {1} mm · {0} erneut homen', [row.axis.toUpperCase(), position(row.axis)])
+                    : t('{0} homen', [row.axis.toUpperCase()])
               "
-              @click="releaseMotors"
-              @blur="resetMotorsConfirm"
-              @keydown.esc="resetMotorsConfirm"
+              :aria-label="t('{0} homen', [row.axis.toUpperCase()])"
+              @click="emit('command', { action: 'home', axis: row.axis })"
             >
-              <Power :size="16" />{{ confirmMotors ? t('Wirklich lösen?') : t('Motoren lösen') }}
+              {{ row.axis.toUpperCase() }}
             </button>
             <button
-              class="subtle-button"
-              :class="{ calibrated: status?.qglApplied }"
+              v-for="dist in row.pos"
+              :key="dist"
               type="button"
-              :disabled="!motion || !allHomed || !status?.capabilities?.qgl"
-              :title="
-                status?.qglApplied ? t('Bereits ausgerichtet · QGL erneut ausführen') : t('Gantry ausrichten')
-              "
-              :aria-label="
-                status?.qglApplied
-                  ? t('Gantry bereits ausgerichtet. QGL erneut ausführen')
-                  : t('Gantry ausrichten · QGL')
-              "
-              @click="emit('command', { action: 'qgl' })"
+              class="axis-jog-btn"
+              :disabled="!!axisJogReason(row.axis, dist)"
+              :title="axisJogReason(row.axis, dist) ? t(axisJogReason(row.axis, dist)) : `${row.axis.toUpperCase()} ${formatStep(dist)} mm`"
+              :aria-label="`${row.axis.toUpperCase()} ${formatStep(dist)} mm`"
+              @click="jogStep(row.axis, dist)"
             >
-              QGL<Check v-if="status?.qglApplied" :size="13" />
-            </button>
-            <button
-              class="subtle-button"
-              type="button"
-              :disabled="!motion || !allHomed || !status?.capabilities?.mesh"
-              :title="t('Bett vermessen')"
-              :aria-label="t('Bett vermessen')"
-              @click="emit('command', { action: 'mesh' })"
-            >
-              Bed Mesh
+              {{ formatStep(dist) }}
             </button>
           </div>
         </div>

@@ -888,6 +888,7 @@
   "Kopiert": "Copied",
   "URL kopieren": "Copy URL",
   "Achsen bewegen": "Move axes",
+  "Einzelne Achsen homen": "Home individual axes",
   "{0} = {1} mm · {0} erneut homen": "{0} = {1} mm · home {0} again",
   "Ungültige Achse.": "Invalid axis."
 }

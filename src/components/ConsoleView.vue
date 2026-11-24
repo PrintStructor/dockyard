@@ -16,7 +16,7 @@ const emit = defineEmits(['open'])
 
 const { entries, loaded, loading, error, history, refresh, abort, recordCommand } = useConsole()
 
-const collapsed = ref(false)
+const collapsed = ref(props.compact)
 const input = ref('')
 const log = ref(null)
 const field = ref(null)
@@ -149,6 +149,7 @@ onBeforeUnmount(() => {
       :id="compact ? 'compact-console-log' : undefined"
       ref="log"
       class="console-log"
+      role="log"
       :aria-label="t('Befehle und Antworten')"
       tabindex="0"
       @scroll="onScroll"

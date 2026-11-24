@@ -10,8 +10,8 @@ const props = defineProps({
   power: Number,
   maxTemperature: Number,
   online: Boolean,
+  decorative: Boolean,
 })
-
 const gauge = computed(() => thermalDisplay(props))
 </script>
 
@@ -19,17 +19,20 @@ const gauge = computed(() => thermalDisplay(props))
   <span
     class="thermal-gauge"
     :class="gauge.mode"
-    :role="gauge.scale ? 'meter' : undefined"
+    :role="!decorative && gauge.scale ? 'meter' : undefined"
+    :aria-hidden="decorative ? 'true' : undefined"
     :aria-label="
-      t('T{0}: {1}{2}', [
-        id,
-        gauge.label,
-        gauge.scale ? t(', {0} °C, Ziel {1} °C', [Math.round(temperature), target]) : '',
-      ])
+      !decorative
+        ? t('T{0}: {1}{2}', [
+            id,
+            gauge.label,
+            gauge.scale ? t(', {0} °C, Ziel {1} °C', [Math.round(temperature), target]) : '',
+          ])
+        : undefined
     "
-    :aria-valuemin="gauge.scale ? 0 : undefined"
-    :aria-valuemax="gauge.scale ?? undefined"
-    :aria-valuenow="gauge.scale ? temperature : undefined"
+    :aria-valuemin="!decorative && gauge.scale ? 0 : undefined"
+    :aria-valuemax="!decorative ? (gauge.scale ?? undefined) : undefined"
+    :aria-valuenow="!decorative && gauge.scale ? temperature : undefined"
     :title="
       gauge.scale
         ? t('Temperatur auf einer Skala von 0–{0} °C. Strich: Ziel {1} °C.', [gauge.scale, target])

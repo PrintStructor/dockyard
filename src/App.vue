@@ -20,6 +20,9 @@ import {
   Printer,
   History,
   Monitor,
+  RotateCw,
+  Power,
+  X,
 } from '@lucide/vue'
 import { t, locale, language, setLanguage } from './i18n.mjs'
 import { displayMode, showCameras, toggleDisplayMode, sanitizeTabForCameras } from './display-mode.mjs'
@@ -133,6 +136,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener('hashchange', handleHashChange)
   clearInterval(clockTimer)
+  clearTimeout(recoveryConfirmTimer)
 })
 
 const activeJob = computed(() => {
@@ -186,10 +190,12 @@ const controlsSubtitle = computed(() =>
 )
 const scene = ref(null)
 
-async function selectTool(id) {
+async function selectTool(id, { focus = false } = {}) {
   selected.value = id
-  await nextTick()
-  if (tab.value === 'tools') scene.value?.focusSelected()
+  if (focus) {
+    await nextTick()
+    if (tab.value === 'tools') scene.value?.focusSelected()
+  }
 }
 
 watch(
@@ -282,6 +288,77 @@ const printLabel = computed(
 )
 
 const isPrintActive = computed(() => online.value && ['printing', 'paused'].includes(status.value?.printState))
+const showPrintControl = computed(() => isPrintActive.value || status.value?.toolchangerState === 'error')
+const klipperNeedsRecovery = computed(
+  () => online.value && Boolean(status.value?.klipperState) && status.value.klipperState !== 'ready',
+)
+const klipperRecoveryTitle = computed(
+  () =>
+    ({
+      shutdown: 'Klipper im Shutdown',
+      error: 'Klipper-Fehler',
+      startup: 'Klipper startet …',
+      disconnected: 'Klipper nicht verbunden',
+    })[status.value?.klipperState] ?? 'Klipper ist nicht bereit',
+)
+const confirmRecoveryTarget = ref('')
+const restartingRecoveryTarget = ref('')
+const recoveryFeedback = ref(null)
+let recoveryConfirmTimer = null
+
+function cancelRecoveryConfirm() {
+  confirmRecoveryTarget.value = ''
+  clearTimeout(recoveryConfirmTimer)
+  recoveryConfirmTimer = null
+}
+
+function requestRecoveryConfirm(target) {
+  if (!online.value || restartingRecoveryTarget.value) return
+  confirmRecoveryTarget.value = target
+  clearTimeout(recoveryConfirmTimer)
+  recoveryConfirmTimer = setTimeout(() => {
+    confirmRecoveryTarget.value = ''
+  }, 6000)
+}
+
+async function triggerKlipperRecovery(target) {
+  if (!online.value || restartingRecoveryTarget.value) return
+  cancelRecoveryConfirm()
+  restartingRecoveryTarget.value = target
+  recoveryFeedback.value = null
+  try {
+    const response = await fetch('/api/system/service/restart', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Cockpit-Request': '1',
+      },
+      body: JSON.stringify({ target }),
+      signal: AbortSignal.timeout(12_000),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.error || 'Neustart fehlgeschlagen.')
+    recoveryFeedback.value = {
+      ok: true,
+      message: data.message || 'Neustart ausgelöst. Verbindung wird automatisch neu aufgebaut.',
+    }
+    refresh()
+  } catch (cause) {
+    recoveryFeedback.value = {
+      ok: false,
+      message: cause.message || 'Neustart fehlgeschlagen.',
+    }
+  } finally {
+    restartingRecoveryTarget.value = ''
+  }
+}
+
+watch(klipperNeedsRecovery, down => {
+  if (!down) {
+    cancelRecoveryConfirm()
+    recoveryFeedback.value = null
+  }
+})
 const liveTuningOpen = ref(false)
 watch(isPrintActive, active => {
   if (!active) liveTuningOpen.value = false
@@ -380,7 +457,13 @@ async function acknowledgeUncertain() {
             @update:model-value="setLanguage"
           />
         </div>
+        <span class="connection" :class="connection">
+          <Wifi v-if="online" :size="15" />
+          <WifiOff v-else :size="15" />
+          {{ t(connectionLabel) }}
+        </span>
         <button
+          v-if="showPrintControl"
           class="subtle-button print-control"
           type="button"
           :disabled="!!printActionReason"
@@ -397,6 +480,7 @@ async function acknowledgeUncertain() {
           <Play v-else :size="15" />
           {{ printAction === 'pause' ? t('Pause') : t('Fortsetzen') }}
         </button>
+        <span class="header-divider" aria-hidden="true" />
         <button
           class="emergency-stop"
           type="button"
@@ -406,11 +490,6 @@ async function acknowledgeUncertain() {
         >
           <OctagonX :size="17" />{{ stopping ? t('Stoppe …') : t('Not-Aus') }}
         </button>
-        <span class="connection" :class="connection">
-          <Wifi v-if="online" :size="15" />
-          <WifiOff v-else :size="15" />
-          {{ t(connectionLabel) }}
-        </span>
       </div>
     </header>
 
@@ -546,6 +625,84 @@ async function acknowledgeUncertain() {
         <button type="button" :disabled="updating" @click="refresh">{{ t('Erneut verbinden') }}</button>
       </div>
 
+      <div v-if="klipperNeedsRecovery" class="klipper-recovery-banner" role="alert">
+        <div class="klipper-recovery-copy">
+          <AlertTriangle :size="18" />
+          <div>
+            <strong>{{ t(klipperRecoveryTitle) }}</strong>
+            <p v-if="status.klipperMessage">{{ status.klipperMessage }}</p>
+            <p v-else>{{ t('Klipper ist nach einem Not-Aus oder Fehler angehalten und kann hier direkt neu gestartet werden.') }}</p>
+          </div>
+        </div>
+        <div class="klipper-recovery-actions" @keydown.esc="cancelRecoveryConfirm">
+          <template v-if="confirmRecoveryTarget === 'klipper_restart'">
+            <button
+              type="button"
+              class="subtle-button recovery-confirm-btn"
+              :disabled="!!restartingRecoveryTarget"
+              @click="triggerKlipperRecovery('klipper_restart')"
+            >
+              <RotateCw :size="14" />{{ t('Klipper jetzt neu starten') }}
+            </button>
+            <button
+              type="button"
+              class="subtle-button recovery-cancel-btn"
+              :aria-label="t('Abbrechen')"
+              @click="cancelRecoveryConfirm"
+            >
+              <X :size="14" />
+            </button>
+          </template>
+          <button
+            v-else
+            type="button"
+            class="subtle-button"
+            :disabled="!!restartingRecoveryTarget"
+            @click="requestRecoveryConfirm('klipper_restart')"
+          >
+            <RotateCw :size="14" :class="{ spinning: restartingRecoveryTarget === 'klipper_restart' }" />
+            {{ t('Klipper neu starten') }}
+          </button>
+
+          <template v-if="confirmRecoveryTarget === 'firmware_restart'">
+            <button
+              type="button"
+              class="subtle-button recovery-confirm-btn"
+              :disabled="!!restartingRecoveryTarget"
+              @click="triggerKlipperRecovery('firmware_restart')"
+            >
+              <Power :size="14" />{{ t('Firmware jetzt neu starten') }}
+            </button>
+            <button
+              type="button"
+              class="subtle-button recovery-cancel-btn"
+              :aria-label="t('Abbrechen')"
+              @click="cancelRecoveryConfirm"
+            >
+              <X :size="14" />
+            </button>
+          </template>
+          <button
+            v-else
+            type="button"
+            class="subtle-button recovery-firmware-btn"
+            :disabled="!!restartingRecoveryTarget"
+            @click="requestRecoveryConfirm('firmware_restart')"
+          >
+            <Power :size="14" :class="{ spinning: restartingRecoveryTarget === 'firmware_restart' }" />
+            {{ t('Firmware-Neustart') }}
+          </button>
+        </div>
+        <p
+          v-if="recoveryFeedback"
+          class="klipper-recovery-feedback"
+          :class="{ failed: !recoveryFeedback.ok }"
+          role="status"
+        >
+          {{ t(recoveryFeedback.message) }}
+        </p>
+      </div>
+
       <div v-if="status?.detectionMismatch && !status?.homingCanInitialize" class="notice" role="alert">
         <AlertTriangle :size="18" />
         <span>
@@ -639,12 +796,19 @@ async function acknowledgeUncertain() {
                 type="button"
                 :class="['tool-choice', { selected: selected === tool.id, stale: !online }]"
                 :aria-pressed="selected === tool.id"
-                :aria-label="t('T{0} auswählen, {1}', [tool.id, state(tool)])"
+                :aria-label="
+                  t('T{0} auswählen · {1} °C · {2} · {3}', [
+                    tool.id,
+                    temperature(tool.temperature),
+                    state(tool),
+                    shortFilament(tool),
+                  ])
+                "
                 @click="selectTool(tool.id)"
               >
                 <span class="tool-choice-top">
                   <strong>T{{ tool.id }}</strong>
-                  <span v-if="tool.detected && online" class="detected-dot" :aria-label="t('Aufgenommen')">
+                  <span v-if="tool.detected && online" class="detected-dot" role="img" :aria-label="t('Aufgenommen')">
                     <Check :size="13" />
                   </span>
                   <ChevronRight v-else :size="14" class="choice-arrow" />
@@ -657,6 +821,7 @@ async function acknowledgeUncertain() {
                   :power="tool.power"
                   :max-temperature="status?.capabilities?.toolMax?.[tool.id]"
                   :online="online"
+                  decorative
                 />
                 <span class="tool-status">{{ t(state(tool)) }}</span>
                 <span class="tool-filament" :class="filamentClass(tool)" :title="t(filament(tool))">
@@ -672,7 +837,14 @@ async function acknowledgeUncertain() {
                 </span>
                 <span class="tool-z-offset"><span>ΔZ</span>{{ zOffset(tool) }}</span>
               </button>
-              <ToolActions :tool="tool.id" :status="status" :online="online" :pending="pending" @command="handleToolCommand" />
+              <ToolActions
+                mode="mount"
+                :tool="tool.id"
+                :status="status"
+                :online="online"
+                :pending="pending"
+                @command="handleToolCommand"
+              />
             </article>
           </div>
           <ConsoleView
@@ -686,186 +858,204 @@ async function acknowledgeUncertain() {
           />
         </div>
 
-        <aside class="inspector" :aria-label="t('Details zum ausgewählten Werkzeug')">
-          <div class="inspector-title">
-            <h2>T{{ selected }}</h2>
-            <span class="selection-label">{{ t('Ausgewählt') }}</span>
-          </div>
-          <div
-            class="tool-condition"
-            :class="{ confirmed: current.detected && online, warning: status?.detectionMismatch || !online }"
-          >
-            <span class="status-dot" />{{ t(state(current)) }}
-          </div>
-          <div class="temperature-block" :class="{ stale: !online }">
-            <span class="field-label">{{ t('Düsentemperatur') }}</span>
-            <div class="big-temperature">{{ temperature(current.temperature) }}<span>°C</span></div>
-            <TemperatureTarget
-              :key="selected"
-              :tool="selected"
-              :target="current.target"
-              :max="status?.capabilities?.toolMax?.[selected]"
-              :online="online"
-              :ready="status?.klipperState === 'ready'"
-              :pending="pending || !!status?.control?.job"
-              :send="send"
-            />
-          </div>
-          <div class="tool-live-detail">
-            <span :class="{ heating: heatState(current) === 'Heizt auf' && online }">{{ t(heatState(current)) }}</span>
-            <div class="led-status">
-              <span>{{ online ? 'LEDs' : t('LEDs zuletzt') }}</span>
-              <span
-                v-for="[role, label] in [['number', 'Nummer'], ['left', 'Düse 1'], ['right', 'Düse 2']]"
-                :key="role"
-                class="led-swatch"
-                :style="{ background: online ? ledColor(current.leds?.[role]) : 'transparent' }"
-                :title="t(label) + (current.leds?.[role] ? t(' · Druckerfarbe') : t(' · unbekannt'))"
-                :aria-label="t(label)"
+        <div class="inspector-column">
+          <aside class="inspector" :aria-label="t('Details zum ausgewählten Werkzeug')">
+            <div class="inspector-title">
+              <h2>T{{ selected }}</h2>
+              <span class="selection-label">{{ t('Ausgewählt') }}</span>
+            </div>
+            <div
+              class="tool-condition"
+              :class="{ confirmed: current.detected && online, warning: status?.detectionMismatch || !online }"
+            >
+              <span class="status-dot" />{{ t(state(current)) }}
+            </div>
+            <div class="temperature-block" :class="{ stale: !online }">
+              <span class="field-label">{{ t('Düsentemperatur') }}</span>
+              <div class="big-temperature">{{ temperature(current.temperature) }}<span>°C</span></div>
+              <TemperatureTarget
+                :key="selected"
+                :tool="selected"
+                :target="current.target"
+                :max="status?.capabilities?.toolMax?.[selected]"
+                :online="online"
+                :ready="status?.klipperState === 'ready'"
+                :pending="pending || !!status?.control?.job"
+                :send="send"
               />
-              <span>
-                {{
-                  current.effects?.length
-                    ? current.effects.map(effect => t(effectLabel(effect))).join(', ')
-                    : current.leds?.number
-                      ? t('Kein Effekt aktiv')
-                      : t('Unbekannt')
-                }}
+            </div>
+            <div class="tool-live-detail">
+              <span :class="{ heating: heatState(current) === 'Heizt auf' && online }">{{ t(heatState(current)) }}</span>
+              <div class="led-status">
+                <span>{{ online ? 'LEDs' : t('LEDs zuletzt') }}</span>
+                <span
+                  v-for="[role, label] in [['number', 'Nummer'], ['left', 'Düse 1'], ['right', 'Düse 2']]"
+                  :key="role"
+                  class="led-swatch"
+                  role="img"
+                  :style="{ background: online ? ledColor(current.leds?.[role]) : 'transparent' }"
+                  :title="t(label) + (current.leds?.[role] ? t(' · Druckerfarbe') : t(' · unbekannt'))"
+                  :aria-label="t(label)"
+                />
+                <span>
+                  {{
+                    current.effects?.length
+                      ? current.effects.map(effect => t(effectLabel(effect))).join(', ')
+                      : current.leds?.number
+                        ? t('Kein Effekt aktiv')
+                        : t('Unbekannt')
+                  }}
+                </span>
+              </div>
+              <span v-if="activityLabel" class="printer-activity">
+                {{ t(activityLabel) }}{{ !online ? t(' · zuletzt') : '' }}
               </span>
             </div>
-            <span v-if="activityLabel" class="printer-activity">
-              {{ t(activityLabel) }}{{ !online ? t(' · zuletzt') : '' }}
-            </span>
-          </div>
 
-          <dl class="measurements">
-            <div>
-              <dt>{{ t('Heizleistung') }}</dt>
-              <dd>{{ current.power == null ? '—' : `${number(current.power * 100, 0)} %` }}</dd>
-            </div>
-            <div>
-              <dt>Sensor T{{ selected }}</dt>
-              <dd>{{ temperature(current.sensorTemperature) }} °C</dd>
-            </div>
-            <div>
-              <dt>Filament</dt>
-              <dd :class="{ 'text-lime': current.filamentEnabled && current.filamentDetected }">
-                {{ t(filament(current)) }}
-              </dd>
-            </div>
-          </dl>
-
-          <details class="calibration">
-            <summary>{{ t('Kalibrierung') }}<ChevronRight :size="15" /></summary>
             <dl class="measurements">
               <div>
-                <dt>Offset X / Y / Z</dt>
-                <dd class="offsets">
-                  {{ number(current.offsets?.x, 3) }} / {{ number(current.offsets?.y, 3) }} / {{ number(current.offsets?.z, 3) }} mm
+                <dt>{{ t('Heizleistung') }}</dt>
+                <dd>{{ current.power == null ? '—' : `${number(current.power * 100, 0)} %` }}</dd>
+              </div>
+              <div>
+                <dt>Sensor T{{ selected }}</dt>
+                <dd>{{ temperature(current.sensorTemperature) }} °C</dd>
+              </div>
+              <div>
+                <dt>Filament</dt>
+                <dd :class="{ 'text-lime': current.filamentEnabled && current.filamentDetected }">
+                  {{ t(filament(current)) }}
                 </dd>
               </div>
-              <div>
-                <dt>Pressure Advance</dt>
-                <dd>{{ number(current.pressureAdvance, 3) }}</dd>
-              </div>
             </dl>
-          </details>
 
-          <LedControls :status="status" :online="online" :pending="pending" @command="send" />
+            <div class="inspector-tool-actions">
+              <h3>{{ t('Aktionen für T{0}', [selected]) }}</h3>
+              <ToolActions
+                mode="maintenance"
+                :tool="selected"
+                :status="status"
+                :online="online"
+                :pending="pending"
+                @command="handleToolCommand"
+              />
+              <p v-if="actionRestriction" class="tool-action-restriction" role="status">{{ t(actionRestriction) }}</p>
+            </div>
 
-          <details class="inspector-filament">
-            <summary>
-              <span>{{ t('Filamentaktionen') }}</span>
-              <span v-if="online && status?.loadWatchActive" class="text-lime">{{ t('Einlegehilfe scharf') }}</span>
-              <ChevronRight :size="16" />
-            </summary>
-            <div class="tool-reference">
-              {{ t('Z relativ zum Initial-Tool') }}
-              <strong>
-                {{
-                  status?.initialTool == null
-                    ? status?.initialToolAvailable
-                      ? t('noch nicht gesetzt')
-                      : t('nicht gemeldet')
-                    : `T${status.initialTool}`
-                }}
-              </strong>
-              <span v-if="status?.initialTool != null"> {{ t('· kalibriert') }}</span>
-            </div>
-            <div class="tool-operations-bar">
-              <div class="tool-bulk-actions">
-                <span>
-                  {{ online ? t('{0}/6 mit Filament', [filamentCount]) : t('Filamentstatus unbekannt') }}
-                </span>
-                <button
-                  class="subtle-button"
-                  type="button"
-                  :disabled="!!bulkReason('load_all')"
-                  :title="
-                    bulkReason('load_all')
-                      ? t(bulkReason('load_all'))
-                      : t('Alle Tools mit erkanntem Filament nacheinander laden; das letzte bleibt aufgenommen')
-                  "
-                  @click="bulkFilament('load_all')"
-                >
-                  {{ t('Alle laden') }}
-                </button>
-                <button
-                  class="subtle-button"
-                  type="button"
-                  :disabled="!!bulkReason('unload_all')"
-                  :title="
-                    bulkReason('unload_all')
-                      ? t(bulkReason('unload_all'))
-                      : t('Alle Tools mit erkanntem Filament nacheinander entladen und parken')
-                  "
-                  @click="bulkFilament('unload_all')"
-                >
-                  {{ t('Alle entladen') }}
-                </button>
-              </div>
-            </div>
-            <div class="load-watch" :class="{ armed: online && status?.loadWatchActive }">
-              <div>
+            <details class="calibration">
+              <summary>{{ t('Kalibrierung') }}<ChevronRight :size="15" /></summary>
+              <dl class="measurements">
+                <div>
+                  <dt>Offset X / Y / Z</dt>
+                  <dd class="offsets">
+                    {{ number(current.offsets?.x, 3) }} / {{ number(current.offsets?.y, 3) }} / {{ number(current.offsets?.z, 3) }} mm
+                  </dd>
+                </div>
+                <div>
+                  <dt>Pressure Advance</dt>
+                  <dd>{{ number(current.pressureAdvance, 3) }}</dd>
+                </div>
+              </dl>
+            </details>
+          </aside>
+
+          <section class="inspector-machine" :aria-label="t('Maschine & Vorbereitung')">
+            <h3 class="inspector-machine-title">{{ t('Maschine & Vorbereitung') }}</h3>
+            <LedControls :status="status" :online="online" :pending="pending" @command="send" />
+
+            <details class="inspector-filament">
+              <summary>
+                <span>{{ t('Filamentaktionen') }}</span>
+                <span v-if="online && status?.loadWatchActive" class="text-lime">{{ t('Einlegehilfe scharf') }}</span>
+                <ChevronRight :size="16" />
+              </summary>
+              <div class="tool-reference">
+                {{ t('Z relativ zum Initial-Tool') }}
                 <strong>
-                  {{ t('Einlegehilfe') }}
-                  <span v-if="online && status?.loadWatchActive">
-                    {{ t('· Scharf ·') }} {{ status.loadWatchTemperature ?? '—' }} °C
-                  </span>
-                </strong>
-                <p>
                   {{
-                    status?.loadWatchActive
-                      ? t('Filament neu einlegen. Aufheizen, Laden und Abkühlen laufen automatisch.')
-                      : t('Aufheizen, Laden und Abkühlen übernimmt dein Makro.')
+                    status?.initialTool == null
+                      ? status?.initialToolAvailable
+                        ? t('noch nicht gesetzt')
+                        : t('nicht gemeldet')
+                      : `T${status.initialTool}`
                   }}
-                </p>
-                <p
-                  v-if="online && status?.capabilities?.watchAutoHome && ![...'xyz'].every(a => status?.homedAxes?.includes(a))"
-                  class="watch-homing-note"
-                >
-                  {{ t('Beim Toolwechsel wird automatisch gehomt. Das aktive Tool lädt ohne Homing an Ort und Stelle.') }}
-                </p>
+                </strong>
+                <span v-if="status?.initialTool != null"> {{ t('· kalibriert') }}</span>
               </div>
-              <button
-                class="subtle-button"
-                type="button"
-                :disabled="!!watchReason"
-                :title="
-                  watchReason
-                    ? t(watchReason)
-                    : status?.loadWatchActive
-                      ? t('Einlegehilfe beenden; ein laufender Einzug wird nicht abgebrochen')
-                      : t('LOAD_WATCH aktivieren: neue Sensorsignale wählen und laden das Tool automatisch')
-                "
-                @click="toggleLoadWatch"
-              >
-                {{ status?.loadWatchActive ? t('Fertig') : t('Scharf schalten') }}
-              </button>
-            </div>
-            <p v-if="actionRestriction" class="tool-action-restriction" role="status">{{ t(actionRestriction) }}</p>
-          </details>
-        </aside>
+              <div class="tool-operations-bar">
+                <div class="tool-bulk-actions">
+                  <span>
+                    {{ online ? t('{0}/6 mit Filament', [filamentCount]) : t('Filamentstatus unbekannt') }}
+                  </span>
+                  <button
+                    class="subtle-button"
+                    type="button"
+                    :disabled="!!bulkReason('load_all')"
+                    :title="
+                      bulkReason('load_all')
+                        ? t(bulkReason('load_all'))
+                        : t('Alle Tools mit erkanntem Filament nacheinander laden; das letzte bleibt aufgenommen')
+                    "
+                    @click="bulkFilament('load_all')"
+                  >
+                    {{ t('Alle laden') }}
+                  </button>
+                  <button
+                    class="subtle-button"
+                    type="button"
+                    :disabled="!!bulkReason('unload_all')"
+                    :title="
+                      bulkReason('unload_all')
+                        ? t(bulkReason('unload_all'))
+                        : t('Alle Tools mit erkanntem Filament nacheinander entladen und parken')
+                    "
+                    @click="bulkFilament('unload_all')"
+                  >
+                    {{ t('Alle entladen') }}
+                  </button>
+                </div>
+              </div>
+              <div class="load-watch" :class="{ armed: online && status?.loadWatchActive }">
+                <div>
+                  <strong>
+                    {{ t('Einlegehilfe') }}
+                    <span v-if="online && status?.loadWatchActive">
+                      {{ t('· Scharf ·') }} {{ status.loadWatchTemperature ?? '—' }} °C
+                    </span>
+                  </strong>
+                  <p>
+                    {{
+                      status?.loadWatchActive
+                        ? t('Filament neu einlegen. Aufheizen, Laden und Abkühlen laufen automatisch.')
+                        : t('Aufheizen, Laden und Abkühlen übernimmt dein Makro.')
+                    }}
+                  </p>
+                  <p
+                    v-if="online && status?.capabilities?.watchAutoHome && ![...'xyz'].every(a => status?.homedAxes?.includes(a))"
+                    class="watch-homing-note"
+                  >
+                    {{ t('Beim Toolwechsel wird automatisch gehomt. Das aktive Tool lädt ohne Homing an Ort und Stelle.') }}
+                  </p>
+                </div>
+                <button
+                  class="subtle-button"
+                  type="button"
+                  :disabled="!!watchReason"
+                  :title="
+                    watchReason
+                      ? t(watchReason)
+                      : status?.loadWatchActive
+                        ? t('Einlegehilfe beenden; ein laufender Einzug wird nicht abgebrochen')
+                        : t('LOAD_WATCH aktivieren: neue Sensorsignale wählen und laden das Tool automatisch')
+                  "
+                  @click="toggleLoadWatch"
+                >
+                  {{ status?.loadWatchActive ? t('Fertig') : t('Scharf schalten') }}
+                </button>
+              </div>
+            </details>
+          </section>
+        </div>
       </section>
 
       <ControlsView
@@ -906,6 +1096,7 @@ async function acknowledgeUncertain() {
           <h2>{{ t('Am Drucker') }}</h2>
           <span>{{ t('Live aus beiden Kameras') }}</span>
         </div>
+        <h2 v-else class="sr-only">{{ t('Druckerkameras') }}</h2>
         <div class="camera-grid">
           <CameraView id="tophat" name="Tophat" description="Blick auf den Bauraum" />
           <CameraView id="heatbed" name="Druckbett" description="Blick auf die Druckfläche" />

@@ -29,6 +29,13 @@ const motorsReason = computed(() => quickMotionReason(props.status, 'motors_off'
 const homed = axis => props.status?.homedAxes?.includes(axis) === true
 const allHomed = computed(() => [...'xyz'].every(homed))
 const axisHomeReason = axis => quickHomeAxisReason(props.status, axis, props.online, props.pending)
+const prepNote = computed(() => {
+  if (confirmMotors.value) return 'Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden.'
+  if (homeReason.value) return homeReason.value
+  if (!homed('x') || !homed('y')) return 'Für Z und QGL zuerst X/Y oder ALL homen.'
+  if (!homed('z')) return 'Für QGL zuerst Z homen.'
+  return 'Homet bei Bedarf X/Y und fährt zur Bettmitte.'
+})
 const axisPosition = axis => {
   const index = ['x', 'y', 'z'].indexOf(axis)
   const val = props.status?.position?.[index]
@@ -211,7 +218,7 @@ function initialize() {
     >
       <RotateCw :size="15" />{{ t('Toolchanger initialisieren') }}
     </button>
-    <p>{{ t('Homet bei Bedarf X/Y und fährt zur Bettmitte.') }}</p>
+    <p :class="{ 'prep-note-warn': confirmMotors || !!homeReason }" role="status">{{ t(prepNote) }}</p>
   </section>
 
   <section class="led-controls" :aria-label="t('LED-Befehle')">

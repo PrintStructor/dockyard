@@ -46,7 +46,8 @@ let disposed = false
 let visible = true
 let running = false
 let animation = null
-let focusAfterLoad = true
+let focusAfterLoad = false
+let zoomedToTool = false
 let loadingKey = null
 let down = null
 let lastVisualKey = ''
@@ -138,7 +139,7 @@ function fit(box, animate = true, detail = false, underside = false) {
   const horizontal = 2 * Math.atan(Math.tan(vfov / 2) * camera.aspect)
   let distance =
     Math.max(size.y / (2 * Math.tan(vfov / 2)), size.x / (2 * Math.tan(horizontal / 2)), size.z) *
-    (detail ? 1.1 : 1.35)
+    (detail ? 1.1 : mode.value === 'tools' ? 1.2 : 1.35)
   const direction = underside
     ? new THREE.Vector3(0, -1.4, 0.75).normalize()
     : mode.value === 'printer'
@@ -173,17 +174,19 @@ function fit(box, animate = true, detail = false, underside = false) {
 function overviewBox() {
   const box = new THREE.Box3().setFromObject(currentModel)
   if (mode.value === 'tools') {
-    box.max.y += 0.045
-    box.min.y -= 0.035
+    box.max.y += 0.014
+    box.min.y -= 0.02
   }
   return box
 }
 
 function reset() {
+  zoomedToTool = false
   if (currentModel) fit(overviewBox())
 }
 
 async function focusSelected() {
+  zoomedToTool = true
   if (mode.value !== 'tools') {
     focusAfterLoad = true
     mode.value = 'tools'
@@ -395,8 +398,10 @@ async function loadModel(key, noFit = false) {
     })
     if (focusAfterLoad && key === 'tools') {
       focusAfterLoad = false
+      zoomedToTool = true
       fit(boxes.tools[props.selected], false, true)
     } else if (!noFit) {
+      zoomedToTool = false
       fit(overviewBox(), false)
     }
     highlight(true)
@@ -426,6 +431,22 @@ function pointerUp(event) {
   raycaster.setFromCamera(pointer, camera)
   const hit = raycaster.intersectObjects(pickables, false)[0]
   if (hit) emit('select', hit.object.userData.toolId)
+}
+
+function doubleClick(event) {
+  if (mode.value !== 'tools' || !viewport.value) return
+  const rect = viewport.value.getBoundingClientRect()
+  pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1)
+  raycaster.setFromCamera(pointer, camera)
+  const hit = raycaster.intersectObjects(pickables, false)[0]
+  if (hit) {
+    const id = hit.object.userData.toolId
+    emit('select', id)
+    if (boxes.tools?.[id]) {
+      zoomedToTool = true
+      fit(boxes.tools[id], true, true)
+    }
+  }
 }
 
 function resizeView() {
@@ -565,6 +586,7 @@ onMounted(() => {
 
     renderer.domElement.addEventListener('pointerdown', pointerDown)
     renderer.domElement.addEventListener('pointerup', pointerUp)
+    renderer.domElement.addEventListener('dblclick', doubleClick)
     renderer.domElement.addEventListener('webglcontextlost', contextLost)
 
     resize = new ResizeObserver(resizeView)
@@ -590,7 +612,7 @@ watch(
   () => props.selected,
   () => {
     highlight(false)
-    focusSelected()
+    if (zoomedToTool) focusSelected()
   },
 )
 watch(mode, key => {
@@ -613,6 +635,7 @@ onBeforeUnmount(() => {
   if (renderer) {
     renderer.domElement.removeEventListener('pointerdown', pointerDown)
     renderer.domElement.removeEventListener('pointerup', pointerUp)
+    renderer.domElement.removeEventListener('dblclick', doubleClick)
     renderer.domElement.removeEventListener('webglcontextlost', contextLost)
     renderer.dispose()
   }

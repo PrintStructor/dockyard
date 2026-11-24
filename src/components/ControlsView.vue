@@ -263,6 +263,7 @@ const restriction = computed(() => {
   if (!props.online) return 'Bedienung gesperrt: keine aktuellen Druckerdaten.'
   if (props.status?.klipperState !== 'ready') return 'Klipper ist nicht bereit.'
   if (busy.value) return props.status?.control?.job?.label ?? 'Befehl läuft …'
+  if (confirmMotors.value) return 'Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden.'
   if (props.status?.loadWatchActive) return 'Einlegehilfe ist scharf. Unter Werkzeuge mit Fertig beenden.'
   if (moving.value) return 'Bewegungen sind während eines Drucks, einer Pause oder laufender Befehle gesperrt.'
   if (props.status?.homingCanInitialize) return 'Homen ist bereit. Dein Beacon-Makro initialisiert das erkannte Tool vor dem Z-Homen.'
@@ -511,7 +512,7 @@ watch(motion, allowed => {
                 v-if="online && status?.hasDetection && !status?.detectionConflict && status?.detected === id"
                 class="connected-tool-label"
               >
-                {{ t('Verbunden') }}
+                {{ t('Aufgenommen') }}
               </small>
             </button>
             <span class="temperature-reading">{{ temperature(status?.tools?.[id]?.temperature) }}<small> / </small></span>

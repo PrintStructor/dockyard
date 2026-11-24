@@ -8,6 +8,7 @@ const props = defineProps({
   status: Object,
   online: Boolean,
   pending: Boolean,
+  mode: { type: String, default: 'all' },
 })
 
 const emit = defineEmits(['command'])
@@ -18,13 +19,18 @@ const mountAction = computed(() => {
   return { id: 'pickup', label: 'Pickup' }
 })
 
-const actions = computed(() => [
-  mountAction.value,
+const maintenanceActions = [
   { id: 'load', label: 'Laden' },
   { id: 'unload', label: 'Entladen' },
   { id: 'clean', label: 'Clean' },
   { id: 'purge', label: 'Purge' },
-])
+]
+
+const actions = computed(() => {
+  if (props.mode === 'mount') return [mountAction.value]
+  if (props.mode === 'maintenance') return maintenanceActions
+  return [mountAction.value, ...maintenanceActions]
+})
 
 const reason = action => toolActionReason(props.status, action, props.tool, props.online, props.pending)
 
@@ -52,7 +58,11 @@ function run(action) {
 </script>
 
 <template>
-  <div class="tool-actions" :aria-label="t('Aktionen für T{0}', [tool])">
+  <div
+    class="tool-actions"
+    :class="`tool-actions--${mode}`"
+    :aria-label="t('Aktionen für T{0}', [tool])"
+  >
     <button
       v-for="action in actions"
       :key="action.id"

@@ -895,5 +895,18 @@
   "Zielposition für {0} in Millimetern": "Target position for {0} in millimeters",
   "Zielposition für {0} anfahren": "Move {0} to target position",
   "Verfahrbereich: {0} bis {1} mm · Enter fährt an, Escape verwirft": "Travel range: {0} to {1} mm · Enter to move, Escape to discard",
-  "Ungültige Zielposition.": "Invalid target position."
+  "Ungültige Zielposition.": "Invalid target position.",
+  "Klipper ist nach einem Not-Aus oder Fehler angehalten und kann hier direkt neu gestartet werden.": "Klipper is halted after an emergency stop or error and can be restarted directly here.",
+  "Klipper jetzt neu starten": "Restart Klipper now",
+  "Firmware jetzt neu starten": "Restart firmware now",
+  "T{0} auswählen · {1} °C · {2} · {3}": "Select T{0} · {1} °C · {2} · {3}",
+  "Maschine & Vorbereitung": "Machine & preparation",
+  "Klipper im Shutdown": "Klipper in shutdown",
+  "Klipper-Fehler": "Klipper error",
+  "Klipper startet …": "Klipper starting …",
+  "Klipper nicht verbunden": "Klipper disconnected",
+  "Klipper ist nicht bereit": "Klipper is not ready",
+  "Für Z und QGL zuerst X/Y oder ALL homen.": "Home X/Y or ALL first for Z and QGL.",
+  "Für QGL zuerst Z homen.": "Home Z first for QGL.",
+  "Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden.": "Click again to confirm · QGL must be run again afterwards."
 }

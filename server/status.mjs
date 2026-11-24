@@ -98,6 +98,33 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
       }
     })
 
+  const gcodeMove = status.gcode_move ?? {}
+  const speedFactor = finite(gcodeMove.speed_factor)
+  const extrudeFactor = finite(gcodeMove.extrude_factor)
+  const zOffset = finite(gcodeMove.homing_origin?.[2])
+
+  const exObj = status.exclude_object
+  const excludeObjects = exObj
+    ? {
+        available: true,
+        objects: Array.isArray(exObj.objects)
+          ? exObj.objects
+              .filter(item => item && typeof item.name === 'string' && item.name.trim())
+              .map(item => ({
+                name: item.name,
+                center:
+                  Array.isArray(item.center) && item.center.length >= 2 && finite(item.center[0]) != null && finite(item.center[1]) != null
+                    ? [item.center[0], item.center[1]]
+                    : null,
+              }))
+          : [],
+        excluded: Array.isArray(exObj.excluded_objects)
+          ? exObj.excluded_objects.filter(name => typeof name === 'string')
+          : [],
+        current: typeof exObj.current_object === 'string' ? exObj.current_object : null,
+      }
+    : { available: false, objects: [], excluded: [], current: null }
+
   return {
     at,
     active,
@@ -120,6 +147,10 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
     filamentUsed: finite(status.print_stats?.filament_used),
     printLayer: finite(status.print_stats?.info?.current_layer),
     printTotalLayers: finite(status.print_stats?.info?.total_layer),
+    speedPercent: speedFactor != null ? Math.round(speedFactor * 100) : null,
+    flowPercent: extrudeFactor != null ? Math.round(extrudeFactor * 100) : null,
+    zOffset,
+    excludeObjects,
     bed: {
       temperature: finite(status.heater_bed?.temperature),
       target: finite(status.heater_bed?.target),

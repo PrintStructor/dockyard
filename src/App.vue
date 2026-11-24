@@ -29,6 +29,7 @@ import TemperatureTarget from './components/TemperatureTarget.vue'
 import ThermalGauge from './components/ThermalGauge.vue'
 import CameraView from './components/CameraView.vue'
 import CockpitSelect from './components/CockpitSelect.vue'
+import LivePrintTuning from './components/LivePrintTuning.vue'
 import { useControls } from './useControls.js'
 import { usePrinter } from './usePrinter.js'
 import { useConsole } from './useConsole.js'
@@ -270,6 +271,16 @@ const printLabel = computed(
 )
 
 const isPrintActive = computed(() => online.value && ['printing', 'paused'].includes(status.value?.printState))
+const liveTuningOpen = ref(false)
+watch(isPrintActive, active => {
+  if (!active) liveTuningOpen.value = false
+})
+const formattedLiveZ = computed(() => {
+  const z = status.value?.zOffset
+  if (z == null || Math.abs(z) < 1e-5) return ''
+  const sign = z > 0 ? '+' : ''
+  return `${sign}${z.toLocaleString(locale.value, { minimumFractionDigits: 3, maximumFractionDigits: 3 })} mm`
+})
 const printProgressPercent = computed(() =>
   Number.isFinite(status.value?.progress) ? Math.round(Math.max(0, Math.min(1, status.value.progress)) * 100) : null,
 )
@@ -461,13 +472,38 @@ async function acknowledgeUncertain() {
           <span v-if="status.printDuration != null" class="print-job-detail">
             {{ formatDuration(status.printDuration) }}
           </span>
-          <button type="button" class="print-job-open" @click="tab = 'print'">
-            {{ t('3D-Druckansicht') }}<ChevronRight :size="14" />
-          </button>
+          <span v-if="formattedLiveZ" class="print-tuning-pill">Z {{ formattedLiveZ }}</span>
+          <span v-if="status.speedPercent != null && status.speedPercent !== 100" class="print-tuning-pill">
+            {{ status.speedPercent }} %
+          </span>
+          <span v-if="status.flowPercent != null && status.flowPercent !== 100" class="print-tuning-pill">
+            Flow {{ status.flowPercent }} %
+          </span>
+          <div class="print-job-bar-actions">
+            <button
+              type="button"
+              class="print-job-tuning-toggle"
+              :aria-expanded="liveTuningOpen"
+              @click="liveTuningOpen = !liveTuningOpen"
+            >
+              <SlidersHorizontal :size="13" />{{ t('Live-Tuning') }}
+            </button>
+            <button type="button" class="print-job-open" @click="tab = 'print'">
+              {{ t('3D-Druckansicht') }}<ChevronRight :size="14" />
+            </button>
+          </div>
         </div>
         <div v-if="printProgressPercent != null" class="print-job-track" aria-hidden="true">
           <div class="print-job-fill" :style="{ width: `${printProgressPercent}%` }" />
         </div>
+        <LivePrintTuning
+          v-if="liveTuningOpen"
+          compact
+          :status="status"
+          :online="online"
+          :pending="pending"
+          :send="send"
+        />
       </div>
 
       <div v-if="!online && connection !== 'connecting'" class="notice" role="status">
@@ -818,9 +854,24 @@ async function acknowledgeUncertain() {
         @context="controlContext = $event"
       />
 
-      <PrintView v-if="tab === 'print'" :status="status" :online="online" :requested-file="requestedPrintFile" />
+      <PrintView
+        v-if="tab === 'print'"
+        :status="status"
+        :online="online"
+        :pending="pending"
+        :send="send"
+        :requested-file="requestedPrintFile"
+      />
 
-      <HistoryView v-if="tab === 'history'" :online="online" @open-print="openPrintFile" />
+      <HistoryView
+        v-if="tab === 'history'"
+        :status="status"
+        :online="online"
+        :pending="pending"
+        :send="send"
+        @open-print="openPrintFile"
+        @print-started="openPrintFile"
+      />
 
       <section v-if="tab === 'tools' || tab === 'cameras'" class="camera-section" :aria-label="t('Druckerkameras')">
         <div v-if="tab === 'tools'" class="section-heading">

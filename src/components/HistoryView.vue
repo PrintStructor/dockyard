@@ -11,15 +11,20 @@ import {
   ChevronDown,
   X,
   Expand,
+  Play,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
+import { printControlReason } from '../print-control-state.mjs'
 import CockpitSelect from './CockpitSelect.vue'
 
 const props = defineProps({
+  status: Object,
   online: Boolean,
+  pending: Boolean,
+  send: Function,
 })
 
-const emit = defineEmits(['open-print'])
+const emit = defineEmits(['open-print', 'print-started'])
 
 const PAGE_SIZE = 40
 
@@ -35,6 +40,34 @@ const statusFilter = ref('all') // 'all' | 'completed' | 'cancelled' | 'error'
 const toolFilter = ref('all') // 'all' | 'multi' | '0'..'5'
 const selectedId = ref(null)
 const thumbnailDialog = ref(null)
+const confirmReprint = ref(false)
+let reprintTimer = null
+
+function resetReprintConfirm() {
+  confirmReprint.value = false
+  clearTimeout(reprintTimer)
+  reprintTimer = null
+}
+
+const reprintReason = computed(() => {
+  if (!selectedJob.value?.fileExists) return 'Datei nicht mehr auf dem Drucker vorhanden.'
+  return printControlReason(props.status, 'print_start', props.online, props.pending)
+})
+
+async function requestOrReprint() {
+  if (reprintReason.value || !props.send || !selectedJob.value?.filename) return
+  if (!confirmReprint.value) {
+    confirmReprint.value = true
+    clearTimeout(reprintTimer)
+    reprintTimer = setTimeout(resetReprintConfirm, 6000)
+    return
+  }
+  const filename = selectedJob.value.filename
+  resetReprintConfirm()
+  if (await props.send({ action: 'print_start', filename })) {
+    emit('print-started', filename)
+  }
+}
 
 function openThumbnail() {
   if (selectedJob.value?.thumbnail) thumbnailDialog.value?.showModal()
@@ -79,7 +112,10 @@ watch(filteredJobs, list => {
   }
 })
 
-watch(selectedId, () => closeThumbnail())
+watch(selectedId, () => {
+  closeThumbnail()
+  resetReprintConfirm()
+})
 
 const totalCount = computed(() => {
   const fromTotals = totals.value?.totalJobs
@@ -205,6 +241,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   activeController?.abort()
+  resetReprintConfirm()
 })
 </script>
 
@@ -430,20 +467,55 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <button
-            type="button"
-            class="focus-action history-3d-button"
-            :disabled="!selectedJob.fileExists"
-            :title="
-              selectedJob.fileExists
-                ? t('Datei in der 3D-Druckansicht öffnen')
-                : t('Datei nicht mehr auf dem Drucker vorhanden')
-            "
-            @click="selectedJob.fileExists && emit('open-print', selectedJob.filename)"
-          >
-            <span>{{ t('In 3D öffnen') }}</span>
-            <Box :size="16" />
-          </button>
+          <div class="history-actions-row">
+            <button
+              type="button"
+              class="focus-action history-3d-button"
+              :disabled="!selectedJob.fileExists"
+              :title="
+                selectedJob.fileExists
+                  ? t('Datei in der 3D-Druckansicht öffnen')
+                  : t('Datei nicht mehr auf dem Drucker vorhanden')
+              "
+              @click="selectedJob.fileExists && emit('open-print', selectedJob.filename)"
+            >
+              <span>{{ t('In 3D öffnen') }}</span>
+              <Box :size="16" />
+            </button>
+
+            <div v-if="selectedJob.fileExists" class="history-reprint-wrap">
+              <div v-if="confirmReprint" class="print-confirm-row">
+                <button
+                  type="button"
+                  class="subtle-button history-reprint-confirm"
+                  :disabled="!!reprintReason"
+                  @click="requestOrReprint"
+                  @keydown.esc="resetReprintConfirm"
+                >
+                  <Play :size="14" />{{ t('Erneut drucken?') }}
+                </button>
+                <button
+                  type="button"
+                  class="subtle-button print-confirm-cancel"
+                  :title="t('Abbrechen')"
+                  :aria-label="t('Abbrechen')"
+                  @click="resetReprintConfirm"
+                >
+                  <X :size="14" />
+                </button>
+              </div>
+              <button
+                v-else
+                type="button"
+                class="subtle-button history-reprint-btn"
+                :disabled="!!reprintReason"
+                :title="reprintReason ? t(reprintReason) : t('Diese Datei direkt erneut drucken')"
+                @click="requestOrReprint"
+              >
+                <Play :size="14" />{{ t('Erneut drucken') }}
+              </button>
+            </div>
+          </div>
           <p v-if="!selectedJob.fileExists" class="history-file-missing">
             {{ t('Datei nicht mehr auf dem Drucker vorhanden.') }}
           </p>

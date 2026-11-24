@@ -1,13 +1,17 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Printer, RefreshCw, Layers, Clock, FileCode2, ChevronRight, Lock, Unlock, Expand, X } from '@lucide/vue'
+import { Printer, RefreshCw, Layers, Clock, FileCode2, ChevronRight, Lock, Unlock, Expand, X, Play } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
+import { printControlReason } from '../print-control-state.mjs'
 import CockpitSelect from './CockpitSelect.vue'
 import PrintScene from './PrintScene.vue'
+import LivePrintTuning from './LivePrintTuning.vue'
 
 const props = defineProps({
   status: Object,
   online: Boolean,
+  pending: Boolean,
+  send: Function,
   requestedFile: String,
 })
 
@@ -28,6 +32,32 @@ const showGhost = ref(true)
 const followLiveLayer = ref(true)
 const manualLayer = ref(1)
 const thumbnailDialog = ref(null)
+
+const confirmStart = ref(false)
+let startConfirmTimer = null
+
+function resetStartConfirm() {
+  confirmStart.value = false
+  clearTimeout(startConfirmTimer)
+  startConfirmTimer = null
+}
+
+const printStartReason = computed(() => {
+  if (!selectedFile.value) return 'Keine Druckdatei ausgewählt.'
+  return printControlReason(props.status, 'print_start', props.online, props.pending)
+})
+
+async function requestOrStartPrint() {
+  if (printStartReason.value || !props.send) return
+  if (!confirmStart.value) {
+    confirmStart.value = true
+    clearTimeout(startConfirmTimer)
+    startConfirmTimer = setTimeout(resetStartConfirm, 6000)
+    return
+  }
+  resetStartConfirm()
+  await props.send({ action: 'print_start', filename: selectedFile.value })
+}
 
 function openThumbnail() {
   if (thumbnailUrl.value) thumbnailDialog.value?.showModal()
@@ -237,6 +267,7 @@ function selectRecentJob(filename) {
 
 watch(selectedFile, filename => {
   closeThumbnail()
+  resetStartConfirm()
   loadSelectedFile(filename)
 })
 
@@ -252,9 +283,12 @@ watch(
 watch(
   () => [props.status?.printState, props.status?.printFilename],
   ([printState, filename]) => {
-    if (['printing', 'paused'].includes(printState) && filename && filename !== selectedFile.value) {
-      selectRecentJob(filename)
-      followLiveLayer.value = true
+    if (['printing', 'paused'].includes(printState)) {
+      resetStartConfirm()
+      if (filename && filename !== selectedFile.value) {
+        selectRecentJob(filename)
+        followLiveLayer.value = true
+      }
     }
   },
 )
@@ -265,6 +299,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   fetchAbort?.abort()
+  resetStartConfirm()
 })
 </script>
 
@@ -398,6 +433,51 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <div v-if="!isPrintActive && selectedFile" class="print-start-bar">
+        <div v-if="confirmStart" class="print-confirm-row">
+          <button
+            type="button"
+            class="focus-action print-start-confirm"
+            :disabled="!!printStartReason"
+            @click="requestOrStartPrint"
+            @keydown.esc="resetStartConfirm"
+          >
+            <span>{{ t('Jetzt drucken?') }}</span>
+            <Play :size="15" />
+          </button>
+          <button
+            type="button"
+            class="subtle-button print-confirm-cancel"
+            :title="t('Abbrechen')"
+            :aria-label="t('Abbrechen')"
+            @click="resetStartConfirm"
+          >
+            <X :size="15" />
+          </button>
+        </div>
+        <button
+          v-else
+          type="button"
+          class="focus-action print-start-btn"
+          :disabled="!!printStartReason"
+          :title="printStartReason ? t(printStartReason) : t('Ausgewählte Datei auf dem Drucker starten')"
+          @click="requestOrStartPrint"
+        >
+          <span>{{ t('Druck starten') }}</span>
+          <Play :size="15" />
+        </button>
+      </div>
+
+      <div v-else-if="isPrintActive && !isViewingActivePrint && status?.printFilename" class="print-start-bar">
+        <button
+          type="button"
+          class="subtle-button print-jump-active"
+          @click="selectRecentJob(status.printFilename)"
+        >
+          <Printer :size="14" />{{ t('Zum laufenden Druck wechseln') }}
+        </button>
+      </div>
+
       <div v-if="isViewingActivePrint" class="print-progress-card">
         <div class="print-progress-numbers">
           <strong>{{ progressPercent != null ? `${progressPercent} %` : '—' }}</strong>
@@ -418,6 +498,14 @@ onBeforeUnmount(() => {
           />
         </div>
       </div>
+
+      <LivePrintTuning
+        v-if="isViewingActivePrint"
+        :status="status"
+        :online="online"
+        :pending="pending"
+        :send="send"
+      />
 
       <dl class="measurements print-measurements">
         <div>

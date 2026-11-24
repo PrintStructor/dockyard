@@ -46,6 +46,7 @@ const objects = [
   'heater_bed',
   'toolhead',
   'gcode_move',
+  'exclude_object',
   'quad_gantry_level',
   'idle_timeout',
   'gcode_macro _KNOMI_STATUS',
@@ -72,7 +73,7 @@ let capabilityCache = null
 let capabilityAt = 0
 let gcodeFileSetCache = null
 let gcodeFileSetAt = 0
-let liveCapabilityRef = { config: null, load: null, unload: null, fans: '', value: null }
+let liveCapabilityRef = { config: null, load: null, unload: null, fans: '', hasExclude: false, value: null }
 let currentJob = null
 let activeJobAbort = null
 let lastResult = null
@@ -222,17 +223,19 @@ function cachedCapabilities(raw) {
     .join(',')
   const load = raw['gcode_macro _LOAD_SETTINGS']?.temp_default ?? null
   const unload = raw['gcode_macro _UNLOAD_SETTINGS']?.temp_default ?? null
+  const hasExclude = raw.exclude_object != null
   if (
     liveCapabilityRef.value &&
     liveCapabilityRef.config === raw.configfile &&
     liveCapabilityRef.load === load &&
     liveCapabilityRef.unload === unload &&
-    liveCapabilityRef.fans === fanSignature
+    liveCapabilityRef.fans === fanSignature &&
+    liveCapabilityRef.hasExclude === hasExclude
   ) {
     return liveCapabilityRef.value
   }
   const computed = capabilities(raw)
-  liveCapabilityRef = { config: raw.configfile, load, unload, fans: fanSignature, value: computed }
+  liveCapabilityRef = { config: raw.configfile, load, unload, fans: fanSignature, hasExclude, value: computed }
   return computed
 }
 
@@ -451,6 +454,18 @@ export async function control(input, options = {}) {
             WebSocketImpl,
           })
         }
+      } else if (command.rpcMethod) {
+        live.notify()
+        issued = true
+        await executeMoonrakerRpc({
+          printer,
+          method: command.rpcMethod,
+          params: command.rpcParams ?? {},
+          timeoutMs: stepTimeoutMs,
+          signal: abortController.signal,
+          WebSocketImpl,
+          requireOkResult: command.requireOkResult !== false,
+        })
       } else {
         live.notify()
         issued = true
@@ -1297,7 +1312,7 @@ export function printerMiddleware(req, res, next) {
       }
 
       if (path === '/api/control') {
-        const result = await control(await readJson(req, 1000), { async: true })
+        const result = await control(await readJson(req, 2048), { async: true })
         const code = result.statusCode ?? 200
         return json(code, result)
       }

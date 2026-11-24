@@ -1,6 +1,12 @@
 import { auxCapabilities, auxCommand, auxActions } from './aux-controls.mjs'
 import { toolCapabilities, toolActionCommand, toolActions } from './tool-actions.mjs'
 import {
+  printControlActions,
+  printControlActionKeys,
+  printControlCapabilities,
+  printControlCommand,
+} from './print-controls.mjs'
+import {
   calibrationActions,
   calibrationActionKeys,
   calibrationCapabilities,
@@ -34,6 +40,7 @@ export function capabilities(raw) {
     mesh: !!config['bed_mesh'],
     ...toolCapabilities(config, raw),
     ...auxCapabilities(config),
+    ...printControlCapabilities(config, raw),
     ...calibrationCapabilities(config),
   }
 }
@@ -55,6 +62,7 @@ export function commandFor(input, raw) {
     'fan',
     ...toolActions,
     ...auxActions,
+    ...printControlActions,
     ...calibrationActions,
   ]
   if (!permitted.includes(action)) fail('Diese Aktion ist nicht verfügbar.')
@@ -70,6 +78,7 @@ export function commandFor(input, raw) {
         led: ['action', 'profile'],
         fan: ['action', 'fan', 'percent'],
         console: ['action', 'script'],
+        ...printControlActionKeys,
         ...calibrationActionKeys,
       }[action] ?? ['action'])
   if (Object.keys(input).some(key => !keys.includes(key))) fail('Unbekannte Befehlsparameter.')
@@ -103,6 +112,7 @@ export function commandFor(input, raw) {
   }
 
   if (toolActions.includes(action)) return toolActionCommand(input, raw, capabilities(raw))
+  if (printControlActions.includes(action)) return printControlCommand(input, raw, capabilities(raw))
   if (calibrationActions.includes(action)) return calibrationCommand(input, raw, capabilities(raw))
 
   if (action === 'fan') {

@@ -49,6 +49,11 @@ test('dynamic command feedback, guards and parameters are localized without chan
   assert.equal(translate('Gewünschte Lüfterleistung für {0}', 'en', ['Bettlüfter']), 'Target fan speed for Bed fans')
   assert.equal(translate('CPAP Part Fan auf 75 %', 'en'), 'CPAP Part Fan to 75 %')
   assert.equal(translate('Nicht initialisiert', 'en'), 'Uninitialized')
+  assert.equal(translate('Druck starten · benchy.gcode', 'en'), 'Start print · benchy.gcode')
+  assert.equal(translate('Geschwindigkeit auf 120 %', 'en'), 'Speed to 120 %')
+  assert.equal(translate('Fluss auf 95 %', 'en'), 'Flow to 95 %')
+  assert.equal(translate('Z-Offset +0.010 mm', 'en'), 'Z offset +0.010 mm')
+  assert.equal(translate('Objekt überspringen · Part_A', 'en'), 'Exclude object · Part_A')
 })
 
 test('saved language accepts supported choices and safely falls back with blocked storage', () => {

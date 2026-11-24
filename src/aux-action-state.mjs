@@ -121,5 +121,10 @@ export function quickMotionReason(status, action, online = true, pending = false
     return ''
   }
 
+  if (action === 'motors_off') {
+    if (status.detectionMismatch) return 'Werkzeugerkennung prüfen.'
+    return ''
+  }
+
   return 'Unbekannte Aktion.'
 }

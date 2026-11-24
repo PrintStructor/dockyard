@@ -1,6 +1,6 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
-import { Lightbulb, RotateCw, Home, Check } from '@lucide/vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { Lightbulb, RotateCw, Home } from '@lucide/vue'
 import { t } from '../i18n.mjs'
 import { ledProfiles, auxActionReason, quickMotionReason } from '../aux-action-state.mjs'
 import CockpitSelect from './CockpitSelect.vue'
@@ -14,14 +14,24 @@ const props = defineProps({
 const emit = defineEmits(['command'])
 
 const extra = ref('')
+const confirmMotors = ref(false)
+let confirmMotorsTimer = null
+
 const reason = action => auxActionReason(props.status, action, props.online, props.pending)
 const homeReason = computed(() => quickMotionReason(props.status, 'home', props.online, props.pending))
 const qglReason = computed(() => quickMotionReason(props.status, 'qgl', props.online, props.pending))
+const motorsReason = computed(() => quickMotionReason(props.status, 'motors_off', props.online, props.pending))
 const allHomed = computed(() => [...'xyz'].every(axis => props.status?.homedAxes?.includes(axis)))
 const available = id => props.status?.capabilities?.ledProfiles?.includes(id)
 const main = computed(() => ledProfiles.slice(0, 5).filter(profile => available(profile.id)))
 const others = computed(() => ledProfiles.slice(5).filter(profile => available(profile.id)))
 const otherOptions = computed(() => others.value.map(profile => ({ value: profile.id, label: profile.label })))
+
+function resetMotorsConfirm() {
+  confirmMotors.value = false
+  clearTimeout(confirmMotorsTimer)
+  confirmMotorsTimer = null
+}
 
 watch(
   others,
@@ -33,6 +43,14 @@ watch(
   { immediate: true },
 )
 
+watch(motorsReason, blocked => {
+  if (blocked) resetMotorsConfirm()
+})
+
+onBeforeUnmount(() => {
+  resetMotorsConfirm()
+})
+
 function led(profile) {
   if (!reason('led') && available(profile)) emit('command', { action: 'led', profile })
 }
@@ -43,6 +61,18 @@ function homeAll() {
 
 function runQgl() {
   if (!qglReason.value) emit('command', { action: 'qgl' })
+}
+
+function releaseMotors() {
+  if (motorsReason.value) return
+  if (props.status?.qglApplied && !confirmMotors.value) {
+    confirmMotors.value = true
+    clearTimeout(confirmMotorsTimer)
+    confirmMotorsTimer = setTimeout(resetMotorsConfirm, 5000)
+    return
+  }
+  resetMotorsConfirm()
+  emit('command', { action: 'motors_off' })
 }
 
 function initialize() {
@@ -84,8 +114,10 @@ function initialize() {
     <div class="prep-actions">
       <button
         class="subtle-button"
+        :class="{ 'prep-done': allHomed && online }"
         type="button"
         :disabled="!!homeReason"
+        :aria-label="t('Alle Achsen homen')"
         :title="
           homeReason
             ? t(homeReason)
@@ -95,12 +127,18 @@ function initialize() {
         "
         @click="homeAll"
       >
-        <Home :size="14" />Home All<Check v-if="allHomed && online" :size="13" class="text-lime" />
+        <Home :size="15" /><span>ALL</span>
       </button>
       <button
         class="subtle-button"
+        :class="{ 'prep-done': status?.qglApplied && online }"
         type="button"
         :disabled="!!qglReason"
+        :aria-label="
+          status?.qglApplied
+            ? t('Gantry bereits ausgerichtet. QGL erneut ausführen')
+            : t('Gantry ausrichten · QGL')
+        "
         :title="
           qglReason
             ? t(qglReason)
@@ -110,7 +148,42 @@ function initialize() {
         "
         @click="runQgl"
       >
-        QGL<Check v-if="status?.qglApplied && online" :size="13" class="text-lime" />
+        <span>QGL</span>
+      </button>
+      <button
+        class="subtle-button prep-motors-btn"
+        :class="{ 'confirm-danger': confirmMotors }"
+        type="button"
+        :disabled="!!motorsReason"
+        :aria-label="confirmMotors ? t('Wirklich lösen?') : t('Motoren lösen')"
+        :title="
+          motorsReason
+            ? t(motorsReason)
+            : confirmMotors
+              ? t('Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden')
+              : status?.qglApplied
+                ? t('Motoren lösen · Gantry senkt sich ab (QGL geht verloren)')
+                : t('Motoren lösen')
+        "
+        @click="releaseMotors"
+        @blur="resetMotorsConfirm"
+        @keydown.esc="resetMotorsConfirm"
+      >
+        <svg class="motor-off-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <defs>
+            <mask id="motor-off-cut">
+              <rect width="24" height="24" fill="white" />
+              <line x1="2" y1="2" x2="22" y2="22" stroke="black" stroke-width="4.4" stroke-linecap="round" />
+            </mask>
+          </defs>
+          <path
+            d="M7 4v2h3v2H7l-2 2v3H3v-3H1v8h2v-3h2v3h3l2 2h8v-4h2v3h3V9h-3v3h-2V8h-6V6h3V4H7z"
+            fill="currentColor"
+            mask="url(#motor-off-cut)"
+          />
+          <line x1="2.5" y1="2.5" x2="21.5" y2="21.5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" />
+        </svg>
+        <span v-if="confirmMotors" class="prep-confirm-mark">?</span>
       </button>
     </div>
     <button

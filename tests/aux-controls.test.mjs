@@ -25,30 +25,36 @@ test('LED actions whitelist configured profiles, use concise main labels and nev
  for(const profile of ['PRINT_START','wake\nG28',null])assert.throws(()=>commandFor({action:'led',profile},state()))
  const raw=state();delete raw.configfile.settings['gcode_macro wake_up'];assert.throws(()=>commandFor({action:'led',profile:'wake'},raw),/konfiguriert/)
 })
-test('quickMotionReason matches home and QGL safety guards for Tools inspector shortcuts',()=>{
+test('quickMotionReason matches home, QGL and motors_off safety guards for Tools inspector shortcuts',()=>{
  const raw=state()
  const make=r=>({...normalizeStatus(r),capabilities:capabilities(r)})
  assert.equal(quickMotionReason(make(raw),'home'),'')
  assert.equal(quickMotionReason(make(raw),'qgl'),'')
+ assert.equal(quickMotionReason(make(raw),'motors_off'),'')
  assert.match(quickMotionReason(make(raw),'home',false),/aktuellen/)
  assert.match(quickMotionReason(make(raw),'qgl',true,true),/Befehl/)
+ assert.match(quickMotionReason(make(raw),'motors_off',false),/aktuellen/)
 
  const unhomed=state();unhomed.toolhead.homed_axes=''
  assert.equal(quickMotionReason(make(unhomed),'home'),'')
  assert.match(quickMotionReason(make(unhomed),'qgl'),/homen/)
+ assert.equal(quickMotionReason(make(unhomed),'motors_off'),'')
 
  const coldBoot=state();coldBoot.toolhead.homed_axes='';coldBoot.toolchanger.status='uninitialized';coldBoot.toolchanger.tool_number=-1;coldBoot.toolchanger.detected_tool_number=1;coldBoot.configfile.settings.beacon={home_gcode_pre_x:'INITIALIZE_TOOLCHANGER'}
  const coldStatus={...make(coldBoot),homingCanInitialize:true}
  assert.equal(quickMotionReason(coldStatus,'home'),'')
  assert.match(quickMotionReason(coldStatus,'qgl'),/Werkzeugerkennung/)
+ assert.match(quickMotionReason(coldStatus,'motors_off'),/Werkzeugerkennung/)
 
  const conflict=state();conflict['tool T0']={detect_state:1};conflict['tool T1']={detect_state:1}
  assert.match(quickMotionReason(make(conflict),'home'),/Werkzeugerkennung/)
  assert.match(quickMotionReason(make(conflict),'qgl'),/Werkzeugerkennung/)
+ assert.match(quickMotionReason(make(conflict),'motors_off'),/Werkzeugerkennung/)
 
  const printing=state();printing.print_stats.state='printing'
  assert.match(quickMotionReason(make(printing),'home'),/gesperrt/)
  assert.match(quickMotionReason(make(printing),'qgl'),/gesperrt/)
+ assert.match(quickMotionReason(make(printing),'motors_off'),/gesperrt/)
 
  const noQgl=state();delete noQgl.configfile.settings.quad_gantry_level
  assert.match(quickMotionReason(make(noQgl),'qgl'),/konfiguriert/)

@@ -18,6 +18,8 @@ import {
   evaluateMachineWriteGuard,
   normalizeSystemOverview,
   normalizeUpdateStatus,
+  validateUpdateTarget,
+  filterRelevantReleases,
   validateLogPath,
   normalizeLogList,
   parseLogTail,
@@ -737,4 +739,92 @@ test('computeSystemState unlocks recovery after mid-print Klipper crash and neve
   assert.equal(isConnectivityFailure(502), true)
   assert.equal(isConnectivityFailure(503), true)
   assert.equal(isConnectivityFailure(0), true)
+})
+
+test('validateUpdateTarget, normalizeUpdateStatus and filterRelevantReleases enforce upgrade/recovery safety and changelog filtering', () => {
+  const versionInfo = {
+    helixscreen: {
+      configured_type: 'web',
+      owner: 'prestonbrown',
+      repo_name: 'helixscreen',
+      version: 'v1.0.2',
+      remote_version: 'v1.1.0',
+      is_valid: true,
+    },
+    'klipper-toolchanger-extended': {
+      configured_type: 'git_repo',
+      owner: 'PrintStructor',
+      repo_name: 'klipper-toolchanger-extended',
+      remote_url: 'https://github.com/PrintStructor/klipper-toolchanger-extended.git',
+      version: 'v1.1.0-35',
+      remote_version: 'v1.1.0-36',
+      is_dirty: true,
+      is_valid: false,
+      warnings: ["Repo is dirty. Detected modified files: ['klipper/extras/toolchanger.py']"],
+    },
+    klipper: {
+      configured_type: 'git_repo',
+      owner: 'Klipper3d',
+      repo_name: 'klipper',
+      version: 'v0.14.0-0',
+      remote_version: 'v0.14.0-0',
+      is_dirty: false,
+      is_valid: true,
+      commits_behind: [{ sha: 'abc1234', author: 'Dev', date: '1700000000', subject: 'Fix homing', message: 'Fix homing' }],
+      commits_behind_count: 1,
+    },
+    system: {
+      configured_type: 'system',
+      package_count: 2,
+      package_list: ['openssl', 'curl'],
+    },
+  }
+
+  const normalized = normalizeUpdateStatus({ busy: false, version_info: versionInfo })
+  const byName = Object.fromEntries(normalized.items.map(i => [i.name, i]))
+
+  assert.equal(byName.helixscreen.canUpgrade, true)
+  assert.equal(byName.helixscreen.canRecover, false)
+  assert.equal(byName.helixscreen.repoUrl, 'https://github.com/prestonbrown/helixscreen')
+  assert.equal(byName['klipper-toolchanger-extended'].canUpgrade, false)
+  assert.equal(byName['klipper-toolchanger-extended'].canRecover, true)
+  assert.equal(byName.system.canUpgrade, true)
+  assert.deepEqual(byName.system.packageList, ['openssl', 'curl'])
+  assert.equal(byName.klipper.commitsBehind.length, 1)
+
+  // Upgrade allowed for clean outdated web/system, rejected for dirty or already up-to-date.
+  assert.equal(validateUpdateTarget('helixscreen', versionInfo, 'upgrade').name, 'helixscreen')
+  assert.equal(validateUpdateTarget('system', versionInfo, 'upgrade').name, 'system')
+  assert.throws(() => validateUpdateTarget('klipper-toolchanger-extended', versionInfo, 'upgrade'), err => err.status === 409)
+  assert.throws(() => validateUpdateTarget('klipper', versionInfo, 'upgrade'), err => err.status === 409)
+  assert.throws(() => validateUpdateTarget('unknown-pkg', versionInfo, 'upgrade'), err => err.status === 404)
+
+  // Recover allowed for dirty/invalid git_repo, rejected for web/system/clean.
+  assert.equal(validateUpdateTarget('klipper-toolchanger-extended', versionInfo, 'recover').name, 'klipper-toolchanger-extended')
+  assert.throws(() => validateUpdateTarget('helixscreen', versionInfo, 'recover'), err => err.status === 400)
+  assert.throws(() => validateUpdateTarget('system', versionInfo, 'recover'), err => err.status === 400)
+
+  // Release filtering skips pre-releases when target is stable and keeps versions newer than installed.
+  const filtered = filterRelevantReleases(
+    [
+      { tag_name: 'v1.1.0', name: 'v1.1.0', prerelease: false, published_at: '2026-11-24T03:00:00Z', html_url: 'https://github.com/a/b/releases/tag/v1.1.0', body: 'New stuff' },
+      { tag_name: 'v1.1.0-rc.6', name: 'rc6', prerelease: true, published_at: '2026-11-23T02:00:00Z', html_url: 'https://github.com/a/b/releases/tag/v1.1.0-rc.6', body: 'RC' },
+      { tag_name: 'v1.0.5', name: 'v1.0.5', prerelease: false, published_at: '2026-11-10T02:00:00Z', html_url: 'https://github.com/a/b/releases/tag/v1.0.5', body: 'Fix' },
+      { tag_name: 'v1.0.2', name: 'v1.0.2', prerelease: false, published_at: '2026-10-01T02:00:00Z', html_url: 'https://github.com/a/b/releases/tag/v1.0.2', body: 'Old' },
+    ],
+    'v1.0.2',
+    'v1.1.0',
+  )
+  assert.deepEqual(filtered.map(r => r.tag), ['v1.1.0', 'v1.0.5'])
+})
+
+test('printerMiddleware enforces CSRF/method checks on update upgrade/recover and validates notes name', async () => {
+  for (const path of ['/api/system/updates/upgrade', '/api/system/updates/recover']) {
+    const getRes = await invokeMiddleware('GET', path)
+    assert.equal(getRes.status, 405)
+    const noHeaders = await invokeMiddleware('POST', path, { body: '{"name":"helixscreen"}' })
+    assert.equal(noHeaders.status, 403)
+  }
+  const badNotes = await invokeMiddleware('GET', '/api/system/updates/notes?name=../etc/passwd')
+  assert.equal(badNotes.status, 400)
 })

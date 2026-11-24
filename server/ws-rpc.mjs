@@ -8,18 +8,20 @@ export class AbortedCommandError extends Error {
 }
 
 /**
- * Execute a Klipper G-code script over Moonraker's /websocket endpoint.
- * This bypasses Nginx HTTP proxy_read_timeout (60 s default) and Node/undici
- * HTTP headersTimeout (300 s default) while monitoring liveness via server.info heartbeats.
+ * Execute any Moonraker JSON-RPC method over /websocket to bypass Nginx 60 s HTTP
+ * proxy_read_timeout while monitoring liveness via server.info heartbeats.
  */
-export function executeGcodeScript({
+export function executeMoonrakerRpc({
   printer,
-  script,
+  method,
+  params = {},
   timeoutMs = 600_000,
   heartbeatMs = 25_000,
   heartbeatTimeoutMs = 15_000,
   signal,
   WebSocketImpl = WebSocket,
+  onNotify,
+  requireOkResult = false,
 }) {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -28,7 +30,7 @@ export function executeGcodeScript({
     }
 
     const wsUrl = printer.replace(/^http/, 'ws') + '/websocket'
-    const scriptId = 1
+    const rpcId = 1
     let nextPingId = 100
     let pendingPingId = null
     let pendingPingTimer = null
@@ -85,9 +87,9 @@ export function executeGcodeScript({
       try {
         socket.send(JSON.stringify({
           jsonrpc: '2.0',
-          id: scriptId,
-          method: 'printer.gcode.script',
-          params: { script },
+          id: rpcId,
+          method,
+          params,
         }))
       } catch (error) {
         finish(reject, error instanceof Error ? error : new Error('Befehl konnte nicht gesendet werden.'))
@@ -129,16 +131,29 @@ export function executeGcodeScript({
         return
       }
 
-      if (data.id === scriptId) {
+      if (data.method && onNotify) {
+        try {
+          onNotify(data)
+        } catch {
+          // Ignore listener exceptions.
+        }
+        return
+      }
+
+      if (data.id === rpcId) {
         if (data.error) {
           finish(reject, new ControlError(data.error.message || 'Moonraker hat den Befehl abgelehnt.', 409))
           return
         }
-        if (data.result === 'ok') {
-          finish(resolve, 'ok')
+        if (requireOkResult) {
+          if (data.result === 'ok') {
+            finish(resolve, 'ok')
+            return
+          }
+          finish(reject, new Error('Keine eindeutige Bestätigung von Moonraker'))
           return
         }
-        finish(reject, new Error('Keine eindeutige Bestätigung von Moonraker'))
+        finish(resolve, data.result ?? 'ok')
       }
     }
 
@@ -149,5 +164,27 @@ export function executeGcodeScript({
     socket.onclose = () => {
       finish(reject, new Error('WebSocket-Verbindung zu Moonraker unerwartet beendet.'))
     }
+  })
+}
+
+export function executeGcodeScript({
+  printer,
+  script,
+  timeoutMs = 600_000,
+  heartbeatMs = 25_000,
+  heartbeatTimeoutMs = 15_000,
+  signal,
+  WebSocketImpl = WebSocket,
+}) {
+  return executeMoonrakerRpc({
+    printer,
+    method: 'printer.gcode.script',
+    params: { script },
+    timeoutMs,
+    heartbeatMs,
+    heartbeatTimeoutMs,
+    signal,
+    WebSocketImpl,
+    requireOkResult: true,
   })
 }

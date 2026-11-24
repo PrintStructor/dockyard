@@ -1,12 +1,17 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   AlertTriangle,
   ArrowDown,
+  ArrowUpCircle,
+  ArrowUpRight,
   Check,
   ChevronRight,
   Download,
+  FileText,
+  Loader2,
   RefreshCw,
+  RotateCcw,
   Search,
   ShieldAlert,
   X,
@@ -18,6 +23,7 @@ import CockpitSelect from './CockpitSelect.vue'
 const props = defineProps({
   printLocked: Boolean,
   moonrakerOnline: Boolean,
+  updateEvent: { type: Object, default: null },
 })
 
 const emit = defineEmits(['moonraker-status'])
@@ -27,6 +33,22 @@ const loadingUpdates = ref(false)
 const refreshingUpdates = ref(false)
 const updatesError = ref('')
 
+// Active update / recovery job log & inline confirmation state
+const activeJob = ref(null)
+const updateLogEl = ref(null)
+const expandedRecovery = ref('')
+const confirmKey = ref('')
+const submittingAction = ref(false)
+let confirmTimer = null
+
+// Release notes / changelog dialog
+const notesDialog = ref(null)
+const notesTarget = ref('')
+const notesData = ref(null)
+const loadingNotes = ref(false)
+const notesError = ref('')
+
+// Logs state
 const logs = ref([])
 const loadingLogs = ref(false)
 const logsError = ref('')
@@ -42,13 +64,41 @@ let activeController = null
 
 onBeforeUnmount(() => {
   activeController?.abort()
+  if (confirmTimer) clearTimeout(confirmTimer)
 })
+
+const isUpdateBusy = computed(
+  () => Boolean(activeJob.value?.running || updates.value?.busy || submittingAction.value),
+)
 
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes)) return '—'
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+}
+
+function formatDate(iso) {
+  if (!iso) return ''
+  const dt = new Date(iso)
+  if (Number.isNaN(dt.getTime())) return ''
+  return dt.toLocaleDateString(locale.value, { dateStyle: 'medium' })
+}
+
+function requestConfirm(key) {
+  confirmKey.value = key
+  if (confirmTimer) clearTimeout(confirmTimer)
+  confirmTimer = setTimeout(() => {
+    confirmKey.value = ''
+  }, 7000)
+}
+
+function cancelConfirm() {
+  confirmKey.value = ''
+  if (confirmTimer) {
+    clearTimeout(confirmTimer)
+    confirmTimer = null
+  }
 }
 
 async function fetchUpdates() {
@@ -63,6 +113,7 @@ async function fetchUpdates() {
       throw err
     }
     updates.value = data
+    if (data.activeJob) activeJob.value = data.activeJob
     emit('moonraker-status', true)
   } catch (cause) {
     updatesError.value = cause.message || 'Update-Status nicht erreichbar.'
@@ -86,14 +137,178 @@ async function refreshUpdates() {
       body: '{}',
       signal: AbortSignal.timeout(35_000),
     })
-    const data = await response.json()
+    const data = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(data.error || 'Update-Prüfung fehlgeschlagen.')
     updates.value = data
+    if (data.activeJob) activeJob.value = data.activeJob
   } catch (cause) {
     updatesError.value = cause.message || 'Update-Prüfung fehlgeschlagen.'
   } finally {
     refreshingUpdates.value = false
   }
+}
+
+async function triggerUpgrade(name) {
+  if (isUpdateBusy.value || props.printLocked || !props.moonrakerOnline) return
+  cancelConfirm()
+  submittingAction.value = true
+  updatesError.value = ''
+  try {
+    const response = await fetch('/api/system/updates/upgrade', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Cockpit-Request': '1',
+      },
+      body: JSON.stringify({ name }),
+      signal: AbortSignal.timeout(15_000),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.error || 'Update konnte nicht gestartet werden.')
+    if (data.job) activeJob.value = data.job
+  } catch (cause) {
+    updatesError.value = cause.message || 'Update konnte nicht gestartet werden.'
+  } finally {
+    submittingAction.value = false
+  }
+}
+
+async function triggerRecover(name, hard) {
+  if (isUpdateBusy.value || props.printLocked || !props.moonrakerOnline) return
+  cancelConfirm()
+  expandedRecovery.value = ''
+  submittingAction.value = true
+  updatesError.value = ''
+  try {
+    const response = await fetch('/api/system/updates/recover', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Cockpit-Request': '1',
+      },
+      body: JSON.stringify({ name, hard }),
+      signal: AbortSignal.timeout(15_000),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.error || 'Wiederherstellung konnte nicht gestartet werden.')
+    if (data.job) activeJob.value = data.job
+  } catch (cause) {
+    updatesError.value = cause.message || 'Wiederherstellung konnte nicht gestartet werden.'
+  } finally {
+    submittingAction.value = false
+  }
+}
+
+watch(
+  () => props.updateEvent,
+  async evt => {
+    if (!evt) return
+    if (evt.refreshed) {
+      fetchUpdates()
+      return
+    }
+    if (!activeJob.value && evt.application) {
+      activeJob.value = {
+        name: evt.application,
+        mode: evt.mode || 'upgrade',
+        running: !evt.complete,
+        ok: evt.ok ?? null,
+        log: [],
+      }
+    }
+    if (activeJob.value) {
+      if (evt.message) {
+        const last = activeJob.value.log.at(-1)
+        if (!last || last.message !== evt.message) {
+          activeJob.value = {
+            ...activeJob.value,
+            running: evt.complete ? false : (evt.running ?? true),
+            ok: evt.ok ?? activeJob.value.ok,
+            log: [...activeJob.value.log.slice(-149), { time: evt.time, message: evt.message }],
+          }
+        }
+      } else if (evt.complete) {
+        activeJob.value = { ...activeJob.value, running: false, ok: evt.ok ?? true }
+      }
+      await nextTick()
+      if (updateLogEl.value) updateLogEl.value.scrollTop = updateLogEl.value.scrollHeight
+      if (evt.complete) {
+        setTimeout(() => fetchUpdates(), 1200)
+      }
+    }
+  },
+)
+
+function hasNotesSource(item) {
+  return Boolean(item.repoUrl || item.commitsBehindCount > 0 || item.packageCount > 0)
+}
+
+async function openNotes(item) {
+  notesTarget.value = item.name
+  notesData.value = null
+  notesError.value = ''
+  loadingNotes.value = true
+  notesDialog.value?.showModal()
+  try {
+    const response = await fetch(`/api/system/updates/notes?name=${encodeURIComponent(item.name)}`, {
+      signal: AbortSignal.timeout(10_000),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.error || 'Neuigkeiten konnten nicht geladen werden.')
+    notesData.value = data
+  } catch (cause) {
+    notesError.value = cause.message || 'Neuigkeiten konnten nicht geladen werden.'
+  } finally {
+    loadingNotes.value = false
+  }
+}
+
+function closeNotes() {
+  notesDialog.value?.close()
+}
+
+// Safely parse markdown-like GitHub release bodies into structured blocks (zero v-html).
+function parseReleaseBlocks(body) {
+  if (!body) return []
+  const lines = body.replace(/\r\n/g, '\n').split('\n')
+  const blocks = []
+  let listItems = []
+  const flushList = () => {
+    if (listItems.length) {
+      blocks.push({ kind: 'list', items: listItems })
+      listItems = []
+    }
+  }
+  const cleanInline = text =>
+    text
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/\*\*([^*]+)\*\*/g, '$1')
+      .replace(/__([^_]+)__/g, '$1')
+      .trim()
+
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (!line || /^---+$/.test(line)) {
+      flushList()
+      continue
+    }
+    const heading = line.match(/^#{1,4}\s+(.+)$/)
+    if (heading) {
+      flushList()
+      blocks.push({ kind: 'heading', text: cleanInline(heading[1]) })
+      continue
+    }
+    const bullet = line.match(/^[-*•]\s+(.+)$/)
+    if (bullet) {
+      listItems.push(cleanInline(bullet[1]))
+      continue
+    }
+    flushList()
+    blocks.push({ kind: 'p', text: cleanInline(line) })
+  }
+  flushList()
+  return blocks.slice(0, 80)
 }
 
 async function fetchLogsList() {
@@ -227,12 +442,12 @@ onMounted(() => {
                   ])
             }}
           </p>
-          <p v-else>{{ t('Moonraker Update-Manager · reine Übersicht ohne automatische Überschreibung.') }}</p>
+          <p v-else>{{ t('Moonraker Update-Manager · Changelogs, gezielte Updates und Dirty-Recovery.') }}</p>
         </div>
         <button
           type="button"
           class="subtle-button"
-          :disabled="refreshingUpdates || loadingUpdates || updates?.busy || printLocked || !moonrakerOnline"
+          :disabled="refreshingUpdates || loadingUpdates || printLocked || !moonrakerOnline"
           :title="printLocked ? t('Während eines Drucks gesperrt.') : t('Update-Status bei Moonraker neu prüfen')"
           @click="refreshUpdates"
         >
@@ -246,10 +461,44 @@ onMounted(() => {
         <span>
           {{
             t(
-              'Mindestens ein Repository enthält lokale Anpassungen (Lokal geändert). Bitte nicht blind über Mainsail aktualisieren, sonst werden eigene Patches überschrieben.',
+              'Mindestens ein Repository enthält lokale Anpassungen (Lokal geändert). Updates sind dort gesperrt — über „Wiederherstellen“ kannst du bewusst einen Soft- oder Hard-Reset ausführen.',
             )
           }}
         </span>
+      </div>
+
+      <div v-if="activeJob" class="update-job-panel" role="status">
+        <div class="update-job-head">
+          <strong>
+            <Loader2 v-if="activeJob.running" :size="14" class="spinning" />
+            <Check v-else-if="activeJob.ok !== false" :size="14" class="text-lime" />
+            <AlertTriangle v-else :size="14" class="heating" />
+            <span>
+              {{ activeJob.name }} ·
+              {{
+                activeJob.running
+                  ? activeJob.mode === 'recover'
+                    ? t('Wiederherstellung läuft …')
+                    : t('Update läuft …')
+                  : activeJob.ok !== false
+                    ? t('Abgeschlossen')
+                    : t('Fehlgeschlagen')
+              }}
+            </span>
+          </strong>
+          <button
+            v-if="!activeJob.running"
+            type="button"
+            class="icon-button"
+            :aria-label="t('Protokoll schließen')"
+            @click="activeJob = null"
+          >
+            <X :size="14" />
+          </button>
+        </div>
+        <pre ref="updateLogEl" class="update-job-log">{{
+          activeJob.log.map(entry => entry.message).join('\n')
+        }}</pre>
       </div>
 
       <div v-if="updatesError" class="system-banner amber" style="margin-bottom: 14px" role="alert">
@@ -272,6 +521,7 @@ onMounted(() => {
               <th>{{ t('Installiert') }}</th>
               <th>{{ t('Verfügbar') }}</th>
               <th>{{ t('Status') }}</th>
+              <th style="text-align: right">{{ t('Aktionen') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -284,13 +534,13 @@ onMounted(() => {
                 <p v-if="item.isDirty && item.warnings.length" class="update-notes">
                   {{ item.warnings[0] }}
                 </p>
-                <p v-else-if="item.status === 'invalid' && (item.warnings.length || item.anomalies.length)" class="update-notes">
+                <p
+                  v-else-if="item.status === 'invalid' && (item.warnings.length || item.anomalies.length)"
+                  class="update-notes"
+                >
                   {{ item.warnings[0] || item.anomalies[0] }}
                 </p>
-                <details
-                  v-else-if="item.anomalies.length || item.warnings.length"
-                  class="update-anomalies"
-                >
+                <details v-else-if="item.anomalies.length || item.warnings.length" class="update-anomalies">
                   <summary>
                     <ChevronRight :size="12" />{{ t('Hinweise ({0})', [item.warnings.length + item.anomalies.length]) }}
                   </summary>
@@ -298,6 +548,67 @@ onMounted(() => {
                     <li v-for="(note, idx) in [...item.warnings, ...item.anomalies]" :key="idx">{{ note }}</li>
                   </ul>
                 </details>
+
+                <div v-if="expandedRecovery === item.name && item.canRecover" class="update-recovery-box">
+                  <p>
+                    {{
+                      item.isDirty
+                        ? t(
+                            'Achtung: Ein Reset verwirft lokale Dateiänderungen (z. B. eigene Patches). Soft-Reset setzt das Git-Arbeitsverzeichnis zurück; Hard-Reset löscht den Ordner und klont das Repository komplett neu.',
+                          )
+                        : t(
+                            'Repository weicht vom erwarteten Stand ab. Soft-Reset setzt Git zurück; Hard-Reset klont das Repository sauber neu.',
+                          )
+                    }}
+                  </p>
+                  <div class="update-recovery-options">
+                    <template v-if="confirmKey === `soft:${item.name}`">
+                      <button
+                        type="button"
+                        class="confirm-button"
+                        :disabled="isUpdateBusy || printLocked || !moonrakerOnline"
+                        @click="triggerRecover(item.name, false)"
+                      >
+                        {{ t('Soft-Reset jetzt ausführen?') }}
+                      </button>
+                      <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+                    </template>
+                    <button
+                      v-else
+                      type="button"
+                      class="confirm-button"
+                      :disabled="isUpdateBusy || printLocked || !moonrakerOnline"
+                      @click="requestConfirm(`soft:${item.name}`)"
+                    >
+                      <RotateCcw :size="12" />{{ t('Soft-Reset') }}
+                    </button>
+
+                    <template v-if="confirmKey === `hard:${item.name}`">
+                      <button
+                        type="button"
+                        class="danger-button"
+                        :disabled="isUpdateBusy || printLocked || !moonrakerOnline"
+                        @click="triggerRecover(item.name, true)"
+                      >
+                        {{ t('Hard-Reset (neu klonen) ausführen?') }}
+                      </button>
+                      <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+                    </template>
+                    <button
+                      v-else
+                      type="button"
+                      class="danger-button"
+                      :disabled="isUpdateBusy || printLocked || !moonrakerOnline"
+                      @click="requestConfirm(`hard:${item.name}`)"
+                    >
+                      <RotateCcw :size="12" />{{ t('Hard-Reset') }}
+                    </button>
+
+                    <button type="button" class="subtle-button" @click="expandedRecovery = ''; cancelConfirm()">
+                      {{ t('Schließen') }}
+                    </button>
+                  </div>
+                </div>
               </td>
               <td class="update-version">
                 <template v-if="item.type === 'system'">
@@ -317,6 +628,53 @@ onMounted(() => {
                   <Check v-else-if="item.status === 'up_to_date'" :size="11" />
                   {{ t(updateStatusLabel(item.status)) }}
                 </span>
+              </td>
+              <td class="update-actions-cell">
+                <div class="update-actions-row">
+                  <button
+                    v-if="hasNotesSource(item)"
+                    type="button"
+                    class="subtle-button"
+                    :title="t('Neuigkeiten und Änderungen anzeigen')"
+                    @click="openNotes(item)"
+                  >
+                    <FileText :size="12" />{{ t('Neuigkeiten') }}
+                  </button>
+
+                  <template v-if="item.canUpgrade">
+                    <template v-if="confirmKey === `upgrade:${item.name}`">
+                      <button
+                        type="button"
+                        class="primary-control"
+                        :disabled="isUpdateBusy || printLocked || !moonrakerOnline"
+                        @click="triggerUpgrade(item.name)"
+                      >
+                        <ArrowUpCircle :size="13" />{{ t('Jetzt aktualisieren?') }}
+                      </button>
+                      <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+                    </template>
+                    <button
+                      v-else
+                      type="button"
+                      class="primary-control"
+                      :disabled="isUpdateBusy || printLocked || !moonrakerOnline"
+                      :title="printLocked ? t('Während eines Drucks gesperrt.') : t('Komponente auf neue Version aktualisieren')"
+                      @click="requestConfirm(`upgrade:${item.name}`)"
+                    >
+                      <ArrowUpCircle :size="13" />{{ t('Aktualisieren') }}
+                    </button>
+                  </template>
+
+                  <button
+                    v-else-if="item.canRecover"
+                    type="button"
+                    class="confirm-button"
+                    :disabled="isUpdateBusy || printLocked || !moonrakerOnline"
+                    @click="expandedRecovery = expandedRecovery === item.name ? '' : item.name; cancelConfirm()"
+                  >
+                    <RotateCcw :size="12" />{{ t('Wiederherstellen') }}
+                  </button>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -457,5 +815,112 @@ onMounted(() => {
         </template>
       </div>
     </section>
+
+    <dialog ref="notesDialog" class="camera-dialog update-notes-dialog" @click.self="closeNotes">
+      <header>
+        <h2>{{ notesTarget }} · {{ t('Neuigkeiten & Änderungen') }}</h2>
+        <button type="button" class="icon-button" :aria-label="t('Schließen')" @click="closeNotes">
+          <X :size="18" />
+        </button>
+      </header>
+
+      <div v-if="loadingNotes" class="skeleton-block">
+        <span class="skeleton-bar lg" />
+        <span class="skeleton-bar" />
+        <span class="skeleton-bar sm" />
+        <span class="skeleton-bar" />
+      </div>
+
+      <div v-else-if="notesError" class="system-banner amber" role="alert">
+        <AlertTriangle :size="15" />
+        <span>{{ t(notesError) }}</span>
+      </div>
+
+      <div v-else-if="notesData" class="update-notes-body">
+        <div class="update-notes-meta">
+          <span class="update-version">
+            {{ notesData.version ?? '—' }}
+            <template v-if="notesData.remoteVersion && notesData.remoteVersion !== notesData.version">
+              → <span class="update-version-diff">{{ notesData.remoteVersion }}</span>
+            </template>
+          </span>
+          <div class="confirm-inline">
+            <a
+              v-if="notesData.compareUrl"
+              class="subtle-button"
+              :href="notesData.compareUrl"
+              target="_blank"
+              rel="noopener"
+            >
+              {{ t('Diff auf GitHub') }}<ArrowUpRight :size="13" />
+            </a>
+            <a
+              v-if="notesData.repoUrl"
+              class="subtle-button"
+              :href="notesData.repoUrl"
+              target="_blank"
+              rel="noopener"
+            >
+              {{ t('Auf GitHub öffnen') }}<ArrowUpRight :size="13" />
+            </a>
+          </div>
+        </div>
+
+        <div v-if="notesData.githubError" class="system-banner amber">
+          <AlertTriangle :size="14" />
+          <span>{{ t('Release-Notes von GitHub derzeit nicht abrufbar:') }} {{ notesData.githubError }}</span>
+        </div>
+
+        <template v-if="notesData.releases?.length">
+          <article v-for="rel in notesData.releases" :key="rel.tag" class="release-entry">
+            <div class="release-entry-head">
+              <strong>{{ rel.name }}</strong>
+              <span>
+                {{ formatDate(rel.publishedAt) }}
+                <template v-if="rel.url">
+                  ·
+                  <a :href="rel.url" target="_blank" rel="noopener" style="text-decoration: underline">GitHub</a>
+                </template>
+              </span>
+            </div>
+            <div v-if="rel.body" class="release-lines">
+              <template v-for="(blk, idx) in parseReleaseBlocks(rel.body)" :key="idx">
+                <h4 v-if="blk.kind === 'heading'">{{ blk.text }}</h4>
+                <ul v-else-if="blk.kind === 'list'">
+                  <li v-for="(li, j) in blk.items" :key="j">{{ li }}</li>
+                </ul>
+                <p v-else>{{ blk.text }}</p>
+              </template>
+            </div>
+          </article>
+        </template>
+
+        <div v-if="notesData.commits?.length">
+          <h3 style="margin-bottom: 8px">{{ t('Ausstehende Commits ({0})', [notesData.commitsCount]) }}</h3>
+          <ul class="commit-list">
+            <li v-for="c in notesData.commits" :key="c.sha" class="commit-item">
+              <span class="commit-sha">{{ c.sha }}</span>
+              <span class="commit-msg">{{ c.subject || c.message }}</span>
+              <span v-if="c.author" class="commit-author">{{ c.author }}</span>
+            </li>
+          </ul>
+        </div>
+
+        <div v-if="notesData.packages?.length">
+          <h3 style="margin-bottom: 8px">{{ t('Systempakete ({0})', [notesData.packages.length]) }}</h3>
+          <div class="pkg-chips">
+            <span v-for="pkg in notesData.packages" :key="pkg" class="pkg-chip">{{ pkg }}</span>
+          </div>
+        </div>
+
+        <p
+          v-if="!notesData.releases?.length && !notesData.commits?.length && !notesData.packages?.length && !notesData.githubError"
+          class="muted"
+          style="margin-top: 0"
+        >
+          {{ t('Keine detaillierten Release-Notes oder Commits für diese Komponente hinterlegt.') }}
+        </p>
+      </div>
+    </dialog>
   </div>
 </template>

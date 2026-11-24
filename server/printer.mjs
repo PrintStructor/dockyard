@@ -4,7 +4,7 @@ import { createLiveFeed } from './live.mjs'
 import { normalizeStatus } from './status.mjs'
 import { temperatureHistory } from './temperature.mjs'
 import { capabilities, commandFor, ControlError, sameOriginRequest } from './control.mjs'
-import { executeGcodeScript, AbortedCommandError } from './ws-rpc.mjs'
+import { executeGcodeScript, executeMoonrakerRpc, AbortedCommandError } from './ws-rpc.mjs'
 import {
   validateGcodeFilename,
   validateThumbnailPath,
@@ -27,6 +27,9 @@ import {
   evaluateMachineWriteGuard,
   normalizeSystemOverview,
   normalizeUpdateStatus,
+  validateUpdateName,
+  validateUpdateTarget,
+  filterRelevantReleases,
   validateLogPath,
   normalizeLogList,
   parseLogTail,
@@ -74,6 +77,122 @@ let currentJob = null
 let activeJobAbort = null
 let lastResult = null
 let jobSequence = 0
+let activeUpdateJob = null
+const releaseNotesCache = new Map()
+
+function serializeUpdateJob(job) {
+  if (!job) return null
+  return {
+    name: job.name,
+    mode: job.mode,
+    hard: Boolean(job.hard),
+    running: Boolean(job.running),
+    ok: job.ok ?? null,
+    error: job.error ?? null,
+    startedAt: job.startedAt,
+    finishedAt: job.finishedAt ?? null,
+    log: job.log.slice(-120),
+  }
+}
+
+async function fetchGithubReleases(owner, repoName) {
+  const key = `${owner}/${repoName}`
+  const cached = releaseNotesCache.get(key)
+  if (cached && Date.now() - cached.at < 15 * 60_000) return cached.data
+  const response = await fetch(
+    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/releases?per_page=15`,
+    {
+      headers: {
+        'User-Agent': 'stormtrooper-toolchanger-cockpit',
+        Accept: 'application/vnd.github+json',
+      },
+      signal: AbortSignal.timeout(6000),
+    },
+  )
+  if (!response.ok) throw new Error(`GitHub HTTP ${response.status}`)
+  const data = await response.json()
+  if (releaseNotesCache.size > 32) releaseNotesCache.clear()
+  releaseNotesCache.set(key, { at: Date.now(), data })
+  return data
+}
+
+function startUpdateJob({ name, mode, hard = false }) {
+  if (activeUpdateJob?.running) {
+    throw new ControlError('Ein Update- oder Recovery-Vorgang läuft bereits.', 409)
+  }
+  const job = {
+    name,
+    mode,
+    hard: Boolean(hard),
+    running: true,
+    ok: null,
+    error: null,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    log: [],
+  }
+  activeUpdateJob = job
+
+  const pushLog = (message, complete = false) => {
+    if (message) {
+      job.log.push({ time: Date.now() / 1000, message })
+      if (job.log.length > 200) job.log.shift()
+    }
+    live.emitUpdate({
+      application: name,
+      mode,
+      message,
+      complete,
+      running: job.running,
+      ok: job.ok,
+      time: Date.now() / 1000,
+    })
+  }
+
+  const method = mode === 'recover' ? 'machine.update.recover' : 'machine.update.upgrade'
+  const params = mode === 'recover' ? { name, hard: Boolean(hard) } : { name }
+
+  pushLog(
+    mode === 'recover'
+      ? `${name}: ${hard ? 'Hard-Reset' : 'Soft-Reset'} gestartet …`
+      : `${name}: Update gestartet …`,
+  )
+
+  executeMoonrakerRpc({
+    printer,
+    method,
+    params,
+    timeoutMs: 900_000,
+    onNotify(data) {
+      if (data.method === 'notify_update_response') {
+        const info = data.params?.[0]
+        if (info?.message) pushLog(String(info.message), Boolean(info.complete))
+      }
+    },
+  })
+    .then(() => {
+      job.running = false
+      job.ok = true
+      job.finishedAt = new Date().toISOString()
+      pushLog(`${name}: abgeschlossen.`, true)
+    })
+    .catch(err => {
+      const restartedSelf =
+        name === 'moonraker' && /(disconnect|unterbrochen|beendet|geschlossen)/i.test(err?.message || '')
+      job.running = false
+      job.ok = restartedSelf
+      job.error = restartedSelf ? null : err?.message || 'Update fehlgeschlagen.'
+      job.finishedAt = new Date().toISOString()
+      pushLog(
+        restartedSelf
+          ? 'Moonraker startet nach dem Update neu — Verbindung wird wiederhergestellt.'
+          : `Fehler: ${job.error}`,
+        true,
+      )
+    })
+
+  return serializeUpdateJob(job)
+}
 
 function serializeJob(job) {
   if (!job) return null
@@ -563,7 +682,7 @@ export function printerMiddleware(req, res, next) {
   const camera = path.match(/^\/api\/camera\/(tophat|heatbed)(?:\/(stream|webrtc))?$/)
   const printRoute = path.match(/^\/api\/print\/(files|metadata|thumbnail|model)$/)
   const systemRoute = path.match(
-    /^\/api\/system\/(overview|calibration|calibration\/shaketune-image|config\/list|config\/file|config\/save|service\/restart|updates|updates\/refresh|logs\/list|logs\/tail|logs\/download)$/,
+    /^\/api\/system\/(overview|calibration|calibration\/shaketune-image|config\/list|config\/file|config\/save|service\/restart|updates|updates\/refresh|updates\/notes|updates\/upgrade|updates\/recover|logs\/list|logs\/tail|logs\/download)$/,
   )
   if (
     path !== '/api/status' &&
@@ -586,7 +705,9 @@ export function printerMiddleware(req, res, next) {
     camera?.[2] === 'webrtc' ||
     systemSub === 'config/save' ||
     systemSub === 'service/restart' ||
-    systemSub === 'updates/refresh'
+    systemSub === 'updates/refresh' ||
+    systemSub === 'updates/upgrade' ||
+    systemSub === 'updates/recover'
   if (req.method !== (write ? 'POST' : 'GET')) return json(405, { error: 'Methode nicht erlaubt.' })
   if (write && !sameOriginRequest(req)) {
     return json(403, { error: 'Befehle sind nur aus dieser lokalen Oberfläche erlaubt.' })
@@ -847,7 +968,48 @@ export function printerMiddleware(req, res, next) {
           })
           if (!response.ok) throw new Error('Update-Status nicht erreichbar.')
           const data = await response.json()
-          return json(200, normalizeUpdateStatus(data?.result ?? {}))
+          return json(200, {
+            ...normalizeUpdateStatus(data?.result ?? {}),
+            activeJob: serializeUpdateJob(activeUpdateJob),
+          })
+        }
+
+        if (systemSub === 'updates/notes') {
+          const name = validateUpdateName(parsedUrl.searchParams.get('name'))
+          if (!name) throw new ControlError('Ungültiger Komponentenname.', 400)
+          const response = await fetch(`${printer}/machine/update/status`, {
+            signal: AbortSignal.timeout(8000),
+          })
+          if (!response.ok) throw new Error('Update-Status nicht erreichbar.')
+          const data = await response.json()
+          const normalized = normalizeUpdateStatus(data?.result ?? {})
+          const item = normalized.items.find(entry => entry.name === name)
+          if (!item) throw new ControlError('Komponente im Update-Manager nicht gefunden.', 404)
+
+          let releases = []
+          let githubError = null
+          if (item.owner && item.repoName) {
+            try {
+              const rawReleases = await fetchGithubReleases(item.owner, item.repoName)
+              releases = filterRelevantReleases(rawReleases, item.version, item.remoteVersion)
+            } catch (err) {
+              githubError = err?.message || 'Release-Notes derzeit nicht erreichbar.'
+            }
+          }
+
+          return json(200, {
+            name: item.name,
+            type: item.type,
+            version: item.version,
+            remoteVersion: item.remoteVersion,
+            repoUrl: item.repoUrl,
+            compareUrl: item.compareUrl,
+            commits: item.commitsBehind,
+            commitsCount: item.commitsBehindCount,
+            packages: item.packageList,
+            releases,
+            githubError,
+          })
         }
 
         if (systemSub === 'updates/refresh') {
@@ -861,7 +1023,39 @@ export function printerMiddleware(req, res, next) {
           })
           if (!response.ok) throw new Error(`Update-Prüfung fehlgeschlagen (HTTP ${response.status}).`)
           const data = await response.json()
-          return json(200, normalizeUpdateStatus(data?.result ?? {}))
+          return json(200, {
+            ...normalizeUpdateStatus(data?.result ?? {}),
+            activeJob: serializeUpdateJob(activeUpdateJob),
+          })
+        }
+
+        if (systemSub === 'updates/upgrade') {
+          const payload = await readJson(req, 4000)
+          await probeMachineWriteGuard(false)
+          const statusRes = await fetch(`${printer}/machine/update/status`, { signal: AbortSignal.timeout(8000) })
+          if (!statusRes.ok) throw new Error('Update-Status nicht erreichbar.')
+          const statusJson = await statusRes.json()
+          if (statusJson?.result?.busy) throw new ControlError('Moonraker führt bereits ein Update aus.', 409)
+          const target = validateUpdateTarget(payload?.name, statusJson?.result?.version_info ?? {}, 'upgrade')
+          const job = startUpdateJob({ name: target.name, mode: 'upgrade' })
+          return json(202, { accepted: true, job, message: `${target.name}: Update gestartet …` })
+        }
+
+        if (systemSub === 'updates/recover') {
+          const payload = await readJson(req, 4000)
+          await probeMachineWriteGuard(false)
+          const statusRes = await fetch(`${printer}/machine/update/status`, { signal: AbortSignal.timeout(8000) })
+          if (!statusRes.ok) throw new Error('Update-Status nicht erreichbar.')
+          const statusJson = await statusRes.json()
+          if (statusJson?.result?.busy) throw new ControlError('Moonraker führt bereits ein Update aus.', 409)
+          const target = validateUpdateTarget(payload?.name, statusJson?.result?.version_info ?? {}, 'recover')
+          const hard = payload?.hard === true
+          const job = startUpdateJob({ name: target.name, mode: 'recover', hard })
+          return json(202, {
+            accepted: true,
+            job,
+            message: `${target.name}: ${hard ? 'Hard-Reset' : 'Soft-Reset'} gestartet …`,
+          })
         }
 
         if (systemSub === 'logs/list') {

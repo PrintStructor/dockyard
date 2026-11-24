@@ -17,6 +17,7 @@ const props = defineProps({
   send: { type: Function, required: true },
   subtab: { type: String, default: 'overview' },
   time: { type: String, default: '' },
+  updateEvent: { type: Object, default: null },
 })
 
 const emit = defineEmits(['update:subtab', 'open-console', 'refresh'])
@@ -197,6 +198,7 @@ onBeforeUnmount(() => {
       v-else
       :print-locked="printLocked"
       :moonraker-online="moonrakerOnline"
+      :update-event="updateEvent"
       @moonraker-status="handleMoonrakerStatus"
     />
   </section>

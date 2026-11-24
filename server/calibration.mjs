@@ -242,8 +242,29 @@ export function validateShakeTuneImagePath(rawPath) {
 }
 
 const finite = value => (typeof value === 'number' && Number.isFinite(value) ? value : null)
+const parseNum = value => {
+  if (value == null || value === '') return null
+  const num = Number(value)
+  return Number.isFinite(num) ? num : null
+}
+const finitePair = pair =>
+  Array.isArray(pair) && pair.length >= 2 && parseNum(pair[0]) != null && parseNum(pair[1]) != null
+    ? [parseNum(pair[0]), parseNum(pair[1])]
+    : null
 
-function normalizeBedMesh(mesh) {
+function normalizeBedMesh(mesh, meshConfig = null) {
+  const cfg = meshConfig && typeof meshConfig === 'object'
+    ? {
+        probeCount: finitePair(meshConfig.probe_count),
+        meshMin: finitePair(meshConfig.mesh_min),
+        meshMax: finitePair(meshConfig.mesh_max),
+        zeroReference: finitePair(meshConfig.zero_reference_position),
+        algorithm: typeof meshConfig.algorithm === 'string' ? meshConfig.algorithm : null,
+        fadeStart: parseNum(meshConfig.fade_start),
+        fadeEnd: parseNum(meshConfig.fade_end),
+      }
+    : null
+
   const profileName = typeof mesh?.profile_name === 'string' ? mesh.profile_name.trim() : ''
   const rawMatrix = Array.isArray(mesh?.probed_matrix) && mesh.probed_matrix.length > 0
     ? mesh.probed_matrix
@@ -266,6 +287,7 @@ function normalizeBedMesh(mesh) {
       meshMin: Array.isArray(mesh?.mesh_min) ? mesh.mesh_min : null,
       meshMax: Array.isArray(mesh?.mesh_max) ? mesh.mesh_max : null,
       matrix: [],
+      config: cfg,
     }
   }
 
@@ -285,6 +307,7 @@ function normalizeBedMesh(mesh) {
     meshMin: Array.isArray(mesh?.mesh_min) ? mesh.mesh_min : null,
     meshMax: Array.isArray(mesh?.mesh_max) ? mesh.mesh_max : null,
     matrix,
+    config: cfg,
   }
 }
 
@@ -362,10 +385,13 @@ export function normalizeCalibrationData({ rawStatus = {}, configFiles = [] } = 
     nudgeXy,
     beaconZ,
     beaconBatch,
-    bedMesh: normalizeBedMesh(rawStatus?.bed_mesh),
+    bedMesh: normalizeBedMesh(rawStatus?.bed_mesh, settings.bed_mesh),
     qgl: {
       configured: !!settings.quad_gantry_level,
       applied: rawStatus?.quad_gantry_level?.applied === true,
+      retries: parseNum(settings.quad_gantry_level?.retries),
+      retryTolerance: parseNum(settings.quad_gantry_level?.retry_tolerance),
+      horizontalMoveZ: parseNum(settings.quad_gantry_level?.horizontal_move_z),
     },
     beacon: {
       model: typeof rawStatus?.beacon?.model === 'string' ? rawStatus.beacon.model : null,
@@ -376,13 +402,13 @@ export function normalizeCalibrationData({ rawStatus = {}, configFiles = [] } = 
     inputShaper: {
       x: {
         type: typeof shaper.shaper_type_x === 'string' ? shaper.shaper_type_x : (shaper.shaper_type ?? null),
-        freq: finite(Number(shaper.shaper_freq_x)),
-        damping: finite(Number(shaper.damping_ratio_x)),
+        freq: parseNum(shaper.shaper_freq_x),
+        damping: parseNum(shaper.damping_ratio_x),
       },
       y: {
         type: typeof shaper.shaper_type_y === 'string' ? shaper.shaper_type_y : (shaper.shaper_type ?? null),
-        freq: finite(Number(shaper.shaper_freq_y)),
-        damping: finite(Number(shaper.damping_ratio_y)),
+        freq: parseNum(shaper.shaper_freq_y),
+        damping: parseNum(shaper.damping_ratio_y),
       },
     },
     capabilities: {

@@ -2,7 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { EditorState, Compartment } from '@codemirror/state'
 import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
-import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
+import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
+import { indentUnit } from '@codemirror/language'
 import { search as cmSearch, searchKeymap } from '@codemirror/search'
 import {
   Search,
@@ -148,6 +149,8 @@ function mountEditor() {
       highlightActiveLine(),
       highlightActiveLineGutter(),
       history(),
+      EditorState.tabSize.of(4),
+      indentUnit.of('    '),
       cmSearch({ top: true }),
       klipperLanguage,
       ...stormtrooperEditorTheme,
@@ -156,7 +159,7 @@ function mountEditor() {
         EditorView.editable.of(!effectiveReadonly.value),
       ]),
       saveShortcut,
-      keymap.of([...defaultKeymap, ...historyKeymap, ...searchKeymap]),
+      keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap, ...searchKeymap]),
       EditorView.updateListener.of(update => {
         if (update.docChanged && !applyingExternal) {
           store.setContent(update.state.doc.toString())

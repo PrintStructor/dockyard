@@ -389,10 +389,10 @@ input::placeholder{color:var(--muted);opacity:1}.jog-heading{flex-wrap:wrap}.jog
 .config-editor-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .config-editor-actions .primary-control{min-height:34px;padding:7px 12px;font-size:12px}
 .config-editor-actions .subtle-button{min-height:34px;padding:7px 10px;font-size:12px}
-.status-pill{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:5px;font-size:11px;font-weight:500;white-space:nowrap}
+.status-pill{display:inline-flex;align-items:center;gap:5px;padding:3px 7px;border-radius:5px;font-size:11px;font-weight:500;line-height:1.25;margin:0;white-space:nowrap}
 .status-pill.amber{background:var(--amber-tint);border:1px solid var(--amber-line);color:var(--amber)}
 .status-pill.lime{background:var(--lime-tint);border:1px solid var(--lime-line);color:var(--lime)}
-.status-pill.muted{background:var(--surface-raised);border:1px solid var(--line);color:var(--muted)}
+.status-pill.muted{background:var(--surface-raised);border:1px solid var(--line);color:var(--muted);margin-top:0;font-size:11px;line-height:1.25}
 .status-pill.danger{background:var(--danger-tint);border:1px solid var(--danger-line);color:var(--danger)}
 .config-editor-notice{padding:10px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;font-size:12px;flex-wrap:wrap}
 .config-editor-notice.amber{background:var(--amber-tint);color:var(--amber);border-bottom-color:var(--amber-line)}
@@ -427,7 +427,7 @@ input::placeholder{color:var(--muted);opacity:1}.jog-heading{flex-wrap:wrap}.jog
 .cal-action-card p{font-size:11px;color:var(--muted);line-height:1.5}
 .cal-action-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .cal-tool-select{width:96px;flex-shrink:0}
-.cal-two-col{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:20px;align-items:start}
+.cal-two-col{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:20px;align-items:stretch}
 .mesh-stats-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
 .mesh-stat-box{border:1px solid var(--line);border-radius:8px;background:var(--surface-subtle);padding:9px 11px;display:flex;flex-direction:column;gap:3px}
 .mesh-stat-box span{font-size:10px;color:var(--muted)}
@@ -469,6 +469,33 @@ input::placeholder{color:var(--muted);opacity:1}.jog-heading{flex-wrap:wrap}.jog
 .update-anomalies summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:4px}
 .update-anomalies summary::-webkit-details-marker{display:none}
 .update-anomalies ul{margin:6px 0 0;padding-left:16px;line-height:1.5;overflow-wrap:anywhere}
+.update-actions-cell{white-space:nowrap;text-align:right}
+.update-actions-row{display:inline-flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}
+.update-actions-row .subtle-button,.update-actions-row .confirm-button,.update-actions-row .danger-button,.update-actions-row .primary-control{padding:5px 9px;min-height:30px;font-size:11.5px}
+.update-recovery-box{margin-top:10px;padding:11px 12px;border:1px solid var(--amber-line);border-radius:8px;background:var(--amber-tint);display:flex;flex-direction:column;gap:8px;max-width:560px}
+.update-recovery-box p{font-size:11.5px;line-height:1.5;color:var(--amber)}
+.update-recovery-options{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.update-job-panel{margin-bottom:14px;border:1px solid var(--line);border-radius:10px;background:var(--surface-deep);overflow:hidden}
+.update-job-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line-subtle);font-size:12px}
+.update-job-head strong{display:inline-flex;align-items:center;gap:7px;font-weight:500}
+.update-job-log{max-height:220px;overflow:auto;padding:10px 14px;font:11.5px/1.55 var(--font-mono);color:#d6e0e2;margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.update-notes-dialog{width:min(760px,94vw)}
+.update-notes-body{max-height:68dvh;overflow:auto;display:flex;flex-direction:column;gap:16px;padding-right:4px}
+.update-notes-meta{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding-bottom:12px;border-bottom:1px solid var(--line)}
+.release-entry{border:1px solid var(--line);border-radius:10px;background:var(--surface-deep);padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.release-entry-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.release-entry-head strong{font-size:14px;font-weight:600;color:var(--lime)}
+.release-entry-head span{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.release-lines{display:flex;flex-direction:column;gap:5px;font-size:12.5px;line-height:1.55;color:#dbe4e6}
+.release-lines h4{margin:6px 0 2px;font-size:12.5px;font-weight:600;color:var(--text)}
+.release-lines ul{margin:2px 0;padding-left:18px;display:flex;flex-direction:column;gap:3px}
+.commit-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.commit-item{display:flex;align-items:baseline;gap:10px;padding:8px 10px;border:1px solid var(--line-subtle);border-radius:7px;background:var(--surface-deep);font-size:12px}
+.commit-sha{font-family:var(--font-mono);font-size:11px;color:var(--lime);flex-shrink:0}
+.commit-msg{flex:1;min-width:0;overflow-wrap:anywhere}
+.commit-author{font-size:11px;color:var(--muted);flex-shrink:0}
+.pkg-chips{display:flex;flex-wrap:wrap;gap:6px}
+.pkg-chip{padding:3px 8px;border:1px solid var(--line);border-radius:5px;background:var(--surface-deep);font-family:var(--font-mono);font-size:11px}
 .log-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .log-rotated-select{width:230px;flex-shrink:0}
 .log-filter-input{flex:1;min-width:190px;display:flex;align-items:center;gap:8px;background:var(--surface-deep);border:1px solid var(--line-strong);border-radius:7px;padding:0 10px;min-height:36px}
@@ -514,4 +541,6 @@ input::placeholder{color:var(--muted);opacity:1}.jog-heading{flex-wrap:wrap}.jog
   .update-table tr{padding:11px 12px;border-bottom:1px solid var(--line-subtle);display:flex;flex-direction:column;gap:6px}
   .update-table tr:last-child{border-bottom:0}
   .update-table td{padding:0;border:0}
+  .update-actions-cell{text-align:left;white-space:normal}
+  .update-actions-row{justify-content:flex-start}
 }

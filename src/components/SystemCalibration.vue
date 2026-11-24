@@ -568,6 +568,36 @@ onMounted(() => {
           </span>
         </div>
 
+        <dl v-if="data?.bedMesh?.config || data?.qgl?.configured" class="measurements" style="margin-top: 0">
+          <div v-if="data?.bedMesh?.config?.probeCount">
+            <dt>{{ t('Messraster') }}</dt>
+            <dd>
+              {{ data.bedMesh.config.probeCount[0] }} × {{ data.bedMesh.config.probeCount[1] }}
+              <template v-if="data.bedMesh.config.algorithm"> · {{ data.bedMesh.config.algorithm }}</template>
+            </dd>
+          </div>
+          <div v-if="data?.bedMesh?.config?.meshMin && data?.bedMesh?.config?.meshMax">
+            <dt>{{ t('Messbereich') }}</dt>
+            <dd>
+              {{ number(data.bedMesh.config.meshMin[0], 0) }}/{{ number(data.bedMesh.config.meshMin[1], 0) }}
+              → {{ number(data.bedMesh.config.meshMax[0], 0) }}/{{ number(data.bedMesh.config.meshMax[1], 0) }} mm
+            </dd>
+          </div>
+          <div v-if="data?.bedMesh?.config?.zeroReference">
+            <dt>{{ t('Nullreferenz') }}</dt>
+            <dd>
+              X {{ number(data.bedMesh.config.zeroReference[0], 1) }} / Y {{ number(data.bedMesh.config.zeroReference[1], 1) }} mm
+            </dd>
+          </div>
+          <div v-if="data?.qgl?.retryTolerance != null">
+            <dt>{{ t('QGL-Toleranz') }}</dt>
+            <dd>
+              {{ number(data.qgl.retryTolerance, 4) }} mm
+              <template v-if="data.qgl.retries != null"> · {{ t('max. {0}×', [data.qgl.retries]) }}</template>
+            </dd>
+          </div>
+        </dl>
+
         <div class="cal-action-row">
           <template v-if="confirmKey === 'qgl'">
             <button type="button" class="confirm-button" @click="runAction({ action: 'qgl' }, { capKey: 'qgl', requireHomed: true })">

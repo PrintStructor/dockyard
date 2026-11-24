@@ -310,6 +310,37 @@ export function normalizeSystemOverview({ procStats = null, systemInfo = null, s
 }
 
 const UPDATE_STATUS_ORDER = { dirty: 0, invalid: 1, outdated: 2, up_to_date: 3 }
+const GITHUB_SLUG_RE = /^[A-Za-z0-9._-]+$/
+
+export function validateUpdateName(raw) {
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim()
+  if (!trimmed || trimmed !== raw || trimmed.length > 100) return null
+  if (!/^[A-Za-z0-9._-]+$/.test(trimmed)) return null
+  return trimmed
+}
+
+function githubRepoUrl(owner, repoName, remoteUrl) {
+  if (owner && repoName && GITHUB_SLUG_RE.test(owner) && GITHUB_SLUG_RE.test(repoName)) {
+    return `https://github.com/${owner}/${repoName}`
+  }
+  if (typeof remoteUrl === 'string') {
+    const match = remoteUrl.match(/^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?\/?$/)
+    if (match) return `https://github.com/${match[1]}/${match[2]}`
+  }
+  return null
+}
+
+function normalizeCommitEntry(commit) {
+  if (!commit || typeof commit !== 'object') return null
+  return {
+    sha: typeof commit.sha === 'string' ? commit.sha.slice(0, 10) : '',
+    author: typeof commit.author === 'string' ? commit.author : '',
+    date: commit.date ?? null,
+    subject: typeof commit.subject === 'string' ? commit.subject : '',
+    message: typeof commit.message === 'string' ? commit.message : '',
+  }
+}
 
 export function normalizeUpdateStatus(raw = {}) {
   const versionInfo = raw?.version_info && typeof raw.version_info === 'object' ? raw.version_info : {}
@@ -322,6 +353,16 @@ export function normalizeUpdateStatus(raw = {}) {
     const packageCount = Number.isFinite(entry.package_count) ? entry.package_count : 0
     const version = typeof entry.version === 'string' ? entry.version : null
     const remoteVersion = typeof entry.remote_version === 'string' ? entry.remote_version : null
+    const owner = typeof entry.owner === 'string' && GITHUB_SLUG_RE.test(entry.owner) ? entry.owner : null
+    const repoName = typeof entry.repo_name === 'string' && GITHUB_SLUG_RE.test(entry.repo_name) ? entry.repo_name : null
+    const repoUrl = githubRepoUrl(owner, repoName, entry.remote_url)
+    const currentHash = typeof entry.current_hash === 'string' && entry.current_hash !== '?' ? entry.current_hash : null
+    const remoteHash = typeof entry.remote_hash === 'string' && entry.remote_hash !== '?' ? entry.remote_hash : null
+    const compareUrl =
+      repoUrl && currentHash && remoteHash && currentHash !== remoteHash
+        ? `${repoUrl}/compare/${currentHash.slice(0, 10)}...${remoteHash.slice(0, 10)}`
+        : null
+
     const hasVersionDiff =
       type === 'system'
         ? packageCount > 0
@@ -332,17 +373,38 @@ export function normalizeUpdateStatus(raw = {}) {
     else if (corrupt || !isValid) status = 'invalid'
     else if (hasVersionDiff) status = 'outdated'
 
+    const commitsBehind = Array.isArray(entry.commits_behind)
+      ? entry.commits_behind.map(normalizeCommitEntry).filter(Boolean).slice(0, 40)
+      : []
+    const commitsBehindCount = Number.isFinite(entry.commits_behind_count)
+      ? entry.commits_behind_count
+      : commitsBehind.length
+    const packageList = Array.isArray(entry.package_list)
+      ? entry.package_list.filter(p => typeof p === 'string').slice(0, 200)
+      : []
+
     return {
       name: entry.name || key,
       type,
       branch: typeof entry.branch === 'string' ? entry.branch : null,
+      owner,
+      repoName,
+      repoUrl,
+      compareUrl,
       version,
       remoteVersion,
+      rollbackVersion: typeof entry.rollback_version === 'string' ? entry.rollback_version : null,
+      fullVersion: typeof entry.full_version_string === 'string' ? entry.full_version_string : null,
       packageCount,
+      packageList,
+      commitsBehind,
+      commitsBehindCount,
       isDirty,
       isValid,
       corrupt,
       status,
+      canUpgrade: status === 'outdated' && !isDirty && isValid && !corrupt,
+      canRecover: type === 'git_repo' && (isDirty || !isValid || corrupt),
       warnings: Array.isArray(entry.warnings) ? entry.warnings.filter(Boolean) : [],
       anomalies: Array.isArray(entry.anomalies) ? entry.anomalies.filter(Boolean) : [],
     }
@@ -366,6 +428,101 @@ export function normalizeUpdateStatus(raw = {}) {
     summary,
     items,
   }
+}
+
+export function validateUpdateTarget(rawName, versionInfo = {}, mode = 'upgrade') {
+  const name = validateUpdateName(rawName)
+  if (!name) throw new ControlError('Ungültiger Komponentenname.', 400)
+  const rawEntry = versionInfo && typeof versionInfo === 'object' ? versionInfo[name] : null
+  if (!rawEntry || typeof rawEntry !== 'object') {
+    throw new ControlError('Komponente im Update-Manager nicht gefunden.', 404)
+  }
+  const normalized = normalizeUpdateStatus({ version_info: { [name]: rawEntry } }).items[0]
+
+  if (mode === 'upgrade') {
+    if (normalized.isDirty || !normalized.isValid || normalized.corrupt) {
+      throw new ControlError(
+        'Komponente ist lokal geändert oder abweichend. Bitte zuerst prüfen oder gezielt wiederherstellen.',
+        409,
+      )
+    }
+    if (normalized.status !== 'outdated') {
+      throw new ControlError('Für diese Komponente liegt kein Update vor.', 409)
+    }
+    return normalized
+  }
+
+  if (mode === 'recover') {
+    if (normalized.type !== 'git_repo') {
+      throw new ControlError('Soft-/Hard-Reset ist nur für Git-Repositories verfügbar.', 400)
+    }
+    if (!normalized.canRecover) {
+      throw new ControlError('Dieses Repository befindet sich bereits in einem sauberen Zustand.', 409)
+    }
+    return normalized
+  }
+
+  throw new ControlError('Unbekannter Update-Modus.', 400)
+}
+
+function parseSemverTuple(tag) {
+  if (typeof tag !== 'string') return null
+  const m = tag.trim().match(/^v?(\d+)\.(\d+)(?:\.(\d+))?(?:[-.](.+))?$/i)
+  if (!m) return null
+  return {
+    major: Number(m[1]),
+    minor: Number(m[2]),
+    patch: Number(m[3] ?? 0),
+    pre: m[4] || '',
+  }
+}
+
+function compareSemver(a, b) {
+  if (a.major !== b.major) return a.major - b.major
+  if (a.minor !== b.minor) return a.minor - b.minor
+  if (a.patch !== b.patch) return a.patch - b.patch
+  if (a.pre === b.pre) return 0
+  if (!a.pre) return 1
+  if (!b.pre) return -1
+  return a.pre.localeCompare(b.pre)
+}
+
+export function filterRelevantReleases(releases = [], currentVersion = null, remoteVersion = null) {
+  if (!Array.isArray(releases)) return []
+  const remoteIsPre = typeof remoteVersion === 'string' && /-(?:rc|alpha|beta|dev|pre)/i.test(remoteVersion)
+  const curTuple = parseSemverTuple(currentVersion)
+  const remTuple = parseSemverTuple(remoteVersion)
+
+  const usable = releases.filter(rel => {
+    if (!rel || typeof rel !== 'object' || rel.draft) return false
+    if (rel.prerelease && !remoteIsPre) return false
+    return typeof rel.tag_name === 'string' && rel.tag_name.length > 0
+  })
+
+  let picked = usable
+  if (curTuple && remTuple && compareSemver(remTuple, curTuple) > 0) {
+    const between = usable.filter(rel => {
+      const tup = parseSemverTuple(rel.tag_name)
+      if (!tup) return false
+      return compareSemver(tup, curTuple) > 0 && compareSemver(tup, remTuple) <= 0
+    })
+    if (between.length > 0) picked = between
+    else picked = usable.slice(0, 3)
+  } else {
+    picked = usable.slice(0, 3)
+  }
+
+  return picked.slice(0, 6).map(rel => {
+    const rawBody = typeof rel.body === 'string' ? rel.body.trim() : ''
+    const body = rawBody.length > 16_000 ? `${rawBody.slice(0, 16_000)}\n\n…` : rawBody
+    return {
+      tag: rel.tag_name,
+      name: typeof rel.name === 'string' && rel.name.trim() ? rel.name.trim() : rel.tag_name,
+      publishedAt: typeof rel.published_at === 'string' ? rel.published_at : null,
+      url: typeof rel.html_url === 'string' && rel.html_url.startsWith('https://github.com/') ? rel.html_url : null,
+      body,
+    }
+  })
 }
 
 export function validateLogPath(rawPath) {

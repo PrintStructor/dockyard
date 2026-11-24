@@ -273,3 +273,47 @@ test('normalizeCalibrationData extracts 6x6 matrices, mesh stats, beacon, shaper
   assert.equal(emptyMesh.bedMesh.active, false)
   assert.deepEqual(emptyMesh.bedMesh.matrix, [])
 })
+
+test('normalizeCalibrationData exposes bedMesh and QGL config parameters and avoids coercing missing shaper to 0', () => {
+  const data = normalizeCalibrationData({
+    rawStatus: {
+      bed_mesh: { profile_name: '', probed_matrix: [[]], mesh_matrix: [[]] },
+      quad_gantry_level: { applied: false },
+      configfile: {
+        settings: {
+          bed_mesh: {
+            probe_count: [21, 21],
+            mesh_min: [25, 35],
+            mesh_max: [330, 335],
+            zero_reference_position: [177.5, 177.5],
+            algorithm: 'bicubic',
+            fade_start: 0.6,
+            fade_end: 5,
+          },
+          quad_gantry_level: {
+            retries: 5,
+            retry_tolerance: 0.0075,
+            horizontal_move_z: 2,
+          },
+          input_shaper: {},
+        },
+      },
+    },
+    configFiles: [],
+  })
+
+  assert.deepEqual(data.bedMesh.config, {
+    probeCount: [21, 21],
+    meshMin: [25, 35],
+    meshMax: [330, 335],
+    zeroReference: [177.5, 177.5],
+    algorithm: 'bicubic',
+    fadeStart: 0.6,
+    fadeEnd: 5,
+  })
+  assert.equal(data.qgl.retries, 5)
+  assert.equal(data.qgl.retryTolerance, 0.0075)
+  assert.equal(data.qgl.horizontalMoveZ, 2)
+  assert.equal(data.inputShaper.x.freq, null)
+  assert.equal(data.inputShaper.x.damping, null)
+})

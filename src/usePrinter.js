@@ -1,6 +1,6 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 
-export function usePrinter({ onConsole, onReconnect } = {}) {
+export function usePrinter({ onConsole, onUpdate, onReconnect } = {}) {
   const status = ref(null)
   const connection = ref('connecting')
   const error = ref('')
@@ -63,6 +63,14 @@ export function usePrinter({ onConsole, onReconnect } = {}) {
         onConsole?.(JSON.parse(event.data))
       } catch {
         // Ignore malformed console events.
+      }
+    })
+    events.addEventListener('update', event => {
+      liveAt = Date.now()
+      try {
+        onUpdate?.(JSON.parse(event.data))
+      } catch {
+        // Ignore malformed update events.
       }
     })
     events.addEventListener('offline', () => {

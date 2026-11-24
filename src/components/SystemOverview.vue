@@ -2,7 +2,6 @@
 import { computed, onBeforeUnmount, ref } from 'vue'
 import {
   AlertTriangle,
-  Box,
   Check,
   Power,
   RefreshCw,
@@ -388,20 +387,6 @@ const hostCaption = computed(() => {
           </div>
         </div>
         <p v-else class="muted" style="margin-top: 0">{{ t('Keine verwalteten Systemdienste gemeldet.') }}</p>
-      </article>
-
-      <article class="model-note">
-        <Box :size="20" />
-        <div>
-          <h2>{{ t('CAD-Stand dieser Vorschau') }}</h2>
-          <p>
-            {{
-              t(
-                'Die Gesamtbaugruppe zeigt die älteren Docks ohne KNOMI und das ältere Shuttle am Toolhead. Die Darstellung ist eine CAD-Referenz; Werkzeugpositionen werden nicht aus dem laufenden Druck übernommen.',
-              )
-            }}
-          </p>
-        </div>
       </article>
     </div>
   </div>

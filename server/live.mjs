@@ -112,6 +112,18 @@ export function createLiveFeed({
           if (message && clients.size) {
             emit('console', { time: Date.now() / 1000, type: 'response', message })
           }
+        } else if (data.method === 'notify_update_response') {
+          const info = data.params?.[0]
+          if (info && clients.size) {
+            emit('update', {
+              application: info.application ?? null,
+              message: typeof info.message === 'string' ? info.message : '',
+              complete: Boolean(info.complete),
+              time: Date.now() / 1000,
+            })
+          }
+        } else if (data.method === 'notify_update_refreshed') {
+          if (clients.size) emit('update', { refreshed: true, time: Date.now() / 1000 })
         } else if (
           ['notify_klippy_disconnected', 'notify_klippy_shutdown', 'notify_klippy_ready'].includes(data.method)
         ) {
@@ -187,6 +199,9 @@ export function createLiveFeed({
     },
     emitConsole(entry) {
       if (clients.size && entry?.message) emit('console', entry)
+    },
+    emitUpdate(payload) {
+      if (clients.size && payload) emit('update', payload)
     },
     close() {
       for (const res of clients) res.end()

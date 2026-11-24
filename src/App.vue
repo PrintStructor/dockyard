@@ -48,8 +48,12 @@ const languageOptions = [
 ]
 
 const consoleStore = useConsole()
+const lastUpdateEvent = ref(null)
 const { status, connection, error, updating, refresh } = usePrinter({
   onConsole: entry => consoleStore.pushEntry(entry),
+  onUpdate: payload => {
+    lastUpdateEvent.value = { ...payload, _seq: Date.now() + Math.random() }
+  },
   onReconnect: () => {
     if (consoleStore.loaded.value) consoleStore.refresh()
   },
@@ -827,6 +831,7 @@ async function acknowledgeUncertain() {
         :send="send"
         :subtab="systemSubtab"
         :time="time"
+        :update-event="lastUpdateEvent"
         @update:subtab="systemSubtab = $event"
         @open-console="tab = 'console'"
         @refresh="refresh"

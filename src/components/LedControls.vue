@@ -107,103 +107,110 @@ function initialize() {
 
 <template>
   <section class="initialize-control" :aria-label="t('Vorbereitung & Toolchanger')">
-    <h3><Wrench :size="15" />{{ t('Maschine & Vorbereitung') }}</h3>
-    <div class="prep-actions">
-      <button
-        class="subtle-button"
-        :class="{ 'prep-done': allHomed && online }"
-        type="button"
-        :disabled="!!homeReason"
-        :aria-label="t('Alle Achsen homen')"
-        :title="
-          homeReason
-            ? t(homeReason)
-            : allHomed
-              ? t('Alle Achsen referenziert · erneut homen')
-              : t('Alle Achsen homen')
-        "
-        @click="homeAll"
-      >
-        <Home :size="14" /><span>ALL</span>
-      </button>
-      <button
-        class="subtle-button"
-        :class="{ 'prep-done': status?.qglApplied && online }"
-        type="button"
-        :disabled="!!qglReason"
-        :aria-label="
-          status?.qglApplied
-            ? t('Gantry bereits ausgerichtet. QGL erneut ausführen')
-            : t('Gantry ausrichten · QGL')
-        "
-        :title="
-          qglReason
-            ? t(qglReason)
-            : status?.qglApplied
-              ? t('Bereits ausgerichtet · QGL erneut ausführen')
-              : t('Gantry ausrichten')
-        "
-        @click="runQgl"
-      >
-        <span>QGL</span>
-      </button>
-      <button
-        class="subtle-button prep-motors-btn"
-        :class="{ 'confirm-danger': confirmMotors }"
-        type="button"
-        :disabled="!!motorsReason"
-        :aria-label="confirmMotors ? t('Wirklich lösen?') : t('Motoren lösen')"
-        :title="
-          motorsReason
-            ? t(motorsReason)
-            : confirmMotors
-              ? t('Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden')
-              : status?.qglApplied
-                ? t('Motoren lösen · Gantry senkt sich ab (QGL geht verloren)')
-                : t('Motoren lösen')
-        "
-        @click="releaseMotors"
-        @blur="resetMotorsConfirm"
-        @keydown.esc="resetMotorsConfirm"
-      >
-        <svg class="motor-off-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-          <defs>
-            <mask id="motor-off-cut-tools">
-              <rect width="24" height="24" fill="white" />
-              <line x1="2" y1="2" x2="22" y2="22" stroke="black" stroke-width="4.4" stroke-linecap="round" />
-            </mask>
-          </defs>
-          <path
-            d="M7 4v2h3v2H7l-2 2v3H3v-3H1v8h2v-3h2v3h3l2 2h8v-4h2v3h3V9h-3v3h-2V8h-6V6h3V4H7z"
-            fill="currentColor"
-            mask="url(#motor-off-cut-tools)"
-          />
-          <line x1="2.5" y1="2.5" x2="21.5" y2="21.5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" />
-        </svg>
-        <span v-if="confirmMotors" class="prep-confirm-mark">?</span>
-      </button>
+    <div class="machine-deck-head">
+      <h3><Wrench :size="14" />{{ t('Maschine & Vorbereitung') }}</h3>
+      <p :class="{ 'prep-note-warn': confirmMotors || !!homeReason }" :title="t(prepNote)" role="status">
+        {{ t(prepNote) }}
+      </p>
     </div>
+    <div class="prep-grid-wrap">
+      <div class="prep-actions">
+        <button
+          class="subtle-button"
+          :class="{ 'prep-done': allHomed && online }"
+          type="button"
+          :disabled="!!homeReason"
+          :aria-label="t('Alle Achsen homen')"
+          :title="
+            homeReason
+              ? t(homeReason)
+              : allHomed
+                ? t('Alle Achsen referenziert · erneut homen')
+                : t('Alle Achsen homen')
+          "
+          @click="homeAll"
+        >
+          <Home :size="13" /><span>ALL</span>
+        </button>
+        <button
+          class="subtle-button"
+          :class="{ 'prep-done': status?.qglApplied && online }"
+          type="button"
+          :disabled="!!qglReason"
+          :aria-label="
+            status?.qglApplied
+              ? t('Gantry bereits ausgerichtet. QGL erneut ausführen')
+              : t('Gantry ausrichten · QGL')
+          "
+          :title="
+            qglReason
+              ? t(qglReason)
+              : status?.qglApplied
+                ? t('Bereits ausgerichtet · QGL erneut ausführen')
+                : t('Gantry ausrichten')
+          "
+          @click="runQgl"
+        >
+          <span>QGL</span>
+        </button>
+        <button
+          class="subtle-button prep-motors-btn"
+          :class="{ 'confirm-danger': confirmMotors }"
+          type="button"
+          :disabled="!!motorsReason"
+          :aria-label="confirmMotors ? t('Wirklich lösen?') : t('Motoren lösen')"
+          :title="
+            motorsReason
+              ? t(motorsReason)
+              : confirmMotors
+                ? t('Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden')
+                : status?.qglApplied
+                  ? t('Motoren lösen · Gantry senkt sich ab (QGL geht verloren)')
+                  : t('Motoren lösen')
+          "
+          @click="releaseMotors"
+          @blur="resetMotorsConfirm"
+          @keydown.esc="resetMotorsConfirm"
+        >
+          <svg class="motor-off-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <defs>
+              <mask id="motor-off-cut-tools">
+                <rect width="24" height="24" fill="white" />
+                <line x1="2" y1="2" x2="22" y2="22" stroke="black" stroke-width="4.4" stroke-linecap="round" />
+              </mask>
+            </defs>
+            <path
+              d="M7 4v2h3v2H7l-2 2v3H3v-3H1v8h2v-3h2v3h3l2 2h8v-4h2v3h3V9h-3v3h-2V8h-6V6h3V4H7z"
+              fill="currentColor"
+              mask="url(#motor-off-cut-tools)"
+            />
+            <line x1="2.5" y1="2.5" x2="21.5" y2="21.5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" />
+          </svg>
+          <span v-if="confirmMotors" class="prep-confirm-mark">?</span>
+        </button>
+      </div>
 
-    <div class="prep-axes-row" :aria-label="t('Einzelne Achsen homen')">
-      <button
-        v-for="axis in ['x', 'y', 'z']"
-        :key="axis"
-        class="subtle-button"
-        :class="{ 'prep-done': homed(axis) && online }"
-        type="button"
-        :disabled="!!axisHomeReason(axis)"
-        :aria-label="t('{0} homen', [axis.toUpperCase()])"
-        :title="
-          axisHomeReason(axis)
-            ? t(axisHomeReason(axis))
-            : axisPosition(axis) != null
-              ? t('{0} = {1} mm · {0} erneut homen', [axis.toUpperCase(), axisPosition(axis)])
-              : t('{0} homen', [axis.toUpperCase()])
-        "
-        @click="homeAxis(axis)"
-      >
-        <Home :size="14" /><span>{{ axis.toUpperCase() }}</span>
-      </button>
+      <div class="prep-axes-row" :aria-label="t('Einzelne Achsen homen')">
+        <button
+          v-for="axis in ['x', 'y', 'z']"
+          :key="axis"
+          class="subtle-button"
+          :class="{ 'prep-done': homed(axis) && online }"
+          type="button"
+          :disabled="!!axisHomeReason(axis)"
+          :aria-label="t('{0} homen', [axis.toUpperCase()])"
+          :title="
+            axisHomeReason(axis)
+              ? t(axisHomeReason(axis))
+              : axisPosition(axis) != null
+                ? t('{0} = {1} mm · {0} erneut homen', [axis.toUpperCase(), axisPosition(axis)])
+                : t('{0} homen', [axis.toUpperCase()])
+          "
+          @click="homeAxis(axis)"
+        >
+          <Home :size="13" /><span>{{ axis.toUpperCase() }}</span>
+        </button>
+      </div>
     </div>
 
     <button
@@ -217,13 +224,15 @@ function initialize() {
       "
       @click="initialize"
     >
-      <RotateCw :size="15" />{{ t('Toolchanger initialisieren') }}
+      <RotateCw :size="14" />{{ t('Toolchanger initialisieren') }}
     </button>
-    <p :class="{ 'prep-note-warn': confirmMotors || !!homeReason }" role="status">{{ t(prepNote) }}</p>
   </section>
 
   <section class="led-controls" :aria-label="t('LED-Befehle')">
-    <h3><Lightbulb :size="15" />LED Control</h3>
+    <div class="machine-deck-head">
+      <h3><Lightbulb :size="14" />LED Control</h3>
+      <p :title="t('LED-Status für Tools und Drucker.')">{{ t('LED-Status für Tools und Drucker.') }}</p>
+    </div>
     <div class="led-actions" :data-count="main.length">
       <button
         v-for="profile in main"
@@ -248,6 +257,5 @@ function initialize() {
         {{ t('Setzen') }}
       </button>
     </form>
-    <p>{{ t('LED-Status für Tools und Drucker.') }}</p>
   </section>
 </template>

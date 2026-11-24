@@ -848,6 +848,10 @@ async function acknowledgeUncertain() {
               />
             </article>
           </div>
+
+          <section class="tools-machine-panel" :aria-label="t('Maschine & Vorbereitung')">
+            <LedControls :status="status" :online="online" :pending="pending" @command="send" />
+          </section>
         </div>
 
         <aside class="inspector" :aria-label="t('Details zum ausgewählten Werkzeug')">
@@ -1041,10 +1045,6 @@ async function acknowledgeUncertain() {
               </div>
             </details>
           </aside>
-
-        <section class="tools-machine-panel" :aria-label="t('Maschine & Vorbereitung')">
-          <LedControls :status="status" :online="online" :pending="pending" @command="send" />
-        </section>
 
         <ConsoleView
           v-if="tab === 'tools'"

@@ -10,6 +10,7 @@ import {
   Clock,
   ChevronDown,
   X,
+  Expand,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import CockpitSelect from './CockpitSelect.vue'
@@ -33,6 +34,15 @@ const search = ref('')
 const statusFilter = ref('all') // 'all' | 'completed' | 'cancelled' | 'error'
 const toolFilter = ref('all') // 'all' | 'multi' | '0'..'5'
 const selectedId = ref(null)
+const thumbnailDialog = ref(null)
+
+function openThumbnail() {
+  if (selectedJob.value?.thumbnail) thumbnailDialog.value?.showModal()
+}
+
+function closeThumbnail() {
+  thumbnailDialog.value?.close()
+}
 
 let activeController = null
 
@@ -68,6 +78,8 @@ watch(filteredJobs, list => {
     selectedId.value = list[0].jobId
   }
 })
+
+watch(selectedId, () => closeThumbnail())
 
 const totalCount = computed(() => {
   const fromTotals = totals.value?.totalJobs
@@ -392,14 +404,23 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="print-title-block">
-              <img
+              <button
                 v-if="selectedJob.thumbnail"
-                :src="thumbnailUrl(selectedJob.thumbnail)"
-                class="print-thumbnail"
-                width="64"
-                height="64"
-                :alt="selectedJob.name || ''"
-              />
+                type="button"
+                class="print-thumbnail-button"
+                :title="t('Vorschaubild vergrößern')"
+                :aria-label="t('Vorschaubild vergrößern')"
+                @click="openThumbnail"
+              >
+                <img
+                  :src="thumbnailUrl(selectedJob.thumbnail)"
+                  class="print-thumbnail"
+                  width="64"
+                  height="64"
+                  :alt="selectedJob.name || ''"
+                />
+                <span class="print-thumbnail-zoom" aria-hidden="true"><Expand :size="12" /></span>
+              </button>
               <div class="print-title-copy">
                 <h2>{{ selectedJob.name || t('Unbekannte Datei') }}</h2>
                 <p v-if="selectedJob.slicer" class="print-preview-note">
@@ -508,5 +529,27 @@ onBeforeUnmount(() => {
         </div>
       </aside>
     </div>
+
+    <dialog
+      ref="thumbnailDialog"
+      class="camera-dialog thumbnail-dialog"
+      @click="event => event.target === thumbnailDialog && closeThumbnail()"
+    >
+      <header>
+        <h2>{{ selectedJob?.name || '' }}</h2>
+        <button class="icon-button" type="button" :aria-label="t('Vorschaubild schließen')" @click="closeThumbnail">
+          <X :size="20" />
+        </button>
+      </header>
+      <div class="thumbnail-expanded-frame">
+        <img v-if="selectedJob?.thumbnail" :src="thumbnailUrl(selectedJob.thumbnail)" :alt="selectedJob?.name || ''" />
+      </div>
+      <p v-if="selectedJob?.slicer || selectedJob?.layerCount">
+        {{ selectedJob?.slicer || '' }}{{ selectedJob?.slicerVersion ? ` ${selectedJob.slicerVersion}` : '' }}
+        <template v-if="selectedJob?.layerCount">
+          {{ selectedJob?.slicer ? ' · ' : '' }}{{ t('{0} Layer', [selectedJob.layerCount]) }}
+        </template>
+      </p>
+    </dialog>
   </section>
 </template>

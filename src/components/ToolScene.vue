@@ -60,6 +60,7 @@ let lastVisualKey = ''
 const ready = computed(() => !loading.value && !failure.value)
 const models = {}
 const boxes = {}
+const nozzleTips = {}
 const pickables = []
 const ledMeshes = []
 const LED_DISCRETE_LERP_MS = 140
@@ -116,11 +117,14 @@ function render(now) {
   labels.value =
     mode.value === 'tools' && currentModel
       ? Object.entries(boxes.tools ?? {}).map(([id, box]) => {
-          const point = box.getCenter(new THREE.Vector3())
-          point.y = box.min.y - box.getSize(new THREE.Vector3()).y * 0.15
+          const numId = Number(id)
+          const tip = nozzleTips[numId]
+          const point = tip ? tip.clone() : box.getCenter(new THREE.Vector3())
+          point.y = (tip ? tip.y : box.min.y) - 0.036
+          point.z = (tip ? tip.z : point.z) + 0.022
           point.project(camera)
           return {
-            id: Number(id),
+            id: numId,
             x: (point.x * 0.5 + 0.5) * width,
             y: (-point.y * 0.5 + 0.5) * height,
             shown: point.z < 1 && Math.abs(point.x) < 0.97 && Math.abs(point.y) < 0.94,
@@ -151,7 +155,7 @@ function fit(box, animate = true, detail = false, underside = false, dirOverride
       ? new THREE.Vector3(0, -1.4, 0.75).normalize()
       : mode.value === 'printer'
         ? new THREE.Vector3(0.9, 0.65, 1.3).normalize()
-        : new THREE.Vector3(0.07, 0.28, 1).normalize()
+        : new THREE.Vector3(0, 0.16, 1).normalize()
   if (underside) distance *= 0.9
   const toPosition = center.clone().addScaledVector(direction, distance)
 
@@ -181,8 +185,8 @@ function fit(box, animate = true, detail = false, underside = false, dirOverride
 function overviewBox() {
   const box = new THREE.Box3().setFromObject(currentModel)
   if (mode.value === 'tools') {
-    box.max.y += 0.014
-    box.min.y -= 0.02
+    box.max.y += 0.012
+    box.min.y -= 0.036
   }
   return box
 }
@@ -347,10 +351,10 @@ function highlight(force = false) {
       if (!glow.active) return
       if (node.userData.thermalRole === 'tip') {
         node.material.color.set(glow.tipHex)
-        node.material.opacity = Math.min(0.82, glow.intensity * 0.88)
+        node.material.opacity = Math.min(0.56, glow.intensity * 0.62)
       } else {
         node.material.color.set(glow.poolHex)
-        node.material.opacity = Math.min(0.55, glow.intensity * 0.56)
+        node.material.opacity = Math.min(0.46, glow.intensity * 0.48)
       }
     })
   }
@@ -401,6 +405,8 @@ async function underside() {
 function registerModel(root, key) {
   root.updateMatrixWorld(true)
   boxes[key] = {}
+  const minYByTool = {}
+  const meshesByTool = {}
   root.traverse(object => {
     if (!object.isMesh) return
     object.material = object.material.clone()
@@ -408,10 +414,44 @@ function registerModel(root, key) {
     object.material.roughness = Math.max(object.material.roughness ?? 0.5, 0.42)
     if (Number.isInteger(object.userData.toolId)) {
       const id = object.userData.toolId
+      const meshBox = new THREE.Box3().setFromObject(object)
       if (!boxes[key][id]) boxes[key][id] = new THREE.Box3()
-      boxes[key][id].union(new THREE.Box3().setFromObject(object))
+      boxes[key][id].union(meshBox)
+      if (key === 'tools') {
+        ;(meshesByTool[id] ||= []).push(object)
+        if (minYByTool[id] == null || meshBox.min.y < minYByTool[id]) minYByTool[id] = meshBox.min.y
+      }
     }
   })
+
+  // Derive each nozzle tip directly from the lowest world-space vertices of the CAD toolhead.
+  if (key === 'tools') {
+    const v = new THREE.Vector3()
+    for (const [rawId, meshList] of Object.entries(meshesByTool)) {
+      const id = Number(rawId)
+      const minY = minYByTool[id]
+      const threshold = minY + 0.0025
+      let sumX = 0
+      let sumZ = 0
+      let count = 0
+      for (const mesh of meshList) {
+        const pos = mesh.geometry?.attributes?.position
+        if (!pos) continue
+        const mat = mesh.matrixWorld
+        for (let i = 0; i < pos.count; i++) {
+          v.fromBufferAttribute(pos, i).applyMatrix4(mat)
+          if (v.y <= threshold) {
+            sumX += v.x
+            sumZ += v.z
+            count++
+          }
+        }
+      }
+      if (count > 0) {
+        nozzleTips[id] = new THREE.Vector3(sumX / count, minY, sumZ / count)
+      }
+    }
+  }
 }
 
 async function loadModel(key, noFit = false) {
@@ -590,16 +630,17 @@ function buildFloorVeil() {
 
 function buildThermalGlowTexture() {
   const canvas = document.createElement('canvas')
-  canvas.width = 128
-  canvas.height = 128
+  canvas.width = 256
+  canvas.height = 256
   const ctx = canvas.getContext('2d')
-  const grad = ctx.createRadialGradient(64, 64, 4, 64, 64, 64)
-  grad.addColorStop(0, 'rgba(255, 255, 255, 1)')
-  grad.addColorStop(0.35, 'rgba(255, 255, 255, 0.55)')
-  grad.addColorStop(0.7, 'rgba(255, 255, 255, 0.14)')
+  const grad = ctx.createRadialGradient(128, 128, 4, 128, 128, 126)
+  grad.addColorStop(0, 'rgba(255, 255, 255, 0.95)')
+  grad.addColorStop(0.28, 'rgba(255, 255, 255, 0.55)')
+  grad.addColorStop(0.62, 'rgba(255, 255, 255, 0.16)')
+  grad.addColorStop(0.88, 'rgba(255, 255, 255, 0.03)')
   grad.addColorStop(1, 'rgba(255, 255, 255, 0)')
   ctx.fillStyle = grad
-  ctx.fillRect(0, 0, 128, 128)
+  ctx.fillRect(0, 0, 256, 256)
   const tex = new THREE.CanvasTexture(canvas)
   tex.colorSpace = THREE.SRGBColorSpace
   return tex
@@ -616,30 +657,30 @@ function buildThermalGroup() {
         color: 0xf3c67b,
         transparent: true,
         opacity: 0,
-        blending: THREE.AdditiveBlending,
+        blending: THREE.NormalBlending,
         depthWrite: false,
       }),
     )
-    tip.position.set(x, 0.012, 0.008)
-    tip.scale.set(0.036, 0.036, 1)
+    tip.position.set(x, 0.008, 0.015)
+    tip.scale.set(0.026, 0.026, 1)
     tip.visible = false
     tip.renderOrder = 2
     tip.userData = { thermalTool: i, thermalRole: 'tip' }
     group.add(tip)
 
     const pool = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.072, 0.072),
+      new THREE.PlaneGeometry(0.058, 0.058),
       new THREE.MeshBasicMaterial({
         map: thermalTexture,
         color: 0xf3c67b,
         transparent: true,
         opacity: 0,
-        blending: THREE.AdditiveBlending,
+        blending: THREE.NormalBlending,
         depthWrite: false,
       }),
     )
     pool.rotation.x = -Math.PI / 2
-    pool.position.set(x, 0.0002, 0.008)
+    pool.position.set(x, 0.0002, 0.015)
     pool.visible = false
     pool.renderOrder = 2
     pool.userData = { thermalTool: i, thermalRole: 'pool' }
@@ -652,13 +693,15 @@ function syncThermalPositions() {
   if (!thermalGroup) return
   for (const node of thermalGroup.children) {
     const id = node.userData.thermalTool
+    const tip = nozzleTips[id]
     const box = boxes.tools?.[id]
-    if (!box) continue
-    const center = box.getCenter(new THREE.Vector3())
+    if (!tip && !box) continue
+    const pos = tip ?? box.getCenter(new THREE.Vector3())
+    const minY = tip ? tip.y : box.min.y
     if (node.userData.thermalRole === 'tip') {
-      node.position.set(center.x, box.min.y + 0.011, center.z + 0.004)
+      node.position.set(pos.x, minY + 0.0045, pos.z)
     } else {
-      node.position.set(center.x, 0.0002, center.z + 0.004)
+      node.position.set(pos.x, 0.0002, pos.z)
     }
   }
 }

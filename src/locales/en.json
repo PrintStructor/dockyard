@@ -120,7 +120,7 @@
   "Abgeschlossen": "Complete",
   "Abgebrochen": "Cancelled",
   "Fehler": "Error",
-  "Live-Verbindung · LED-Farben viermal pro Sekunde.": "Live connection · LED colors update four times per second.",
+  "Live-Verbindung · LED-Farben adaptiv.": "Live connection · adaptive LED colors.",
   "Ersatzabfrage alle 3 Sekunden.": "Fallback polling every 3 seconds.",
   "Letzter Datenstand: {0}.": "Last update: {0}.",
   "Noch keine Daten": "No data yet",
@@ -799,5 +799,14 @@
   "Ein Update- oder Recovery-Vorgang läuft bereits.": "An update or recovery job is already running.",
   "Moonraker führt bereits ein Update aus.": "Moonraker is already running an update.",
   "Komponente ist lokal geändert oder abweichend. Bitte zuerst prüfen oder gezielt wiederherstellen.": "Component is locally modified or deviating. Review or recover it first.",
-  "Für diese Komponente liegt kein Update vor.": "No update available for this component."
+  "Für diese Komponente liegt kein Update vor.": "No update available for this component.",
+  "Wechseln": "Switch",
+  "Auf T{0} wechseln": "Switch to T{0}",
+  "T{0} parken und T{1} aufnehmen": "Park T{0} and pick up T{1}",
+  "Werkzeug ist bereits aufgenommen.": "Tool is already mounted.",
+  "Kein Werkzeug aufgenommen. Pickup verwenden.": "No tool mounted. Use Pickup.",
+  "Für Parken/Pickup/Wechsel muss die aktuelle Z-Position höchstens 300 mm sein.": "Parking, pickup or switching requires the current Z position to be at most 300 mm.",
+  "Vorbereitung & Toolchanger": "Preparation & toolchanger",
+  "Alle Achsen referenziert · erneut homen": "All axes homed · home again",
+  "QGL ist nicht konfiguriert.": "QGL is not configured."
 }

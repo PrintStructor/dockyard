@@ -2,18 +2,56 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {commandFor,capabilities} from '../server/control.mjs'
 import {normalizeStatus} from '../server/status.mjs'
-import {auxActionReason,ledProfiles} from '../src/aux-action-state.mjs'
+import {auxActionReason,ledProfiles,quickMotionReason} from '../src/aux-action-state.mjs'
 const state=()=>{
- const config={toolchanger:{},'gcode_macro pause':{},'gcode_macro resume':{},'gcode_macro load_watch':{},'gcode_macro load_watch_stop':{},'gcode_macro load_filament':{},'delayed_gcode _load_watch_tick':{}}
+ const config={toolchanger:{},quad_gantry_level:{},'gcode_macro pause':{},'gcode_macro resume':{},'gcode_macro load_watch':{},'gcode_macro load_watch_stop':{},'gcode_macro load_filament':{},'delayed_gcode _load_watch_tick':{}}
  for(const p of ledProfiles)config[`gcode_macro ${p.macro.toLowerCase()}`]={}
  const raw={'gcode_macro _LOAD_SETTINGS':{temp_default:240},webhooks:{state:'ready'},print_stats:{state:'standby'},idle_timeout:{state:'Idle'},toolchanger:{has_detection:true,tool_number:1,detected_tool_number:1,status:'ready'},toolhead:{homed_axes:'xyz'},'gcode_macro LOAD_WATCH':{active:0,temp:240},configfile:{settings:config}}
  for(let id=0;id<6;id++){config[id?`extruder${id}`:'extruder']={min_extrude_temp:170,max_temp:300};raw[`filament_switch_sensor T${id}_filament_sensor`]={enabled:true,filament_detected:false}}
  return raw
 }
-test('LED actions whitelist configured profiles and never invoke print or motion',()=>{
+test('LED actions whitelist configured profiles, use concise main labels and never invoke print or motion',()=>{
+ assert.deepEqual(
+  ledProfiles.slice(0,5).map(p=>({id:p.id,label:p.label,macro:p.macro})),
+  [
+   {id:'wake',label:'Wake Up LEDs',macro:'WAKE_UP'},
+   {id:'ready',label:'Ready',macro:'STATUS_READY'},
+   {id:'printing',label:'Printing',macro:'STATUS_PRINTING'},
+   {id:'shutdown',label:'Shutdown LEDs',macro:'SHUTDOWN_LEDS'},
+   {id:'off',label:'Off',macro:'STATUS_OFF'},
+  ],
+ )
  for(const profile of ledProfiles)assert.equal(commandFor({action:'led',profile:profile.id},state()).body.script,profile.macro)
  for(const profile of ['PRINT_START','wake\nG28',null])assert.throws(()=>commandFor({action:'led',profile},state()))
  const raw=state();delete raw.configfile.settings['gcode_macro wake_up'];assert.throws(()=>commandFor({action:'led',profile:'wake'},raw),/konfiguriert/)
+})
+test('quickMotionReason matches home and QGL safety guards for Tools inspector shortcuts',()=>{
+ const raw=state()
+ const make=r=>({...normalizeStatus(r),capabilities:capabilities(r)})
+ assert.equal(quickMotionReason(make(raw),'home'),'')
+ assert.equal(quickMotionReason(make(raw),'qgl'),'')
+ assert.match(quickMotionReason(make(raw),'home',false),/aktuellen/)
+ assert.match(quickMotionReason(make(raw),'qgl',true,true),/Befehl/)
+
+ const unhomed=state();unhomed.toolhead.homed_axes=''
+ assert.equal(quickMotionReason(make(unhomed),'home'),'')
+ assert.match(quickMotionReason(make(unhomed),'qgl'),/homen/)
+
+ const coldBoot=state();coldBoot.toolhead.homed_axes='';coldBoot.toolchanger.status='uninitialized';coldBoot.toolchanger.tool_number=-1;coldBoot.toolchanger.detected_tool_number=1;coldBoot.configfile.settings.beacon={home_gcode_pre_x:'INITIALIZE_TOOLCHANGER'}
+ const coldStatus={...make(coldBoot),homingCanInitialize:true}
+ assert.equal(quickMotionReason(coldStatus,'home'),'')
+ assert.match(quickMotionReason(coldStatus,'qgl'),/Werkzeugerkennung/)
+
+ const conflict=state();conflict['tool T0']={detect_state:1};conflict['tool T1']={detect_state:1}
+ assert.match(quickMotionReason(make(conflict),'home'),/Werkzeugerkennung/)
+ assert.match(quickMotionReason(make(conflict),'qgl'),/Werkzeugerkennung/)
+
+ const printing=state();printing.print_stats.state='printing'
+ assert.match(quickMotionReason(make(printing),'home'),/gesperrt/)
+ assert.match(quickMotionReason(make(printing),'qgl'),/gesperrt/)
+
+ const noQgl=state();delete noQgl.configfile.settings.quad_gantry_level
+ assert.match(quickMotionReason(make(noQgl),'qgl'),/konfiguriert/)
 })
 test('pause and resume respect print state, while pause allows the installed tool-loss handler',()=>{
  const raw=state();assert.throws(()=>commandFor({action:'pause'},raw),/laufender/)

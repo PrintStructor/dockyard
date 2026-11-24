@@ -20,6 +20,31 @@ test('park applies only to mounted tool; pickup requires empty shuttle and permi
  assert.equal(commandFor({action:'pickup',tool:0},raw).body.script,'PICKUP_TOOL T=0\nM400')
  raw.toolhead.position[2]=310;assert.throws(()=>commandFor({action:'pickup',tool:0},raw),/300 mm/)
 })
+test('select switches directly from mounted tool to another tool with safety guards',()=>{
+ const raw=state()
+ const cmd=commandFor({action:'select',tool:2},raw)
+ assert.equal(cmd.body.script,'T2\nM400')
+ assert.equal(cmd.label,'Auf T2 wechseln')
+ assert.equal(cmd.async,true)
+ assert.throws(()=>commandFor({action:'select',tool:1},raw),/bereits aufgenommen/)
+ raw.toolhead.position[2]=305
+ assert.throws(()=>commandFor({action:'select',tool:2},raw),/300 mm/)
+ raw.toolhead.position[2]=20
+ delete raw.configfile.settings['gcode_macro t2']
+ assert.throws(()=>commandFor({action:'select',tool:2},raw),/Auswahlmakro/)
+ const empty=state()
+ empty.toolchanger.tool_number=-1;empty.toolchanger.detected_tool_number=-1
+ assert.throws(()=>commandFor({action:'select',tool:2},empty),/Pickup/)
+ const unhomed=state()
+ unhomed.toolhead.homed_axes='xy'
+ assert.throws(()=>commandFor({action:'select',tool:2},unhomed),/homen/)
+ const printing=state()
+ printing.print_stats.state='printing'
+ assert.throws(()=>commandFor({action:'select',tool:2},printing),/gesperrt/)
+ const mismatch=state()
+ mismatch.toolchanger.detected_tool_number=3
+ assert.throws(()=>commandFor({action:'select',tool:2},mismatch),/Werkzeugerkennung/)
+})
 test('single-tool maintenance uses installed macros, selects correctly, and preserves macro defaults',()=>{
  const raw=state()
  assert.equal(commandFor({action:'clean',tool:1},raw).body.script,'CLEAN_NOZZLE\nM400')

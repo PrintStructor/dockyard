@@ -134,3 +134,107 @@ test('live feed suppresses idle LED poll broadcasts, emits on diff, sends ping a
 
   feed.close()
 })
+
+test('live feed accelerates LED polling while colors animate and relaxes when static', async () => {
+  let animate = false
+  let frame = 0
+  const ledQueries = []
+
+  class AnimatedWS {
+    constructor() {
+      this.readyState = 1
+      setImmediate(() => this.onopen?.())
+    }
+    send(payload) {
+      const msg = JSON.parse(payload)
+      if (msg.id === 1) {
+        setImmediate(() =>
+          this.onmessage?.({
+            data: JSON.stringify({ jsonrpc: '2.0', id: 1, result: { objects: ['neopixel et0_leds'] } }),
+          }),
+        )
+      } else if (msg.id === 2) {
+        setImmediate(() =>
+          this.onmessage?.({
+            data: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 2,
+              result: {
+                status: {
+                  'neopixel et0_leds': { color_data: [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]] },
+                },
+              },
+            }),
+          }),
+        )
+      } else if (msg.id === 3) {
+        ledQueries.push(Date.now())
+        if (animate) frame += 1
+        const r = animate ? (frame % 10) / 10 : 0
+        setImmediate(() =>
+          this.onmessage?.({
+            data: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 3,
+              result: {
+                status: {
+                  'neopixel et0_leds': { color_data: [[r, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]] },
+                },
+              },
+            }),
+          }),
+        )
+      }
+    }
+    close() {
+      this.readyState = 3
+    }
+  }
+
+  const feed = createLiveFeed({
+    printer: 'http://127.0.0.1:1977',
+    baseObjects: ['neopixel et0_leds'],
+    snapshot: raw => ({ led0: raw['neopixel et0_leds']?.color_data?.[0] }),
+    WebSocketImpl: AnimatedWS,
+    ledPollMs: 140,
+    activeLedPollMs: 25,
+    ledActiveWindowMs: 120,
+    pingIntervalMs: 1000,
+  })
+
+  const fakeRes = {
+    destroyed: false,
+    writableLength: 0,
+    setHeader() {},
+    flushHeaders() {},
+    write() {},
+    end() {},
+    destroy() {},
+    on() {},
+  }
+
+  try {
+    feed.handle({}, fakeRes)
+    // Static phase: over ~180 ms with 140 ms idle interval -> at most 2 polls
+    await new Promise(resolve => setTimeout(resolve, 180))
+    const staticCount = ledQueries.length
+    assert.ok(staticCount >= 1 && staticCount <= 2, `expected 1-2 static polls, got ${staticCount}`)
+
+    // Start animation: next poll sees a diff -> polling accelerates to ~25 ms
+    animate = true
+    const beforeAnim = ledQueries.length
+    await new Promise(resolve => setTimeout(resolve, 260))
+    const animPolls = ledQueries.length - beforeAnim
+    assert.ok(animPolls >= 4, `expected >= 4 accelerated polls during animation, got ${animPolls}`)
+
+    // Stop animation and let active window expire -> polling relaxes back to ~140 ms
+    animate = false
+    await new Promise(resolve => setTimeout(resolve, 180))
+    const afterCooldown = ledQueries.length
+    await new Promise(resolve => setTimeout(resolve, 190))
+    const relaxedPolls = ledQueries.length - afterCooldown
+    assert.ok(relaxedPolls <= 2, `expected <= 2 relaxed polls after cooldown, got ${relaxedPolls}`)
+  } finally {
+    feed.close()
+  }
+})

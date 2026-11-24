@@ -1,9 +1,9 @@
 export const ledProfiles = [
-  { id: 'wake', label: 'Wake Up', macro: 'WAKE_UP' },
-  { id: 'ready', label: 'Status Ready', macro: 'STATUS_READY' },
-  { id: 'printing', label: 'Status Printing', macro: 'STATUS_PRINTING' },
+  { id: 'wake', label: 'Wake Up LEDs', macro: 'WAKE_UP' },
+  { id: 'ready', label: 'Ready', macro: 'STATUS_READY' },
+  { id: 'printing', label: 'Printing', macro: 'STATUS_PRINTING' },
   { id: 'shutdown', label: 'Shutdown LEDs', macro: 'SHUTDOWN_LEDS' },
-  { id: 'off', label: 'Status Off', macro: 'STATUS_OFF' },
+  { id: 'off', label: 'Off', macro: 'STATUS_OFF' },
   { id: 'pause', label: 'Status Pause', macro: 'STATUS_PAUSE' },
   { id: 'heating', label: 'Status Heating', macro: 'STATUS_HEATING' },
   { id: 'cooling', label: 'Status Cooling', macro: 'STATUS_COOLING' },
@@ -93,6 +93,31 @@ export function auxActionReason(status, action, online = true, pending = false) 
     }
     if (!status.hasDetection || status.detectionConflict) return 'Eindeutige Werkzeugerkennung erforderlich.'
     if (status.loadWatchActive) return 'Einlegehilfe zuerst mit Fertig beenden.'
+    return ''
+  }
+
+  return 'Unbekannte Aktion.'
+}
+
+export function quickMotionReason(status, action, online = true, pending = false) {
+  if (!online || !status) return 'Keine aktuellen Druckerdaten.'
+  if (status.klipperState !== 'ready') return 'Klipper ist nicht bereit.'
+  if (pending || status.control?.job) return 'Ein Befehl läuft noch oder muss geprüft werden.'
+  if (status.loadWatchActive) return 'Einlegehilfe ist scharf. Zuerst mit „Fertig“ beenden.'
+  if (!['standby', 'complete', 'cancelled', 'error'].includes(status.printState) || status.idleState === 'Printing') {
+    return 'Während eines Drucks, einer Pause oder laufender Befehle gesperrt.'
+  }
+  if (status.detectionConflict) return 'Werkzeugerkennung prüfen.'
+
+  if (action === 'home') {
+    if (status.detectionMismatch && !status.homingCanInitialize) return 'Werkzeugerkennung prüfen.'
+    return ''
+  }
+
+  if (action === 'qgl') {
+    if (status.detectionMismatch) return 'Werkzeugerkennung prüfen.'
+    if (!status.capabilities?.qgl) return 'QGL ist nicht konfiguriert.'
+    if (![...'xyz'].every(axis => status.homedAxes?.includes(axis))) return 'Zuerst alle Achsen homen.'
     return ''
   }
 

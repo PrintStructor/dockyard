@@ -39,6 +39,13 @@ test('dynamic command feedback, guards and parameters are localized without chan
     translate('Beacon Z-Kalibrierung (Referenz T2)', 'en'),
     'Beacon Z calibration (reference T2)',
   )
+  assert.equal(translate('Auf T2 wechseln', 'en'), 'Switch to T2')
+  assert.equal(translate('Auf T2 wechseln gestartet …', 'en'), 'Switch to T2 started …')
+  assert.equal(translate('T1 parken und T2 aufnehmen', 'en'), 'Park T1 and pick up T2')
+  assert.equal(
+    translate('T{0}: {1}. {2}', 'en', [2, 'Wechseln', 'T1 parken und T2 aufnehmen']),
+    'T2: Switch. Park T1 and pick up T2',
+  )
 })
 
 test('saved language accepts supported choices and safely falls back with blocked storage', () => {

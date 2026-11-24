@@ -25,11 +25,17 @@ export function toolActionReason(status, action, tool, online = true, pending = 
   if (action === 'pickup' && (status.active != null || status.detected != null)) {
     return 'Zuerst das aufgenommene Werkzeug parken.'
   }
+  if (action === 'select') {
+    if (status.active === tool) return 'Werkzeug ist bereits aufgenommen.'
+    if (status.active == null || status.detected == null) {
+      return 'Kein Werkzeug aufgenommen. Pickup verwenden.'
+    }
+  }
   if (
-    (action === 'park' || action === 'pickup' || status.active == null) &&
+    (action === 'park' || action === 'pickup' || action === 'select' || status.active == null) &&
     (!Number.isFinite(status.position?.[2]) || status.position[2] > 300)
   ) {
-    return 'Für Parken/Pickup muss die aktuelle Z-Position höchstens 300 mm sein.'
+    return 'Für Parken/Pickup/Wechsel muss die aktuelle Z-Position höchstens 300 mm sein.'
   }
 
   const ids = bulk ? filamentToolIds(status) : [tool]

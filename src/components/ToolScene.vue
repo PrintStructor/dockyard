@@ -55,9 +55,19 @@ const ready = computed(() => !loading.value && !failure.value)
 const models = {}
 const boxes = {}
 const pickables = []
+const ledMeshes = []
+const LED_DISCRETE_LERP_MS = 140
+const LED_OFF_COLOR = new THREE.Color('#697479')
+const LED_ZERO_COLOR = new THREE.Color(0)
+let lastLedFrameAt = 0
+let ledIntervalMs = 250
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
+
+function colorNear(a, b) {
+  return Math.abs(a.r - b.r) < 1e-4 && Math.abs(a.g - b.g) < 1e-4 && Math.abs(a.b - b.b) < 1e-4
+}
 
 function invalidate() {
   if (!running && !disposed && visible && !document.hidden && renderer) {
@@ -77,6 +87,20 @@ function render(now) {
     controls.target.lerpVectors(animation.fromTarget, animation.toTarget, eased)
     moving = progress < 1
     if (!moving) animation = null
+  }
+  let ledAnimating = false
+  for (const object of ledMeshes) {
+    const anim = object.userData.ledAnim
+    if (!anim) continue
+    const progress = Math.min(1, (now - anim.start) / anim.duration)
+    object.material.color.lerpColors(anim.fromColor, anim.toColor, progress)
+    object.material.emissive.lerpColors(anim.fromEmissive, anim.toEmissive, progress)
+    object.material.emissiveIntensity = anim.fromIntensity + (anim.toIntensity - anim.fromIntensity) * progress
+    if (progress < 1) {
+      ledAnimating = true
+    } else {
+      object.userData.ledAnim = null
+    }
   }
   const changed = controls.update()
   composer.render()
@@ -98,7 +122,7 @@ function render(now) {
         })
       : []
 
-  if (moving || changed) invalidate()
+  if (moving || ledAnimating || changed) invalidate()
 }
 
 function fit(box, animate = true, detail = false, underside = false) {
@@ -197,6 +221,14 @@ function highlight(force = false) {
   if (!force && signature === lastVisualKey) return
   lastVisualKey = signature
 
+  const now = performance.now()
+  const dt = lastLedFrameAt ? now - lastLedFrameAt : Infinity
+  const isContinuousStream = dt >= 40 && dt <= 600
+  const ledDuration = isContinuousStream
+    ? Math.round((ledIntervalMs * 0.6 + Math.min(340, Math.max(80, dt)) * 0.4) * 1.05)
+    : LED_DISCRETE_LERP_MS
+  let anyLedChanged = false
+
   currentModel.traverse(object => {
     if (!object.isMesh) return
     if (!object.userData.ledRole) {
@@ -210,17 +242,48 @@ function highlight(force = false) {
     }
     const c = props.online ? props.tools?.[object.userData.toolId]?.leds?.[object.userData.ledRole] : null
     object.visible = true
-    if (!c) {
-      object.material.color.set('#697479')
-      object.material.emissive.set(0)
-      object.material.emissiveIntensity = 0
+    const toColor = c ? new THREE.Color().setRGB(...c.slice(0, 3).map(v => Math.min(1, v + c[3]))) : LED_OFF_COLOR
+    const toEmissive = c ? toColor : LED_ZERO_COLOR
+    const toIntensity = c ? (object.userData.ledRole === 'number' ? 2.3 : 5) : 0
+
+    if (force || reducedMotion.matches || !object.userData.ledInit) {
+      object.material.color.copy(toColor)
+      object.material.emissive.copy(toEmissive)
+      object.material.emissiveIntensity = toIntensity
+      object.userData.ledAnim = null
+      object.userData.ledInit = true
     } else {
-      const rgb = c.slice(0, 3).map(v => Math.min(1, v + c[3]))
-      object.material.color.setRGB(...rgb)
-      object.material.emissive.setRGB(...rgb)
-      object.material.emissiveIntensity = object.userData.ledRole === 'number' ? 2.3 : 5
+      const pendingAnim = object.userData.ledAnim
+      const targetUnchanged =
+        pendingAnim &&
+        colorNear(pendingAnim.toColor, toColor) &&
+        colorNear(pendingAnim.toEmissive, toEmissive) &&
+        Math.abs(pendingAnim.toIntensity - toIntensity) <= 1e-3
+      const alreadyAtTarget =
+        !pendingAnim &&
+        colorNear(object.material.color, toColor) &&
+        colorNear(object.material.emissive, toEmissive) &&
+        Math.abs(object.material.emissiveIntensity - toIntensity) <= 1e-3
+      if (!targetUnchanged && !alreadyAtTarget) {
+        anyLedChanged = true
+        object.userData.ledAnim = {
+          fromColor: object.material.color.clone(),
+          toColor: toColor.clone(),
+          fromEmissive: object.material.emissive.clone(),
+          toEmissive: toEmissive.clone(),
+          fromIntensity: object.material.emissiveIntensity,
+          toIntensity,
+          start: now,
+          duration: ledDuration,
+        }
+      }
     }
   })
+
+  if (anyLedChanged) {
+    if (isContinuousStream) ledIntervalMs = ledIntervalMs * 0.6 + Math.min(340, Math.max(80, dt)) * 0.4
+    lastLedFrameAt = now
+  }
 
   if (outline) outline.selectedObjects = pickables.filter(object => object.userData.toolId === props.selected)
 
@@ -321,8 +384,12 @@ async function loadModel(key, noFit = false) {
     floor.visible = key === 'tools'
     feeds.visible = key === 'tools'
     pickables.length = 0
+    ledMeshes.length = 0
     currentModel.traverse(object => {
-      if (object.isMesh && !object.userData.ledRole && Number.isInteger(object.userData.toolId)) {
+      if (!object.isMesh) return
+      if (object.userData.ledRole) {
+        ledMeshes.push(object)
+      } else if (Number.isInteger(object.userData.toolId)) {
         pickables.push(object)
       }
     })

@@ -2,12 +2,13 @@ import { normalizeStatus } from './status.mjs'
 import { toolActionReason, filamentToolIds, defaultActionTemperature } from '../src/tool-action-state.mjs'
 import { ControlError } from './control.mjs'
 
-export const toolActions = ['park', 'pickup', 'load', 'unload', 'clean', 'purge', 'load_all', 'unload_all']
+export const toolActions = ['park', 'pickup', 'select', 'load', 'unload', 'clean', 'purge', 'load_all', 'unload_all']
 
 export function toolCapabilities(config, raw) {
   const has = name => !!config[`gcode_macro ${name}`]
   const common = ['_goto_purge_pos', '_purge_pos']
   const available = names => names.every(has)
+  const toolSelect = Array.from({ length: 6 }, (_, id) => has(`t${id}`) && !!config[`tool t${id}`])
   const limits = Array.from({ length: 6 }, (_, id) =>
     Number(config[id ? `extruder${id}` : 'extruder']?.min_extrude_temp ?? 170),
   )
@@ -16,6 +17,7 @@ export function toolCapabilities(config, raw) {
     toolActions: {
       park: has('park_toolhead'),
       pickup: has('pickup_tool'),
+      select: toolSelect.some(Boolean),
       clean: has('clean_nozzle'),
       purge: available(['purge_nozzle', '_load_settings', 'clean_nozzle', ...common]),
       load: available(['load_filament', '_load_settings', 'clean_nozzle', ...common]),
@@ -23,7 +25,7 @@ export function toolCapabilities(config, raw) {
       unload_all: available(['unload_filament', '_unload_settings', 'park_toolhead', ...common]),
       load_all: available(['load_filament', '_load_settings', 'clean_nozzle', ...common]),
     },
-    toolSelect: Array.from({ length: 6 }, (_, id) => has(`t${id}`) && !!config[`tool t${id}`]),
+    toolSelect,
     extrusionMin: limits,
     filamentDefaults: {
       load: Number.isFinite(raw['gcode_macro _LOAD_SETTINGS']?.temp_default)
@@ -64,6 +66,9 @@ export function toolActionCommand(input, raw, capabilities) {
   } else if (action === 'pickup') {
     script = `PICKUP_TOOL T=${tool}`
     label = `T${tool} aufnehmen`
+  } else if (action === 'select') {
+    script = `T${tool}`
+    label = `Auf T${tool} wechseln`
   } else if (action === 'clean') {
     script = `${select}CLEAN_NOZZLE`
     label = `T${tool} Nozzle Clean`

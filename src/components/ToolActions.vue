@@ -12,11 +12,14 @@ const props = defineProps({
 
 const emit = defineEmits(['command'])
 
+const mountAction = computed(() => {
+  if (props.status?.active === props.tool) return { id: 'park', label: 'Parken' }
+  if (props.status?.active != null) return { id: 'select', label: 'Wechseln' }
+  return { id: 'pickup', label: 'Pickup' }
+})
+
 const actions = computed(() => [
-  {
-    id: props.status?.active === props.tool ? 'park' : 'pickup',
-    label: props.status?.active === props.tool ? 'Parken' : 'Pickup',
-  },
+  mountAction.value,
   { id: 'load', label: 'Laden' },
   { id: 'unload', label: 'Entladen' },
   { id: 'clean', label: 'Clean' },
@@ -31,6 +34,7 @@ function description(action) {
   const base = {
     park: 'Am Dock ablegen',
     pickup: 'Mit leerem Schlitten aufnehmen',
+    select: `T${props.status?.active} parken und T${props.tool} aufnehmen`,
     load: `Einziehen und purgen bei ${defaultActionTemperature(props.status, action)} °C, wischen, Heizung aus`,
     unload: `Entladen bei ${defaultActionTemperature(props.status, action)} °C, Heizung aus`,
     clean: 'Nozzle Clean am Silikonwiper',
@@ -53,7 +57,7 @@ function run(action) {
       v-for="action in actions"
       :key="action.id"
       type="button"
-      :class="{ 'tool-mount-action': ['park', 'pickup'].includes(action.id) }"
+      :class="{ 'tool-mount-action': ['park', 'pickup', 'select'].includes(action.id) }"
       :disabled="!!reason(action.id)"
       :title="t(description(action.id))"
       :aria-label="t('T{0}: {1}. {2}', [tool, action.label, description(action.id)])"

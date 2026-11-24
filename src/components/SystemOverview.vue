@@ -261,7 +261,7 @@ const hostCaption = computed(() => {
           {{
             online
               ? status?.transport === 'live'
-                ? t('Live-Verbindung · LED-Farben viermal pro Sekunde.')
+                ? t('Live-Verbindung · LED-Farben adaptiv.')
                 : t('Ersatzabfrage alle 3 Sekunden.')
               : t('Letzter Datenstand: {0}.', [time])
           }}

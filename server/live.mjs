@@ -19,6 +19,8 @@ export function createLiveFeed({
   snapshot,
   WebSocketImpl = WebSocket,
   ledPollMs = 250,
+  activeLedPollMs = Math.min(ledPollMs, 85),
+  ledActiveWindowMs = 2000,
   pingIntervalMs = 2000,
 }) {
   const clients = new Set()
@@ -29,7 +31,13 @@ export function createLiveFeed({
   let ready = false
   let lastMessage = 0
   let lastEmitAt = 0
+  let lastLedChangeAt = 0
   let ledPending = 0
+  let tickDelay = ledPollMs
+
+  const isLedActive = (now = Date.now()) => lastLedChangeAt > 0 && now - lastLedChangeAt < ledActiveWindowMs
+  const currentPollDelay = (now = Date.now()) =>
+    Math.min(isLedActive(now) ? activeLedPollMs : ledPollMs, pingIntervalMs)
 
   const emit = (event, value) => {
     const message = `event: ${event}\ndata: ${JSON.stringify(value)}\n\n`
@@ -55,15 +63,49 @@ export function createLiveFeed({
   function merge(update) {
     if (!update || typeof update !== 'object') return false
     let changed = false
+    let ledChanged = false
     for (const [key, value] of Object.entries(update)) {
       const prev = raw[key]
       if (value && typeof value === 'object' && Object.keys(value).length === 1 && Object.hasOwn(value, 'color_data')) {
         if (colorDataEqual(prev?.color_data, value.color_data)) continue
+        ledChanged = true
+      } else if (key.startsWith('neopixel ') && value && Object.hasOwn(value, 'color_data')) {
+        if (!colorDataEqual(prev?.color_data, value.color_data)) ledChanged = true
       }
       raw[key] = { ...prev, ...value }
       changed = true
     }
+    if (ledChanged) lastLedChangeAt = Date.now()
     return changed
+  }
+
+  function scheduleTick(socket, delay = currentPollDelay()) {
+    clearTimeout(tick)
+    tickDelay = delay
+    tick = setTimeout(() => {
+      if (ws !== socket) return
+      const now = Date.now()
+      if (now - lastMessage > 7000 || (ledPending && now - ledPending > 5000)) {
+        socket.close()
+        return
+      }
+      // Keep SSE clients alive without pushing redundant full status snapshots during idle.
+      if (ready && clients.size && now - lastEmitAt >= pingIntervalMs) {
+        emit('ping', {})
+      }
+      // This installed led_effect mutates color_data in place: subscriptions don't
+      // publish its animation frames. Poll adaptively up to ~12 Hz while LEDs animate,
+      // relaxing to 4 Hz when static, and emit only on diff.
+      if (ready && !ledPending) {
+        ledPending = now
+        send(
+          3,
+          'printer.objects.query',
+          Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`neopixel et${i}_leds`, ['color_data']])),
+        )
+      }
+      scheduleTick(socket)
+    }, delay)
   }
 
   function connect() {
@@ -72,6 +114,7 @@ export function createLiveFeed({
     ready = false
     lastMessage = Date.now()
     lastEmitAt = 0
+    lastLedChangeAt = 0
     ledPending = 0
 
     const socket = new WebSocketImpl(printer.replace(/^http/, 'ws') + '/websocket')
@@ -104,9 +147,21 @@ export function createLiveFeed({
           emitStatus()
         } else if (data.id === 3) {
           ledPending = 0
-          if (merge(data.result.status) && ready) emitStatus()
+          const wasActive = isLedActive()
+          if (merge(data.result.status) && ready) {
+            emitStatus()
+            if (!wasActive && isLedActive() && tickDelay > activeLedPollMs) {
+              scheduleTick(socket, activeLedPollMs)
+            }
+          }
         } else if (data.method === 'notify_status_update') {
-          if (merge(data.params?.[0]) && ready) emitStatus()
+          const wasActive = isLedActive()
+          if (merge(data.params?.[0]) && ready) {
+            emitStatus()
+            if (!wasActive && isLedActive() && tickDelay > activeLedPollMs) {
+              scheduleTick(socket, activeLedPollMs)
+            }
+          }
         } else if (data.method === 'notify_gcode_response') {
           const message = String(data.params?.[0] ?? '')
           if (message && clients.size) {
@@ -142,37 +197,19 @@ export function createLiveFeed({
       if (ws !== socket) return
       ws = null
       ready = false
-      clearInterval(tick)
+      clearTimeout(tick)
+      tick = null
       emit('offline', {})
       if (clients.size) retry = setTimeout(connect, 2500)
     }
 
-    tick = setInterval(() => {
-      const now = Date.now()
-      if (now - lastMessage > 7000 || (ledPending && now - ledPending > 5000)) {
-        socket.close()
-        return
-      }
-      // Keep SSE clients alive without pushing redundant full status snapshots during idle.
-      if (ready && clients.size && now - lastEmitAt >= pingIntervalMs) {
-        emit('ping', {})
-      }
-      // This installed led_effect mutates color_data in place: subscriptions don't
-      // publish its animation frames. Query only the 18 LEDs at 4 Hz, emit only on diff.
-      if (ready && !ledPending) {
-        ledPending = now
-        send(
-          3,
-          'printer.objects.query',
-          Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`neopixel et${i}_leds`, ['color_data']])),
-        )
-      }
-    }, ledPollMs)
+    scheduleTick(socket)
   }
 
   function close() {
     clearTimeout(retry)
-    clearInterval(tick)
+    clearTimeout(tick)
+    tick = null
     const old = ws
     ws = null
     old?.close()

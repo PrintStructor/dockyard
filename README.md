@@ -31,6 +31,7 @@ This is an independent, printer-specific application, not a Mainsail fork or a u
       </p>
       <p>
         ▶ <a href="https://github.com/PrintStructor/voron-2.4-toolchanger-cockpit/releases/download/v1.0.0/stormtrooper-reel-tools-v3-logic.mp4"><strong>Watch / Download Tools Hero Cut (26 s · 60 fps · Logic Pro Audio)</strong></a><br/>
+        ▶ <a href="https://github.com/PrintStructor/voron-2.4-toolchanger-cockpit/releases/download/v1.0.0/stormtrooper-reel-print3d-logic.mp4"><strong>Watch / Download Print &amp; 3D Preview Cut (24 s · 60 fps · Logic Pro Audio)</strong></a><br/>
         ▶ <a href="https://github.com/PrintStructor/voron-2.4-toolchanger-cockpit/releases/download/v1.0.0/stormtrooper-reel-instagram-v2.mp4"><strong>Watch / Download Extended 6-Tab Walkthrough (34 s · 60 fps)</strong></a><br/>
         📦 <a href="https://github.com/PrintStructor/voron-2.4-toolchanger-cockpit/releases/tag/v1.0.0"><strong>View Release v1.0.0 Assets</strong></a>
       </p>

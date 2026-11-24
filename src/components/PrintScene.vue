@@ -1,0 +1,724 @@
+<script setup>
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { RotateCcw, Focus, Grid3x3, Box, Layers, Eye, EyeOff } from '@lucide/vue'
+import * as THREE from 'three'
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
+import { t, language } from '../i18n.mjs'
+
+const props = defineProps({
+  model: Object, // { header, segments: Float32Array }
+  loading: Boolean,
+  error: String,
+  toolColors: { type: Array, default: () => [] },
+  colorMode: { type: String, default: 'filament' }, // 'filament' | 'tools'
+  clipLayer: { type: Number, default: 999999 },
+  showGhost: { type: Boolean, default: true },
+  showSupport: { type: Boolean, default: true },
+  isLiveJob: Boolean,
+  livePosition: Array,
+})
+
+const emit = defineEmits(['update:colorMode', 'update:showSupport', 'update:showGhost', 'reload'])
+
+const BED_SIZE = 350
+const HALF_BED = BED_SIZE / 2
+const TOOL_PALETTE = ['#c5f76b', '#6ed5e7', '#bca3ff', '#f3c67b', '#ff9a83', '#ed9fc8']
+
+const viewport = ref(null)
+const webglError = ref('')
+
+let renderer = null
+let scene = null
+let camera = null
+let controls = null
+let resizeObserver = null
+let intersectionObserver = null
+let solidMesh = null
+let ghostMesh = null
+let solidMaterial = null
+let ghostMaterial = null
+let activeGeometry = null
+let bedGroup = null
+let nozzleMarker = null
+let frame = 0
+let running = false
+let visible = true
+let disposed = false
+let animation = null
+
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
+const hasModel = computed(() => !!props.model?.header?.segmentCount && !props.loading && !props.error && !webglError.value)
+const hasSupport = computed(() => !!props.model?.header?.hasSupport)
+
+function invalidate() {
+  if (!running && !disposed && visible && !document.hidden && renderer) {
+    running = true
+    frame = requestAnimationFrame(render)
+  }
+}
+
+function render(now) {
+  running = false
+  if (disposed || !visible || document.hidden || !renderer) return
+  let moving = false
+  if (animation) {
+    const progress = Math.min(1, (now - animation.start) / 550)
+    const eased = 1 - Math.pow(1 - progress, 4)
+    camera.position.lerpVectors(animation.fromPosition, animation.toPosition, eased)
+    controls.target.lerpVectors(animation.fromTarget, animation.toTarget, eased)
+    moving = progress < 1
+    if (!moving) animation = null
+  }
+  const changed = controls.update()
+  renderer.render(scene, camera)
+  if (moving || changed) invalidate()
+}
+
+function buildBeadBaseGeometry() {
+  // 5-sided beveled extrusion profile in (acrossU, heightV) along X in [0..1]
+  const profile = [
+    [-0.5, -0.52],
+    [-0.3, 0.0],
+    [0.3, 0.0],
+    [0.5, -0.52],
+    [0.0, -1.0],
+  ]
+
+  const positions = []
+  const profileNormals = []
+
+  for (let i = 0; i < profile.length; i++) {
+    const [u0, v0] = profile[i]
+    const [u1, v1] = profile[(i + 1) % profile.length]
+    // Outward normal in (u, v) plane: rotate edge (du, dv) by -90 deg -> (-dv, du)
+    const du = u1 - u0
+    const dv = v1 - v0
+    const nLen = Math.hypot(du, dv) || 1
+    const nu = -dv / nLen
+    const nv = du / nLen
+
+    // Two triangles forming the quad from x=0 to x=1
+    const quad = [
+      [0, u0, v0],
+      [1, u0, v0],
+      [1, u1, v1],
+      [0, u0, v0],
+      [1, u1, v1],
+      [0, u1, v1],
+    ]
+    for (const [px, py, pz] of quad) {
+      positions.push(px, py, pz)
+      profileNormals.push(nu, nv)
+    }
+  }
+
+  const geometry = new THREE.InstancedBufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('aProfileNormal', new THREE.Float32BufferAttribute(profileNormals, 2))
+  return geometry
+}
+
+const VERTEX_SHADER = `
+  attribute vec2 aProfileNormal;
+  attribute vec4 aStartEnd;
+  attribute vec3 aDims;
+  attribute float aMeta;
+
+  uniform vec3 uToolColors[6];
+  uniform vec3 uSupportColor;
+  uniform float uClipLayer;
+  uniform float uMode;
+  uniform float uShowSupport;
+
+  varying vec3 vNormal;
+  varying vec3 vColor;
+  varying vec3 vWorldPos;
+  varying float vHeightV;
+
+  vec3 pickToolColor(float idx) {
+    if (idx < 0.5) return uToolColors[0];
+    if (idx < 1.5) return uToolColors[1];
+    if (idx < 2.5) return uToolColors[2];
+    if (idx < 3.5) return uToolColors[3];
+    if (idx < 4.5) return uToolColors[4];
+    return uToolColors[5];
+  }
+
+  void main() {
+    float isSupport = mod(aMeta, 2.0);
+    float toolIdx = mod(floor(aMeta / 2.0), 8.0);
+    float layerIdx = floor(aMeta / 16.0);
+
+    if (isSupport > 0.5 && uShowSupport < 0.5) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      return;
+    }
+    if (uMode < 0.5 && layerIdx > uClipLayer + 0.01) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      return;
+    }
+    if (uMode > 0.5 && layerIdx <= uClipLayer + 0.01) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      return;
+    }
+
+    vec2 p1 = vec2(aStartEnd.x - 175.0, -(aStartEnd.y - 175.0));
+    vec2 p2 = vec2(aStartEnd.z - 175.0, -(aStartEnd.w - 175.0));
+    vec2 delta = p2 - p1;
+    float segLen = length(delta);
+    if (segLen < 0.001) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      return;
+    }
+
+    vec2 dir = delta / segLen;
+    vec2 perp = vec2(-dir.y, dir.x);
+    float w = max(aDims.y, 0.25) * 1.18;
+    float h = max(aDims.z, 0.08) * 1.08;
+    float cap = w * 0.34;
+    float s = mix(-cap, segLen + cap, position.x);
+
+    vec3 worldPos = vec3(
+      p1.x + dir.x * s + perp.x * (position.y * w),
+      max(0.0, aDims.x + position.z * h),
+      p1.y + dir.y * s + perp.y * (position.y * w)
+    );
+    vec3 worldNormal = normalize(vec3(
+      perp.x * aProfileNormal.x,
+      aProfileNormal.y,
+      perp.y * aProfileNormal.x
+    ));
+
+    vWorldPos = worldPos;
+    vNormal = worldNormal;
+    vHeightV = position.z;
+    vColor = isSupport > 0.5 ? uSupportColor : pickToolColor(toolIdx);
+
+    gl_Position = projectionMatrix * viewMatrix * vec4(worldPos, 1.0);
+  }
+`
+
+const FRAGMENT_SHADER = `
+  uniform float uMode;
+
+  varying vec3 vNormal;
+  varying vec3 vColor;
+  varying vec3 vWorldPos;
+  varying float vHeightV;
+
+  void main() {
+    vec3 N = normalize(vNormal);
+    vec3 V = normalize(cameraPosition - vWorldPos);
+
+    if (uMode > 0.5) {
+      float fresnel = pow(1.0 - abs(dot(N, V)), 1.8);
+      vec3 ghostCol = mix(vec3(0.45, 0.58, 0.64), vec3(0.76, 0.90, 0.94), fresnel);
+      gl_FragColor = vec4(ghostCol, 0.13 + 0.22 * fresnel);
+      return;
+    }
+
+    vec3 keyDir = normalize(vec3(0.55, 0.82, 0.45));
+    vec3 fillDir = normalize(vec3(-0.65, 0.35, -0.55));
+    vec3 rimDir = normalize(vec3(0.0, 0.35, -0.94));
+
+    float keyDiff = max(dot(N, keyDir), 0.0);
+    float fillDiff = max(dot(N, fillDir), 0.0);
+    float rimDiff = max(dot(N, rimDir), 0.0);
+
+    vec3 hemi = mix(vec3(0.18, 0.22, 0.25), vec3(0.48, 0.52, 0.56), N.y * 0.5 + 0.5);
+    vec3 diffuse = vColor * (hemi + vec3(0.78, 0.76, 0.72) * keyDiff + vec3(0.24, 0.30, 0.36) * fillDiff + vec3(0.16, 0.20, 0.22) * rimDiff);
+
+    vec3 H = normalize(keyDir + V);
+    float spec = pow(max(dot(N, H), 0.0), 30.0) * 0.22;
+
+    float layerShade = 0.85 + 0.15 * clamp(vHeightV + 1.0, 0.0, 1.0);
+    float bedAo = mix(0.86, 1.0, smoothstep(0.0, 4.0, vWorldPos.y));
+
+    vec3 color = diffuse * layerShade * bedAo + vec3(spec);
+    color = color / (color + vec3(0.22)) * 1.12;
+    gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+  }
+`
+
+function buildBedPlate() {
+  const group = new THREE.Group()
+  const canvas = document.createElement('canvas')
+  canvas.width = 1024
+  canvas.height = 1024
+  const ctx = canvas.getContext('2d')
+
+  // Matte dark PEI surface
+  ctx.fillStyle = '#141c20'
+  ctx.fillRect(0, 0, 1024, 1024)
+
+  const pxPerMm = 1024 / BED_SIZE
+  // 10 mm minor grid
+  ctx.strokeStyle = '#1d272d'
+  ctx.lineWidth = 1
+  for (let mm = 10; mm < BED_SIZE; mm += 10) {
+    if (mm % 50 === 0) continue
+    const p = Math.round(mm * pxPerMm) + 0.5
+    ctx.beginPath()
+    ctx.moveTo(p, 0)
+    ctx.lineTo(p, 1024)
+    ctx.moveTo(0, p)
+    ctx.lineTo(1024, p)
+    ctx.stroke()
+  }
+
+  // 50 mm major grid
+  ctx.strokeStyle = '#2c3b43'
+  ctx.lineWidth = 1.5
+  for (let mm = 50; mm < BED_SIZE; mm += 50) {
+    const p = Math.round(mm * pxPerMm) + 0.5
+    ctx.beginPath()
+    ctx.moveTo(p, 0)
+    ctx.lineTo(p, 1024)
+    ctx.moveTo(0, p)
+    ctx.lineTo(1024, p)
+    ctx.stroke()
+  }
+
+  // Outer perimeter & subtle lime front edge
+  ctx.strokeStyle = '#42555f'
+  ctx.lineWidth = 4
+  ctx.strokeRect(2, 2, 1020, 1020)
+
+  ctx.fillStyle = '#c5f76b'
+  ctx.fillRect(0, 1018, 1024, 6)
+
+  ctx.fillStyle = '#7b8f97'
+  ctx.font = '600 22px Onest, sans-serif'
+  ctx.textAlign = 'center'
+  ctx.fillText('VORON 2.4 · 350 × 350 mm', 512, 1002)
+
+  const texture = new THREE.CanvasTexture(canvas)
+  texture.colorSpace = THREE.SRGBColorSpace
+  texture.anisotropy = 4
+
+  const plate = new THREE.Mesh(
+    new THREE.PlaneGeometry(BED_SIZE, BED_SIZE),
+    new THREE.MeshBasicMaterial({ map: texture }),
+  )
+  plate.rotation.x = -Math.PI / 2
+  plate.position.y = -0.15
+  group.add(plate)
+
+  const slab = new THREE.Mesh(
+    new THREE.BoxGeometry(BED_SIZE + 4, 4, BED_SIZE + 4),
+    new THREE.MeshBasicMaterial({ color: 0x0e1417 }),
+  )
+  slab.position.y = -2.25
+  group.add(slab)
+
+  return group
+}
+
+function buildNozzleMarker() {
+  const group = new THREE.Group()
+  const cone = new THREE.Mesh(
+    new THREE.ConeGeometry(2.4, 8, 16),
+    new THREE.MeshBasicMaterial({ color: 0xc5f76b }),
+  )
+  cone.rotation.x = Math.PI
+  cone.position.y = 4.2
+  group.add(cone)
+
+  const ring = new THREE.Mesh(
+    new THREE.RingGeometry(3.2, 4.4, 24),
+    new THREE.MeshBasicMaterial({ color: 0xc5f76b, side: THREE.DoubleSide, transparent: true, opacity: 0.7 }),
+  )
+  ring.rotation.x = -Math.PI / 2
+  ring.position.y = 0.25
+  group.add(ring)
+  group.visible = false
+  return group
+}
+
+function resolvedPaletteVectors() {
+  return Array.from({ length: 6 }, (_, id) => {
+    const hex =
+      props.colorMode === 'tools'
+        ? TOOL_PALETTE[id]
+        : (props.toolColors?.[id] || TOOL_PALETTE[id])
+    const color = new THREE.Color(hex)
+    // Lift near-black filament slightly so surface shading stays legible against dark cockpit background.
+    const luma = 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b
+    if (luma < 0.07) color.lerp(new THREE.Color('#3b464c'), 0.45)
+    return new THREE.Vector3(color.r, color.g, color.b)
+  })
+}
+
+function updateUniforms() {
+  if (!solidMaterial || !ghostMaterial) return
+  const palette = resolvedPaletteVectors()
+  const maxLayer = props.model?.header?.maxLayer ?? 999999
+  const clip = Math.min(props.clipLayer, maxLayer)
+  const support = props.showSupport ? 1.0 : 0.0
+
+  solidMaterial.uniforms.uToolColors.value = palette
+  solidMaterial.uniforms.uClipLayer.value = clip
+  solidMaterial.uniforms.uShowSupport.value = support
+
+  ghostMaterial.uniforms.uToolColors.value = palette
+  ghostMaterial.uniforms.uClipLayer.value = clip
+  ghostMaterial.uniforms.uShowSupport.value = support
+  if (ghostMesh) ghostMesh.visible = props.showGhost && clip < maxLayer
+
+  invalidate()
+}
+
+function updateNozzle() {
+  if (!nozzleMarker) return
+  const pos = props.livePosition
+  if (props.isLiveJob && Array.isArray(pos) && [pos[0], pos[1], pos[2]].every(Number.isFinite)) {
+    nozzleMarker.position.set(pos[0] - HALF_BED, Math.max(0, pos[2]), -(pos[1] - HALF_BED))
+    nozzleMarker.visible = true
+  } else {
+    nozzleMarker.visible = false
+  }
+  invalidate()
+}
+
+function modelBoundingBox() {
+  const b = props.model?.header?.bounds
+  if (!b) return new THREE.Box3(new THREE.Vector3(-HALF_BED, 0, -HALF_BED), new THREE.Vector3(HALF_BED, 40, HALF_BED))
+  return new THREE.Box3(
+    new THREE.Vector3(b.minX - HALF_BED, Math.max(0, b.minZ), -(b.maxY - HALF_BED)),
+    new THREE.Vector3(b.maxX - HALF_BED, Math.max(2, b.maxZ), -(b.minY - HALF_BED)),
+  )
+}
+
+function fitBox(box, animate = true, padding = 1.45) {
+  if (!box || box.isEmpty() || !camera || !controls) return
+  const center = box.getCenter(new THREE.Vector3())
+  const size = box.getSize(new THREE.Vector3())
+  const radius = Math.max(12, size.length() * 0.5)
+  const vfov = THREE.MathUtils.degToRad(camera.fov)
+  const hfov = 2 * Math.atan(Math.tan(vfov / 2) * camera.aspect)
+  const dist = (radius / Math.sin(Math.min(vfov, hfov) / 2)) * (padding * 0.65)
+  const dir = new THREE.Vector3(0.68, 0.58, 1.0).normalize()
+  const toPosition = center.clone().addScaledVector(dir, Math.max(45, dist))
+
+  controls.minDistance = Math.max(12, radius * 0.35)
+  controls.maxDistance = Math.max(750, radius * 6)
+  camera.near = 0.5
+  camera.far = Math.max(2000, dist * 5)
+  camera.updateProjectionMatrix()
+
+  if (animate && !reducedMotion.matches) {
+    animation = {
+      fromPosition: camera.position.clone(),
+      fromTarget: controls.target.clone(),
+      toPosition,
+      toTarget: center,
+      start: performance.now(),
+    }
+  } else {
+    animation = null
+    camera.position.copy(toPosition)
+    controls.target.copy(center)
+    controls.update()
+  }
+  invalidate()
+}
+
+function focusObject(animate = true) {
+  fitBox(modelBoundingBox(), animate, 1.38)
+}
+
+function focusBed(animate = true) {
+  const box = new THREE.Box3(new THREE.Vector3(-HALF_BED, 0, -HALF_BED), new THREE.Vector3(HALF_BED, 50, HALF_BED))
+  fitBox(box, animate, 1.25)
+}
+
+function rebuildMesh() {
+  if (!scene) return
+  if (solidMesh) {
+    scene.remove(solidMesh)
+    solidMesh = null
+  }
+  if (ghostMesh) {
+    scene.remove(ghostMesh)
+    ghostMesh = null
+  }
+  if (activeGeometry) {
+    activeGeometry.dispose()
+    activeGeometry = null
+  }
+
+  const segments = props.model?.segments
+  const count = props.model?.header?.segmentCount ?? 0
+  if (!segments || count <= 0) {
+    invalidate()
+    return
+  }
+
+  activeGeometry = buildBeadBaseGeometry()
+  const interleaved = new THREE.InstancedInterleavedBuffer(segments, 8)
+  activeGeometry.setAttribute('aStartEnd', new THREE.InterleavedBufferAttribute(interleaved, 4, 0))
+  activeGeometry.setAttribute('aDims', new THREE.InterleavedBufferAttribute(interleaved, 3, 4))
+  activeGeometry.setAttribute('aMeta', new THREE.InterleavedBufferAttribute(interleaved, 1, 7))
+  activeGeometry.instanceCount = count
+
+  solidMesh = new THREE.Mesh(activeGeometry, solidMaterial)
+  solidMesh.frustumCulled = false
+  scene.add(solidMesh)
+
+  ghostMesh = new THREE.Mesh(activeGeometry, ghostMaterial)
+  ghostMesh.frustumCulled = false
+  ghostMesh.renderOrder = 2
+  scene.add(ghostMesh)
+
+  updateUniforms()
+  focusObject(false)
+}
+
+function resizeView() {
+  if (!renderer || !viewport.value?.clientWidth || !viewport.value?.clientHeight) return
+  camera.aspect = viewport.value.clientWidth / viewport.value.clientHeight
+  camera.updateProjectionMatrix()
+  renderer.setSize(viewport.value.clientWidth, viewport.value.clientHeight, false)
+  invalidate()
+}
+
+function updateCanvasLabels() {
+  renderer?.domElement.setAttribute('title', t('Ziehen zum Drehen · Scrollen zum Zoomen'))
+  renderer?.domElement.setAttribute('aria-label', t('Interaktive 3D-Druckvorschau'))
+}
+
+function onVisibility() {
+  if (!document.hidden) invalidate()
+}
+
+function onContextLost(event) {
+  event.preventDefault()
+  webglError.value = 'Die 3D-Ansicht wurde unterbrochen. Seite neu laden, um sie wiederherzustellen.'
+}
+
+onMounted(() => {
+  try {
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'low-power' })
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75))
+    renderer.setClearColor(0x161f24, 1)
+    renderer.outputColorSpace = THREE.SRGBColorSpace
+    updateCanvasLabels()
+
+    viewport.value.appendChild(renderer.domElement)
+    scene = new THREE.Scene()
+    scene.background = new THREE.Color('#161f24')
+    camera = new THREE.PerspectiveCamera(36, 1, 0.5, 2500)
+
+    bedGroup = buildBedPlate()
+    scene.add(bedGroup)
+
+    nozzleMarker = buildNozzleMarker()
+    scene.add(nozzleMarker)
+
+    const baseUniforms = mode => ({
+      uToolColors: { value: resolvedPaletteVectors() },
+      uSupportColor: { value: new THREE.Vector3(0.41, 0.49, 0.53) },
+      uClipLayer: { value: 999999 },
+      uMode: { value: mode },
+      uShowSupport: { value: 1.0 },
+    })
+
+    solidMaterial = new THREE.ShaderMaterial({
+      vertexShader: VERTEX_SHADER,
+      fragmentShader: FRAGMENT_SHADER,
+      uniforms: baseUniforms(0.0),
+      side: THREE.DoubleSide,
+    })
+
+    ghostMaterial = new THREE.ShaderMaterial({
+      vertexShader: VERTEX_SHADER,
+      fragmentShader: FRAGMENT_SHADER,
+      uniforms: baseUniforms(1.0),
+      side: THREE.DoubleSide,
+      transparent: true,
+      depthWrite: false,
+    })
+
+    controls = new OrbitControls(camera, renderer.domElement)
+    controls.enableDamping = !reducedMotion.matches
+    controls.dampingFactor = 0.12
+    controls.maxPolarAngle = Math.PI * 0.495
+    controls.addEventListener('change', invalidate)
+    renderer.domElement.addEventListener('pointerdown', () => { animation = null })
+    renderer.domElement.addEventListener('webglcontextlost', onContextLost)
+
+    resizeObserver = new ResizeObserver(resizeView)
+    resizeObserver.observe(viewport.value)
+    resizeView()
+
+    intersectionObserver = new IntersectionObserver(entries => {
+      visible = entries[0].isIntersecting
+      invalidate()
+    })
+    intersectionObserver.observe(viewport.value)
+
+    document.addEventListener('visibilitychange', onVisibility)
+
+    focusBed(false)
+    if (props.model) rebuildMesh()
+    updateNozzle()
+  } catch {
+    webglError.value = '3D ist in diesem Browser nicht verfügbar.'
+  }
+})
+
+watch(language, updateCanvasLabels)
+watch(() => props.model, rebuildMesh)
+watch(
+  () => [props.toolColors, props.colorMode, props.clipLayer, props.showGhost, props.showSupport],
+  updateUniforms,
+  { deep: true },
+)
+watch(() => [props.isLiveJob, props.livePosition], updateNozzle, { deep: true })
+
+onBeforeUnmount(() => {
+  disposed = true
+  cancelAnimationFrame(frame)
+  resizeObserver?.disconnect()
+  intersectionObserver?.disconnect()
+  document.removeEventListener('visibilitychange', onVisibility)
+  controls?.dispose()
+  activeGeometry?.dispose()
+  solidMaterial?.dispose()
+  ghostMaterial?.dispose()
+  if (bedGroup) {
+    bedGroup.traverse(o => {
+      o.geometry?.dispose()
+      o.material?.map?.dispose()
+      o.material?.dispose()
+    })
+  }
+  if (nozzleMarker) {
+    nozzleMarker.traverse(o => {
+      o.geometry?.dispose()
+      o.material?.dispose()
+    })
+  }
+  if (renderer) {
+    renderer.domElement.removeEventListener('webglcontextlost', onContextLost)
+    renderer.dispose()
+  }
+})
+</script>
+
+<template>
+  <section class="scene-panel print-scene-panel" :aria-label="t('3D-Druckvorschau')">
+    <div class="scene-toolbar">
+      <div class="segmented" :aria-label="t('Farbmodus')">
+        <button
+          type="button"
+          :aria-pressed="colorMode === 'filament'"
+          @click="emit('update:colorMode', 'filament')"
+        >
+          Filament
+        </button>
+        <button
+          type="button"
+          :aria-pressed="colorMode === 'tools'"
+          @click="emit('update:colorMode', 'tools')"
+        >
+          {{ t('Werkzeuge') }}
+        </button>
+      </div>
+
+      <div class="scene-actions">
+        <button
+          v-if="hasSupport"
+          class="icon-button"
+          :class="{ 'toggle-on': showSupport }"
+          type="button"
+          :aria-pressed="showSupport"
+          :title="showSupport ? t('Stützstruktur ausblenden') : t('Stützstruktur einblenden')"
+          :aria-label="showSupport ? t('Stützstruktur ausblenden') : t('Stützstruktur einblenden')"
+          @click="emit('update:showSupport', !showSupport)"
+        >
+          <Layers :size="15" />
+        </button>
+        <button
+          class="icon-button"
+          :class="{ 'toggle-on': showGhost }"
+          type="button"
+          :disabled="!hasModel"
+          :aria-pressed="showGhost"
+          :title="showGhost ? t('Restvorschau ausblenden') : t('Restvorschau einblenden')"
+          :aria-label="showGhost ? t('Restvorschau ausblenden') : t('Restvorschau einblenden')"
+          @click="emit('update:showGhost', !showGhost)"
+        >
+          <Eye v-if="showGhost" :size="15" />
+          <EyeOff v-else :size="15" />
+        </button>
+        <button
+          class="icon-button"
+          type="button"
+          :disabled="!hasModel"
+          :title="t('Modell fokussieren')"
+          :aria-label="t('Modell fokussieren')"
+          @click="focusObject(true)"
+        >
+          <Focus :size="16" />
+        </button>
+        <button
+          class="icon-button"
+          type="button"
+          :disabled="!!webglError"
+          :title="t('Gesamtes Druckbett zeigen')"
+          :aria-label="t('Gesamtes Druckbett zeigen')"
+          @click="focusBed(true)"
+        >
+          <Grid3x3 :size="15" />
+        </button>
+        <button
+          class="icon-button"
+          type="button"
+          :disabled="!hasModel"
+          :title="t('Ansicht zurücksetzen')"
+          :aria-label="t('Ansicht zurücksetzen')"
+          @click="focusObject(true)"
+        >
+          <RotateCcw :size="15" />
+        </button>
+      </div>
+    </div>
+
+    <div ref="viewport" class="scene-viewport print-scene-viewport">
+      <div v-if="loading || error || webglError || !hasModel" class="scene-loading" role="status">
+        <Box :size="26" />
+        <span>
+          {{
+            webglError
+              ? t(webglError)
+              : error
+                ? t(error)
+                : loading
+                  ? t('3D-Druckmodell wird aus G-Code berechnet …')
+                  : t('Keine Druckdatei ausgewählt.')
+          }}
+        </span>
+        <button v-if="error && !loading" class="subtle-button" type="button" @click="emit('reload')">
+          {{ t('Modell erneut laden') }}
+        </button>
+      </div>
+    </div>
+
+    <div class="scene-bottom">
+      <span class="scene-badge">
+        <Box :size="13" />
+        <template v-if="hasModel">
+          {{
+            t('{0} Layer · {1} Segmente · 3D-G-Code', [
+              model.header.layerCount,
+              model.header.segmentCount.toLocaleString(),
+            ])
+          }}
+        </template>
+        <template v-else>{{ t('VORON 2.4 · 350 × 350 mm') }}</template>
+      </span>
+      <span class="orbit-hint">{{ t('Ziehen zum Drehen · Scrollen zum Zoomen') }}</span>
+    </div>
+  </section>
+</template>

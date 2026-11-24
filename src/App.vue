@@ -27,6 +27,7 @@ import ToolActions from './components/ToolActions.vue'
 import TemperatureTarget from './components/TemperatureTarget.vue'
 import ThermalGauge from './components/ThermalGauge.vue'
 import CameraView from './components/CameraView.vue'
+import CockpitSelect from './components/CockpitSelect.vue'
 import { useControls } from './useControls.js'
 import { usePrinter } from './usePrinter.js'
 import { useConsole } from './useConsole.js'
@@ -35,6 +36,12 @@ import { toolActionReason, filamentToolIds } from './tool-action-state.mjs'
 import { toolState, heatState } from '../server/status.mjs'
 
 const ToolScene = defineAsyncComponent(() => import('./components/ToolScene.vue'))
+const PrintView = defineAsyncComponent(() => import('./components/PrintView.vue'))
+
+const languageOptions = [
+  { value: 'de', label: 'DE · Deutsch', lang: 'de' },
+  { value: 'en', label: 'EN · English', lang: 'en' },
+]
 
 const consoleStore = useConsole()
 const { status, connection, error, updating, refresh } = usePrinter({
@@ -52,7 +59,7 @@ watch(
 )
 
 const voyagerUrl = import.meta.env.VITE_VOYAGER_URL || 'http://127.0.0.1:1977'
-const validTabs = ['tools', 'controls', 'cameras', 'console', 'system']
+const validTabs = ['tools', 'controls', 'print', 'cameras', 'console', 'system']
 const tab = ref(validTabs.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'tools')
 watch(tab, value => history.replaceState(null, '', `#${value}`))
 
@@ -231,6 +238,7 @@ const pageHeading = computed(
     ({
       tools: 'Deine Werkzeuge. Im Blick.',
       controls: 'Drucker bedienen.',
+      print: 'Druck & 3D-Vorschau.',
       cameras: 'Blick in den Drucker.',
       console: 'Direkt mit Klipper.',
       system: 'System & Sensoren.',
@@ -241,6 +249,7 @@ const pageSubtitle = computed(() => {
   if (tab.value === 'controls') return controlsSubtitle.value
   return {
     tools: 'Werkzeug auswählen und seinen aktuellen Zustand prüfen.',
+    print: 'Aktuellen Druck oder G-Code-Dateien als 3D-Modell prüfen.',
     cameras: 'Tophat und Druckbett · kontinuierliche Livestreams.',
     console: 'G-Code und Makros senden. Antworten direkt mitlesen.',
     system: 'Status und Messwerte direkt von deinem Toolchanger.',
@@ -262,13 +271,16 @@ async function acknowledgeUncertain() {
         <span>STORMTROOPER<small>VORON 2.4 <span class="brand-divider">/</span> 6-Toolchanger</small></span>
       </a>
       <div class="header-meta">
-        <label class="language-control">
-          <span class="sr-only">{{ t('Sprache') }}</span>
-          <select :value="language" :aria-label="t('Sprache')" @change="setLanguage($event.target.value)">
-            <option value="de" lang="de">DE · Deutsch</option>
-            <option value="en" lang="en">EN · English</option>
-          </select>
-        </label>
+        <div class="language-control">
+          <CockpitSelect
+            :model-value="language"
+            :options="languageOptions"
+            :aria-label="t('Sprache')"
+            size="compact"
+            align="right"
+            @update:model-value="setLanguage"
+          />
+        </div>
         <button
           class="subtle-button print-control"
           type="button"
@@ -322,6 +334,14 @@ async function acknowledgeUncertain() {
       </button>
       <button
         type="button"
+        :class="{ active: tab === 'print' }"
+        :aria-current="tab === 'print' ? 'page' : undefined"
+        @click="tab = 'print'"
+      >
+        <Printer :size="17" />{{ t('Druck') }}
+      </button>
+      <button
+        type="button"
         :class="{ active: tab === 'cameras' }"
         :aria-current="tab === 'cameras' ? 'page' : undefined"
         @click="tab = 'cameras'"
@@ -350,7 +370,12 @@ async function acknowledgeUncertain() {
     </nav>
 
     <main>
-      <div v-if="isPrintActive" class="print-job-bar" :class="{ paused: status.printState === 'paused' }" role="status">
+      <div
+        v-if="isPrintActive && tab !== 'print'"
+        class="print-job-bar"
+        :class="{ paused: status.printState === 'paused' }"
+        role="status"
+      >
         <div class="print-job-meta">
           <span class="print-job-badge">
             <Printer :size="14" />{{ t(printLabel) }}
@@ -361,6 +386,9 @@ async function acknowledgeUncertain() {
           <span v-if="status.printDuration != null" class="print-job-detail">
             {{ formatDuration(status.printDuration) }}
           </span>
+          <button type="button" class="print-job-open" @click="tab = 'print'">
+            {{ t('3D-Druckansicht') }}<ChevronRight :size="14" />
+          </button>
         </div>
         <div v-if="printProgressPercent != null" class="print-job-track" aria-hidden="true">
           <div class="print-job-fill" :style="{ width: `${printProgressPercent}%` }" />
@@ -714,6 +742,8 @@ async function acknowledgeUncertain() {
         @refresh="refresh"
         @context="controlContext = $event"
       />
+
+      <PrintView v-if="tab === 'print'" :status="status" :online="online" />
 
       <section v-if="tab === 'tools' || tab === 'cameras'" class="camera-section" :aria-label="t('Druckerkameras')">
         <div v-if="tab === 'tools'" class="section-heading">

@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { Lightbulb, RotateCw } from '@lucide/vue'
 import { t } from '../i18n.mjs'
 import { ledProfiles, auxActionReason } from '../aux-action-state.mjs'
+import CockpitSelect from './CockpitSelect.vue'
 
 const props = defineProps({
   status: Object,
@@ -17,6 +18,7 @@ const reason = action => auxActionReason(props.status, action, props.online, pro
 const available = id => props.status?.capabilities?.ledProfiles?.includes(id)
 const main = computed(() => ledProfiles.slice(0, 5).filter(profile => available(profile.id)))
 const others = computed(() => ledProfiles.slice(5).filter(profile => available(profile.id)))
+const otherOptions = computed(() => others.value.map(profile => ({ value: profile.id, label: profile.label })))
 
 watch(
   others,
@@ -54,11 +56,12 @@ function initialize() {
       </button>
     </div>
     <form v-if="others.length" class="led-more" @submit.prevent="led(extra)">
-      <select v-model="extra" :aria-label="t('Weiterer LED-Status')">
-        <option v-for="profile in others" :key="profile.id" :value="profile.id">
-          {{ profile.label }}
-        </option>
-      </select>
+      <CockpitSelect
+        v-model="extra"
+        :options="otherOptions"
+        :aria-label="t('Weiterer LED-Status')"
+        size="compact"
+      />
       <button class="subtle-button" :disabled="!!reason('led') || !available(extra)">
         {{ t('Setzen') }}
       </button>

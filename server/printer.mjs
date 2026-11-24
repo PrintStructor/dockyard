@@ -5,6 +5,12 @@ import { normalizeStatus } from './status.mjs'
 import { temperatureHistory } from './temperature.mjs'
 import { capabilities, commandFor, ControlError, sameOriginRequest } from './control.mjs'
 import { executeGcodeScript, AbortedCommandError } from './ws-rpc.mjs'
+import {
+  validateGcodeFilename,
+  validateThumbnailPath,
+  normalizePrintMetadata,
+  fetchGcodeMeshBinary,
+} from './gcode-mesh.mjs'
 import { printerUrl as printer } from './config.mjs'
 
 const objects = [
@@ -373,7 +379,8 @@ function streamCamera(id, res) {
 }
 
 export function printerMiddleware(req, res, next) {
-  const path = new URL(req.url, 'http://localhost').pathname
+  const parsedUrl = new URL(req.url, 'http://localhost')
+  const path = parsedUrl.pathname
   if (!path.startsWith('/api/')) return next()
   res.setHeader('Cache-Control', 'no-store')
 
@@ -385,6 +392,7 @@ export function printerMiddleware(req, res, next) {
   }
 
   const camera = path.match(/^\/api\/camera\/(tophat|heatbed)(?:\/(stream|webrtc))?$/)
+  const printRoute = path.match(/^\/api\/print\/(files|metadata|thumbnail|model)$/)
   if (
     path !== '/api/status' &&
     path !== '/api/control' &&
@@ -392,7 +400,8 @@ export function printerMiddleware(req, res, next) {
     path !== '/api/console' &&
     path !== '/api/presets' &&
     path !== '/api/temperature-history' &&
-    !camera
+    !camera &&
+    !printRoute
   ) {
     return json(404, { error: 'Unbekannter Endpunkt' })
   }
@@ -407,6 +416,95 @@ export function printerMiddleware(req, res, next) {
 
   ;(async () => {
     try {
+      if (printRoute) {
+        const sub = printRoute[1]
+        if (sub === 'files') {
+          const [filesRes, historyRes] = await Promise.all([
+            fetch(`${printer}/server/files/list?root=gcodes`, { signal: AbortSignal.timeout(7000) }),
+            fetch(`${printer}/server/history/list?limit=10`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
+          ])
+          if (!filesRes.ok) throw new Error('Druckdateien nicht erreichbar.')
+          const filesJson = await filesRes.json()
+          const files = (Array.isArray(filesJson.result) ? filesJson.result : [])
+            .filter(item => validateGcodeFilename(item?.path))
+            .sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0))
+            .slice(0, 60)
+            .map(item => ({
+              path: item.path,
+              name: item.path.split('/').pop(),
+              size: Number.isFinite(item.size) ? item.size : null,
+              modified: Number.isFinite(item.modified) ? item.modified : null,
+            }))
+
+          let recentJobs = []
+          if (historyRes?.ok) {
+            const historyJson = await historyRes.json().catch(() => null)
+            recentJobs = (Array.isArray(historyJson?.result?.jobs) ? historyJson.result.jobs : [])
+              .filter(job => validateGcodeFilename(job?.filename))
+              .slice(0, 6)
+              .map(job => ({
+                jobId: job.job_id ?? null,
+                filename: job.filename,
+                name: job.filename.split('/').pop(),
+                status: job.status ?? null,
+                printDuration: Number.isFinite(job.print_duration) ? job.print_duration : null,
+                filamentUsed: Number.isFinite(job.filament_used) ? job.filament_used : null,
+                startTime: Number.isFinite(job.start_time) ? job.start_time : null,
+                endTime: Number.isFinite(job.end_time) ? job.end_time : null,
+              }))
+          }
+          return json(200, { files, recentJobs })
+        }
+
+        if (sub === 'metadata') {
+          const filename = validateGcodeFilename(parsedUrl.searchParams.get('filename'))
+          if (!filename) throw new ControlError('Ungültiger Dateiname.', 400)
+          const response = await fetch(
+            `${printer}/server/files/metadata?filename=${encodeURIComponent(filename)}`,
+            { signal: AbortSignal.timeout(7000) },
+          )
+          if (!response.ok) throw new Error('Dateimetadaten nicht erreichbar.')
+          const data = await response.json()
+          return json(200, normalizePrintMetadata(data.result ?? {}, filename))
+        }
+
+        if (sub === 'thumbnail') {
+          const relPath = validateThumbnailPath(parsedUrl.searchParams.get('path'))
+          if (!relPath) throw new ControlError('Ungültiger Vorschaupfad.', 400)
+          const encoded = relPath
+            .split('/')
+            .map(segment => encodeURIComponent(segment))
+            .join('/')
+          const response = await fetch(`${printer}/server/files/gcodes/${encoded}`, {
+            signal: AbortSignal.timeout(6000),
+          })
+          if (!response.ok || !response.headers.get('content-type')?.startsWith('image/')) {
+            throw new Error('Kein Vorschaubild verfügbar.')
+          }
+          const bytes = Buffer.from(await response.arrayBuffer())
+          if (bytes.length > 4 * 1024 * 1024) throw new Error('Vorschaubild zu groß.')
+          res.setHeader('Content-Type', response.headers.get('content-type'))
+          res.setHeader('Cache-Control', 'private, max-age=3600')
+          res.end(bytes)
+          return
+        }
+
+        if (sub === 'model') {
+          const filename = validateGcodeFilename(parsedUrl.searchParams.get('filename'))
+          if (!filename) throw new ControlError('Ungültiger Dateiname.', 400)
+          const tag = parsedUrl.searchParams.get('v') || ''
+          const cacheKey = `${filename}:${tag}`
+          const binary = await fetchGcodeMeshBinary({ printer, filename, cacheKey })
+          if (res.destroyed) return
+          res.statusCode = 200
+          res.setHeader('Content-Type', 'application/octet-stream')
+          res.setHeader('Content-Length', binary.byteLength)
+          res.setHeader('Cache-Control', 'private, max-age=300')
+          res.end(binary)
+          return
+        }
+      }
+
       if (path === '/api/temperature-history') {
         const response = await fetch(`${printer}/server/temperature_store`, { signal: AbortSignal.timeout(5000) })
         if (!response.ok) throw new Error('Temperaturverlauf nicht erreichbar.')

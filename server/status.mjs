@@ -113,8 +113,13 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
     klipperMessage: status.webhooks?.state_message ?? '',
     printState: status.print_stats?.state ?? null,
     filename: status.print_stats?.filename?.split('/').pop() || null,
+    printFilename: status.print_stats?.filename || null,
     progress: finite(status.display_status?.progress),
     printDuration: finite(status.print_stats?.print_duration),
+    totalDuration: finite(status.print_stats?.total_duration),
+    filamentUsed: finite(status.print_stats?.filament_used),
+    printLayer: finite(status.print_stats?.info?.current_layer),
+    printTotalLayers: finite(status.print_stats?.info?.total_layer),
     bed: {
       temperature: finite(status.heater_bed?.temperature),
       target: finite(status.heater_bed?.target),

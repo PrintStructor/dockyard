@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { Fan, Check, Power } from '@lucide/vue'
 import { t } from '../i18n.mjs'
+import CockpitSelect from './CockpitSelect.vue'
 
 const props = defineProps({
   status: Object,
@@ -14,6 +15,8 @@ const fan = ref('')
 const draft = ref(null)
 
 const fans = computed(() => props.status?.capabilities?.fans ?? [])
+const fanOptions = computed(() => fans.value.map(item => ({ value: item.name, label: t(item.label) })))
+
 watch(
   fans,
   list => {
@@ -54,11 +57,12 @@ async function apply(percent) {
       <span>{{ online && actual != null ? `${actual} %` : '—' }}</span>
     </div>
     <template v-if="fans.length">
-      <select v-model="fan" :aria-label="t('Lüfter auswählen')">
-        <option v-for="item in fans" :key="item.name" :value="item.name">
-          {{ t(item.label) }}
-        </option>
-      </select>
+      <CockpitSelect
+        v-model="fan"
+        :options="fanOptions"
+        :aria-label="t('Lüfter auswählen')"
+        size="compact"
+      />
       <form @submit.prevent="apply(value)">
         <div class="fan-setting">
           <input

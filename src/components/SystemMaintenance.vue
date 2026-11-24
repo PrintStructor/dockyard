@@ -210,11 +210,16 @@ onMounted(() => {
           <h2>{{ t('Software & Updates') }}</h2>
           <p v-if="updates">
             {{
-              t('{0} Komponenten · {1} Updates verfügbar · {2} lokal geändert', [
-                updates.summary.total,
-                updates.summary.outdated,
-                updates.summary.dirty,
-              ])
+              updates.summary.outdated === 1
+                ? t('{0} Komponenten · 1 Update verfügbar · {1} lokal geändert', [
+                    updates.summary.total,
+                    updates.summary.dirty,
+                  ])
+                : t('{0} Komponenten · {1} Updates verfügbar · {2} lokal geändert', [
+                    updates.summary.total,
+                    updates.summary.outdated,
+                    updates.summary.dirty,
+                  ])
             }}
           </p>
           <p v-else>{{ t('Moonraker Update-Manager · reine Übersicht ohne automatische Überschreibung.') }}</p>

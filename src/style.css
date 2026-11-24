@@ -505,6 +505,13 @@ input::placeholder{color:var(--muted);opacity:1}.jog-heading{flex-wrap:wrap}.jog
   .config-tree.collapsed .config-tree-scroll{display:none}
   .config-cm-host{min-height:360px}
   .shaper-cards{grid-template-columns:1fr}
+  .log-controls .segmented{width:100%;display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+  .log-controls .segmented button{padding:7px 6px;font-size:11px;text-align:center}
   .log-rotated-select{width:100%}
   .log-line{grid-template-columns:34px minmax(0,1fr);gap:8px}
+  .update-table thead{display:none}
+  .update-table,.update-table tbody,.update-table tr,.update-table td{display:block;width:100%}
+  .update-table tr{padding:11px 12px;border-bottom:1px solid var(--line-subtle);display:flex;flex-direction:column;gap:6px}
+  .update-table tr:last-child{border-bottom:0}
+  .update-table td{padding:0;border:0}
 }

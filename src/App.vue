@@ -32,6 +32,7 @@ import CockpitSelect from './components/CockpitSelect.vue'
 import { useControls } from './useControls.js'
 import { usePrinter } from './usePrinter.js'
 import { useConsole } from './useConsole.js'
+import { useConfigEditor } from './useConfigEditor.js'
 import { auxActionReason } from './aux-action-state.mjs'
 import { toolActionReason, filamentToolIds } from './tool-action-state.mjs'
 import { toolState, heatState } from '../server/status.mjs'
@@ -39,6 +40,7 @@ import { toolState, heatState } from '../server/status.mjs'
 const ToolScene = defineAsyncComponent(() => import('./components/ToolScene.vue'))
 const PrintView = defineAsyncComponent(() => import('./components/PrintView.vue'))
 const HistoryView = defineAsyncComponent(() => import('./components/HistoryView.vue'))
+const SystemView = defineAsyncComponent(() => import('./components/SystemView.vue'))
 
 const languageOptions = [
   { value: 'de', label: 'DE · Deutsch', lang: 'de' },
@@ -60,10 +62,34 @@ watch(
   result => syncServerResult(result),
 )
 
+const configEditor = useConfigEditor()
 const voyagerUrl = import.meta.env.VITE_VOYAGER_URL || 'http://127.0.0.1:1977'
 const validTabs = ['tools', 'controls', 'print', 'history', 'cameras', 'console', 'system']
-const tab = ref(validTabs.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'tools')
-watch(tab, value => history.replaceState(null, '', `#${value}`))
+const validSystemSubtabs = ['overview', 'config', 'calibration', 'maintenance']
+
+function parseRouteHash(rawHash) {
+  const clean = (rawHash || '').replace(/^#/, '')
+  const [mainTab, sub] = clean.split('/')
+  const nextTab = validTabs.includes(mainTab) ? mainTab : 'tools'
+  const nextSub = nextTab === 'system' && validSystemSubtabs.includes(sub) ? sub : 'overview'
+  return { nextTab, nextSub }
+}
+
+const initialRoute = parseRouteHash(location.hash)
+const tab = ref(initialRoute.nextTab)
+const systemSubtab = ref(initialRoute.nextSub)
+
+watch([tab, systemSubtab], ([nextTab, nextSub]) => {
+  const targetHash = nextTab === 'system' && nextSub !== 'overview' ? `#system/${nextSub}` : `#${nextTab}`
+  if (location.hash !== targetHash) history.replaceState(null, '', targetHash)
+})
+
+function handleHashChange() {
+  const { nextTab, nextSub } = parseRouteHash(location.hash)
+  tab.value = nextTab
+  if (nextTab === 'system') systemSubtab.value = nextSub
+}
+
 const requestedPrintFile = ref('')
 
 function openPrintFile(filename) {
@@ -83,11 +109,15 @@ watch(
 const nowTick = ref(Date.now())
 let clockTimer = null
 onMounted(() => {
+  window.addEventListener('hashchange', handleHashChange)
   clockTimer = setInterval(() => {
     if (status.value?.control?.job) nowTick.value = Date.now()
   }, 1000)
 })
-onBeforeUnmount(() => clearInterval(clockTimer))
+onBeforeUnmount(() => {
+  window.removeEventListener('hashchange', handleHashChange)
+  clearInterval(clockTimer)
+})
 
 const activeJob = computed(() => {
   const job = status.value?.control?.job
@@ -250,7 +280,7 @@ const pageHeading = computed(
       history: 'Druckverlauf.',
       cameras: 'Blick in den Drucker.',
       console: 'Direkt mit Klipper.',
-      system: 'System & Sensoren.',
+      system: 'System & Maschine.',
     })[tab.value],
 )
 
@@ -262,7 +292,7 @@ const pageSubtitle = computed(() => {
     history: 'Vergangene Druckjobs, Laufzeiten, Filamentverbrauch und Werkzeugnutzung.',
     cameras: 'Tophat und Druckbett · kontinuierliche Livestreams.',
     console: 'G-Code und Makros senden. Antworten direkt mitlesen.',
-    system: 'Status und Messwerte direkt von deinem Toolchanger.',
+    system: 'Host, Konfiguration, Kalibrierung und Wartung deines Toolchangers.',
   }[tab.value]
 })
 
@@ -373,6 +403,11 @@ async function acknowledgeUncertain() {
         @click="tab = 'system'"
       >
         <SlidersHorizontal :size="17" />System
+        <span
+          v-if="configEditor.isDirty.value"
+          class="nav-dirty-dot"
+          :title="t('Ungespeicherte Konfigurationsänderungen')"
+        />
       </button>
       <button
         type="button"
@@ -784,68 +819,18 @@ async function acknowledgeUncertain() {
         :send="send"
       />
 
-      <section v-if="tab === 'system'" class="system-layout" :aria-label="t('Systemstatus')">
-        <article class="system-panel">
-          <h2>{{ t('Druckerstatus') }}</h2>
-          <dl class="measurements">
-            <div><dt>Klipper</dt><dd>{{ status?.klipperState ?? t('Unbekannt') }}</dd></div>
-            <div><dt>{{ t('Druckstatus') }}</dt><dd>{{ t(printLabel) }}</dd></div>
-            <div v-if="status?.filename"><dt>{{ t('Druckdatei') }}</dt><dd>{{ status.filename }}</dd></div>
-            <div v-if="isPrintActive && printProgressPercent != null">
-              <dt>{{ t('Fortschritt') }}</dt>
-              <dd>{{ printProgressPercent }} %</dd>
-            </div>
-            <div v-if="isPrintActive && status?.printDuration != null">
-              <dt>{{ t('Druckzeit') }}</dt>
-              <dd>{{ formatDuration(status.printDuration) }}</dd>
-            </div>
-            <div><dt>Toolchanger</dt><dd>{{ status?.toolchangerState ?? t('Unbekannt') }}</dd></div>
-            <div>
-              <dt>{{ t('Aktives Werkzeug') }}</dt>
-              <dd>{{ status?.active == null ? t('Unbekannt') : `T${status.active}` }}</dd>
-            </div>
-            <div><dt>{{ t('Erkanntes Werkzeug') }}</dt><dd>{{ t(detectedLabel) }}</dd></div>
-            <div>
-              <dt>{{ t('Referenzierte Achsen') }}</dt>
-              <dd>{{ status?.homedAxes?.toUpperCase() || t('Keine bestätigt') }}</dd>
-            </div>
-          </dl>
-          <p class="muted">{{ status?.klipperMessage }}</p>
-        </article>
-
-        <article class="system-panel">
-          <h2>{{ t('Temperaturen') }}</h2>
-          <dl class="measurements">
-            <div v-for="[name, value] in sensors" :key="name">
-              <dt>{{ t(name) }}</dt>
-              <dd>{{ temperature(value) }} °C</dd>
-            </div>
-          </dl>
-          <p class="muted">
-            {{
-              online
-                ? status?.transport === 'live'
-                  ? t('Live-Verbindung · LED-Farben viermal pro Sekunde.')
-                  : t('Ersatzabfrage alle 3 Sekunden.')
-                : t('Letzter Datenstand: {0}.', [time])
-            }}
-          </p>
-        </article>
-
-        <article class="model-note">
-          <Box :size="20" />
-          <div>
-            <h2>{{ t('CAD-Stand dieser Vorschau') }}</h2>
-            <p>
-              {{
-                t(
-                  'Die Gesamtbaugruppe zeigt die älteren Docks ohne KNOMI und das ältere Shuttle am Toolhead. Die Darstellung ist eine CAD-Referenz; Werkzeugpositionen werden nicht aus dem laufenden Druck übernommen.',
-                )
-              }}
-            </p>
-          </div>
-        </article>
-      </section>
+      <SystemView
+        v-if="tab === 'system'"
+        :status="status"
+        :online="online"
+        :pending="pending"
+        :send="send"
+        :subtab="systemSubtab"
+        :time="time"
+        @update:subtab="systemSubtab = $event"
+        @open-console="tab = 'console'"
+        @refresh="refresh"
+      />
 
       <footer class="page-footer">
         <span>STORMTROOPER <span class="footer-divider">/</span> {{ t('Lokale Druckerbedienung') }}</span>

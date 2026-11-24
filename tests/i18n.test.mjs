@@ -30,6 +30,15 @@ test('dynamic command feedback, guards and parameters are localized without chan
     translate('Cooldown ist während eines laufenden Drucks gesperrt. Bei einer Druckpause ist Cooldown verfügbar.', 'en'),
     'Cooldown is disabled while printing. Cooldown is available while paused.',
   )
+  assert.equal(translate('printer.cfg gespeichert · Neustart ausgelöst.', 'en'), 'printer.cfg saved · restart triggered.')
+  assert.equal(
+    translate('Nudge Ring XY-Kalibrierung: abgeschlossen — Klipper startet neu.', 'en'),
+    'Nudge Ring XY calibration: completed — Klipper is restarting.',
+  )
+  assert.equal(
+    translate('Beacon Z-Kalibrierung (Referenz T2)', 'en'),
+    'Beacon Z calibration (reference T2)',
+  )
 })
 
 test('saved language accepts supported choices and safely falls back with blocked storage', () => {

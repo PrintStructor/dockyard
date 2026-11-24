@@ -580,3 +580,161 @@ test('control clears job cleanly instead of locking uncertain when a restartsKli
   assert.match(result.message, /Klipper startet neu/)
   assert.equal(getControlState().job, null)
 })
+
+test('readJson preserves split multi-byte UTF-8 characters across chunk boundaries in /api/system/config/save', async t => {
+  let savedText = null
+  t.mock.method(globalThis, 'fetch', async (url, opts) => {
+    if (url.includes('/printer/objects/query')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          result: { status: { webhooks: { state: 'ready' }, print_stats: { state: 'standby' }, idle_timeout: { state: 'Idle' } } },
+        }),
+      }
+    }
+    if (url.includes('/server/files/list?root=config')) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ result: [{ path: 'printer.cfg', permissions: 'rw', size: 100, modified: 1000 }] }),
+      }
+    }
+    if (url.includes('/server/files/upload')) {
+      savedText = await opts.body.get('file').text()
+      return { ok: true, status: 201, json: async () => ({ item: { modified: 1001 } }) }
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+
+  // Split the 2-byte UTF-8 sequence for 'ü' (0xC3 0xBC) across two separate Buffer chunks.
+  const fullJson = Buffer.from(
+    JSON.stringify({ path: 'printer.cfg', content: '# Düse 240 °C — Lüfter über prüfen\n', expectedModified: 1000 }),
+    'utf8',
+  )
+  const splitIdx = fullJson.indexOf(0xc3) + 1
+  const req = Readable.from([fullJson.subarray(0, splitIdx), fullJson.subarray(splitIdx)])
+  req.method = 'POST'
+  req.url = '/api/system/config/save'
+  req.headers = {
+    origin: 'http://127.0.0.1:4173',
+    host: '127.0.0.1:4173',
+    'x-cockpit-request': '1',
+    'content-type': 'application/json',
+  }
+
+  const res = await new Promise(resolve => {
+    const chunks = []
+    const mockRes = {
+      statusCode: 200,
+      destroyed: false,
+      setHeader() {},
+      on() {},
+      end(c) {
+        if (c) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c)))
+        resolve({ status: this.statusCode, body: Buffer.concat(chunks).toString('utf8') })
+      },
+      destroy() {},
+    }
+    printerMiddleware(req, mockRes, () => resolve({ status: 404, body: '' }))
+  })
+
+  assert.equal(res.status, 200)
+  assert.equal(savedText, '# Düse 240 °C — Lüfter über prüfen\n')
+})
+
+test('control allows calibrate_beacon_abort while calibrate_beacon_all_z holds currentJob', async t => {
+  const sentScripts = []
+  const sockets = []
+  class TrackingWs {
+    constructor() {
+      this.readyState = 0
+      sockets.push(this)
+      setImmediate(() => {
+        this.readyState = 1
+        this.onopen?.()
+      })
+    }
+    send(payload) {
+      const msg = JSON.parse(payload)
+      sentScripts.push(msg.params?.script)
+      if (msg.params?.script === 'BEACON_BATCH_ABORT') {
+        setImmediate(() => {
+          this.onmessage?.({ data: JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: 'ok' }) })
+        })
+      }
+    }
+    close() {
+      this.readyState = 3
+    }
+  }
+
+  let batchRunning = 0
+  t.mock.method(globalThis, 'fetch', async () => ({
+    ok: true,
+    json: async () => ({
+      result: {
+        objects: [],
+        status: {
+          webhooks: { state: 'ready' },
+          print_stats: { state: 'standby' },
+          idle_timeout: { state: batchRunning ? 'Printing' : 'Idle' },
+          toolhead: { homed_axes: 'xyz' },
+          toolchanger: { has_detection: true, tool_number: 0, detected_tool_number: 0, status: 'ready' },
+          'gcode_macro _BEACON_BATCH_STATE': { running: batchRunning },
+          configfile: {
+            settings: {
+              'gcode_macro beacon_calibrate_all_tools_z': {},
+              'gcode_macro beacon_batch_abort': {},
+            },
+          },
+        },
+      },
+    }),
+  }))
+
+  const batchPromise = control({ action: 'calibrate_beacon_all_z', probeTemp: 150 }, { WebSocketImpl: TrackingWs })
+  await new Promise(resolve => setTimeout(resolve, 15))
+  batchRunning = 1
+
+  const abortResult = await control({ action: 'calibrate_beacon_abort' }, { WebSocketImpl: TrackingWs })
+  assert.match(abortResult.message, /Beacon-Batch abbrechen/)
+  assert.equal(sentScripts.includes('BEACON_BATCH_ABORT'), true)
+
+  // Resolve the original batch socket cleanly so no job leaks into later tests.
+  sockets[0].onmessage?.({ data: JSON.stringify({ jsonrpc: '2.0', id: 1, result: 'ok' }) })
+  await batchPromise
+  assert.equal(getControlState().job, null)
+})
+
+test('computeSystemState unlocks recovery after mid-print Klipper crash and never locks offline on 400/404', async () => {
+  const { computeSystemState, isConnectivityFailure } = await import('../src/system-state.mjs')
+
+  // Mid-print crash: SSE froze with printState='printing', online=false, Moonraker reports klippy_connected=false.
+  const crashed = computeSystemState({
+    status: { printState: 'printing', klipperState: 'ready', control: { job: null } },
+    online: false,
+    overview: { klippy: { connected: false, state: 'disconnected' } },
+  })
+  assert.equal(crashed.klippyInRecovery, true)
+  assert.equal(crashed.printLocked, false)
+  assert.equal(crashed.effectiveKlipperState, 'disconnected')
+
+  // Live active print: online=true, klipperState='ready', printState='printing' -> MUST lock!
+  const printing = computeSystemState({
+    status: { printState: 'printing', klipperState: 'ready', control: { job: null } },
+    online: true,
+    overview: { klippy: { connected: true, state: 'ready' } },
+  })
+  assert.equal(printing.klippyInRecovery, false)
+  assert.equal(printing.printLocked, true)
+  assert.equal(printing.effectiveKlipperState, 'ready')
+
+  // 400 / 404 / 413 are NOT Moonraker connectivity failures; 502 / 503 / 0 (network) ARE.
+  assert.equal(isConnectivityFailure(400), false)
+  assert.equal(isConnectivityFailure(404), false)
+  assert.equal(isConnectivityFailure(413), false)
+  assert.equal(isConnectivityFailure(502), true)
+  assert.equal(isConnectivityFailure(503), true)
+  assert.equal(isConnectivityFailure(0), true)
+})

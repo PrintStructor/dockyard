@@ -1,4 +1,5 @@
 import { computed, ref } from 'vue'
+import { isConnectivityFailure } from './system-state.mjs'
 
 const files = ref([])
 const loadingList = ref(false)
@@ -39,20 +40,24 @@ async function loadFileList() {
   listError.value = ''
   try {
     const response = await fetch('/api/system/config/list', { signal: AbortSignal.timeout(8000) })
-    const data = await response.json()
-    if (!response.ok) throw new Error(data.error || 'Konfigurationsliste nicht erreichbar.')
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      const err = new Error(data.error || 'Konfigurationsliste nicht erreichbar.')
+      err.httpStatus = response.status
+      throw err
+    }
     files.value = Array.isArray(data.files) ? data.files : []
-    return true
+    return { ok: true, connectivityError: false }
   } catch (cause) {
     listError.value = cause.message || 'Konfigurationsliste nicht erreichbar.'
-    return false
+    return { ok: false, connectivityError: isConnectivityFailure(cause.httpStatus ?? 0) }
   } finally {
     loadingList.value = false
   }
 }
 
 async function openFile(path) {
-  if (!path) return false
+  if (!path) return { ok: false, connectivityError: false }
   ensureUnloadGuard()
   loadingFile.value = true
   fileError.value = ''
@@ -62,8 +67,12 @@ async function openFile(path) {
     const response = await fetch(`/api/system/config/file?path=${encodeURIComponent(path)}`, {
       signal: AbortSignal.timeout(10_000),
     })
-    const data = await response.json()
-    if (!response.ok) throw new Error(data.error || 'Datei konnte nicht geladen werden.')
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      const err = new Error(data.error || 'Datei konnte nicht geladen werden.')
+      err.httpStatus = response.status
+      throw err
+    }
     currentPath.value = data.path
     originalContent.value = data.content
     content.value = data.content
@@ -72,10 +81,10 @@ async function openFile(path) {
     readonly.value = Boolean(data.readonly)
     isBackup.value = Boolean(data.isBackup)
     isScript.value = Boolean(data.isScript)
-    return true
+    return { ok: true, connectivityError: false }
   } catch (cause) {
     fileError.value = cause.message || 'Datei konnte nicht geladen werden.'
-    return false
+    return { ok: false, connectivityError: isConnectivityFailure(cause.httpStatus ?? 0) }
   } finally {
     loadingFile.value = false
   }

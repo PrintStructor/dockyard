@@ -143,13 +143,16 @@ live = createLiveFeed({
 export const closeLiveFeed = () => live.close()
 
 async function readJson(req, max = 64_000) {
-  let text = ''
+  const chunks = []
+  let total = 0
   for await (const chunk of req) {
-    text += chunk
-    if (Buffer.byteLength(text) > max) throw new ControlError('Anfrage zu groß.', 413)
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    total += buf.length
+    if (total > max) throw new ControlError('Anfrage zu groß.', 413)
+    chunks.push(buf)
   }
   try {
-    return JSON.parse(text)
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))
   } catch {
     throw new ControlError('Ungültiges JSON.')
   }
@@ -220,6 +223,28 @@ export async function control(input, options = {}) {
   }
 
   const isStop = input.action === 'emergency_stop'
+  const isBatchAbort = input.action === 'calibrate_beacon_abort'
+  if (isBatchAbort && !currentJob?.uncertain) {
+    const raw = await query(true)
+    const abortCmd = commandFor(input, raw)
+    await executeGcodeScript({
+      printer,
+      script: abortCmd.body.script,
+      timeoutMs: abortCmd.timeoutMs ?? 60_000,
+      WebSocketImpl,
+    })
+    const message = successMessageFor(input.action, abortCmd.label)
+    lastResult = {
+      id: ++jobSequence,
+      ok: true,
+      label: abortCmd.label,
+      message,
+      at: new Date().toISOString(),
+    }
+    live.notify()
+    return { message }
+  }
+
   if (currentJob && !isStop) {
     throw new ControlError('Ein Befehl läuft noch oder sein Ergebnis ist ungeklärt.', 409)
   }

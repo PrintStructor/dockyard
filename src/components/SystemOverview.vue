@@ -10,6 +10,7 @@ import {
   Server,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
+import { computeSystemState } from '../system-state.mjs'
 
 const props = defineProps({
   status: { type: Object, default: null },
@@ -34,11 +35,11 @@ onBeforeUnmount(() => {
   if (confirmTimer) clearTimeout(confirmTimer)
 })
 
-const isKlippyRecoveryState = computed(() => {
-  const kState = props.overview?.klippy?.state ?? props.status?.klipperState
-  const disconnected = props.overview?.klippy?.connected === false
-  return disconnected || ['error', 'shutdown', 'startup', 'disconnected'].includes(kState)
-})
+const computedState = computed(() =>
+  computeSystemState({ status: props.status, online: props.online, overview: props.overview }),
+)
+const isKlippyRecoveryState = computed(() => computedState.value.klippyInRecovery)
+const effectiveKlipperState = computed(() => computedState.value.effectiveKlipperState)
 
 function isTargetBlocked(target) {
   if (!props.moonrakerOnline || props.printLocked || !!restartingTarget.value) return true
@@ -224,7 +225,7 @@ const hostCaption = computed(() => {
       <article class="system-panel">
         <h2>{{ t('Druckerstatus') }}</h2>
         <dl class="measurements">
-          <div><dt>Klipper</dt><dd>{{ status?.klipperState ?? overview?.klippy?.state ?? t('Unbekannt') }}</dd></div>
+          <div><dt>Klipper</dt><dd>{{ effectiveKlipperState ?? t('Unbekannt') }}</dd></div>
           <div><dt>{{ t('Druckstatus') }}</dt><dd>{{ t(printLabel) }}</dd></div>
           <div v-if="status?.filename"><dt>{{ t('Druckdatei') }}</dt><dd>{{ status.filename }}</dd></div>
           <div v-if="isPrintActive && printProgressPercent != null">

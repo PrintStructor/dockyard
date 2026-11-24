@@ -220,6 +220,11 @@ watch(
   },
 )
 
+function reportConnectivity(res) {
+  if (res?.ok) emit('moonraker-status', true)
+  else if (res?.connectivityError) emit('moonraker-status', false)
+}
+
 async function requestSelectFile(path) {
   if (path === store.currentPath.value) return
   if (store.isDirty.value) {
@@ -227,8 +232,7 @@ async function requestSelectFile(path) {
     return
   }
   pendingSwitchPath.value = ''
-  const ok = await store.openFile(path)
-  emit('moonraker-status', ok)
+  reportConnectivity(await store.openFile(path))
 }
 
 async function confirmDiscardAndSwitch() {
@@ -236,27 +240,23 @@ async function confirmDiscardAndSwitch() {
   pendingSwitchPath.value = ''
   store.discardChanges()
   if (target) {
-    const ok = await store.openFile(target)
-    emit('moonraker-status', ok)
+    reportConnectivity(await store.openFile(target))
   }
 }
 
 async function reloadFromDisk() {
   if (!store.currentPath.value) return
   pendingSwitchPath.value = ''
-  const ok = await store.openFile(store.currentPath.value)
-  emit('moonraker-status', ok)
+  reportConnectivity(await store.openFile(store.currentPath.value))
 }
 
 async function refreshList() {
-  const ok = await store.loadFileList()
-  emit('moonraker-status', ok)
+  reportConnectivity(await store.loadFileList())
 }
 
 onMounted(async () => {
   if (!store.files.value.length) {
-    const ok = await store.loadFileList()
-    emit('moonraker-status', ok)
+    reportConnectivity(await store.loadFileList())
   }
   if (!store.currentPath.value && store.files.value.length) {
     const preferred =
@@ -264,8 +264,7 @@ onMounted(async () => {
       store.files.value.find(f => !f.isBackup) ??
       store.files.value[0]
     if (preferred) {
-      const ok = await store.openFile(preferred.path)
-      emit('moonraker-status', ok)
+      reportConnectivity(await store.openFile(preferred.path))
     }
   } else if (store.currentPath.value && !store.loadingFile.value) {
     await nextTick()
@@ -378,6 +377,11 @@ onBeforeUnmount(() => {
     </aside>
 
     <section class="config-editor-pane" :aria-label="t('Konfigurationseditor')">
+      <div v-if="store.fileError.value" class="config-editor-notice amber" role="alert">
+        <AlertTriangle :size="15" />
+        <span>{{ t(store.fileError.value) }}</span>
+      </div>
+
       <template v-if="store.currentPath.value || store.loadingFile.value">
         <header class="config-editor-toolbar">
           <div class="config-editor-title">
@@ -468,11 +472,6 @@ onBeforeUnmount(() => {
           <Check v-if="store.saveFeedback.value.ok" :size="15" />
           <AlertTriangle v-else :size="15" />
           <span>{{ t(store.saveFeedback.value.message) }}</span>
-        </div>
-
-        <div v-if="store.fileError.value" class="config-editor-notice amber" role="alert">
-          <AlertTriangle :size="15" />
-          <span>{{ t(store.fileError.value) }}</span>
         </div>
 
         <div v-if="store.loadingFile.value" class="skeleton-block" style="min-height: 440px">

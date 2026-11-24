@@ -12,6 +12,7 @@ import {
   X,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
+import { isConnectivityFailure } from '../system-state.mjs'
 import CockpitSelect from './CockpitSelect.vue'
 
 const props = defineProps({
@@ -55,13 +56,17 @@ async function fetchUpdates() {
   updatesError.value = ''
   try {
     const response = await fetch('/api/system/updates', { signal: AbortSignal.timeout(9000) })
-    const data = await response.json()
-    if (!response.ok) throw new Error(data.error || 'Update-Status nicht erreichbar.')
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      const err = new Error(data.error || 'Update-Status nicht erreichbar.')
+      err.httpStatus = response.status
+      throw err
+    }
     updates.value = data
     emit('moonraker-status', true)
   } catch (cause) {
     updatesError.value = cause.message || 'Update-Status nicht erreichbar.'
-    emit('moonraker-status', false)
+    if (isConnectivityFailure(cause.httpStatus ?? 0)) emit('moonraker-status', false)
   } finally {
     loadingUpdates.value = false
   }

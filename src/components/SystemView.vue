@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Activity, Crosshair, FileCode2, Wrench } from '@lucide/vue'
 import { t } from '../i18n.mjs'
+import { computeSystemState } from '../system-state.mjs'
 import { useConfigEditor } from '../useConfigEditor.js'
 import SystemOverview from './SystemOverview.vue'
 import SystemCalibration from './SystemCalibration.vue'
@@ -29,12 +30,10 @@ const moonrakerOnline = ref(true)
 let pollTimer = null
 let activeController = null
 
-const printLocked = computed(
-  () =>
-    ['printing', 'paused'].includes(props.status?.printState) ||
-    Boolean(props.status?.control?.job && !props.status.control.job.uncertain),
+const systemState = computed(() =>
+  computeSystemState({ status: props.status, online: props.online, overview: overview.value }),
 )
-
+const printLocked = computed(() => systemState.value.printLocked)
 const uncertainOnly = computed(() => Boolean(props.status?.control?.job?.uncertain))
 
 async function fetchOverview({ silent = false } = {}) {

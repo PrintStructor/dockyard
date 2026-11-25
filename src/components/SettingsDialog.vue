@@ -179,6 +179,12 @@ const resolvedMainsailPreview = computed(() => {
 const canAddCurrentOrigin = computed(() => {
   const origin = settingsStore.runtime.value?.requestOrigin
   if (!origin || !/^https?:\/\//i.test(origin)) return false
+  try {
+    const host = new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase()
+    if (host === '127.0.0.1' || host === 'localhost' || host === '::1') return false
+  } catch {
+    return false
+  }
   return !draft.value.network.allowedOrigins.includes(origin) && !envAllowedOrigins.value.includes(origin)
 })
 

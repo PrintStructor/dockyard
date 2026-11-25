@@ -318,7 +318,7 @@ function createCameraEntry(id) {
     }
   }
 
-  function reset() {
+  function reset(shouldRestart = true) {
     clearTimeout(graceTimer)
     graceTimer = null
     stopTransport(false)
@@ -326,7 +326,7 @@ function createCameraEntry(id) {
     state.webrtcFailed = false
     reconnectAttempt = 0
     state.status = 'idle'
-    if (refs > 0 && !(typeof document !== 'undefined' && document.hidden)) {
+    if (shouldRestart && refs > 0 && !(typeof document !== 'undefined' && document.hidden)) {
       start()
     }
   }
@@ -402,8 +402,11 @@ export function useCameras() {
     return entries.get(id)
   }
 
-  function resetAll() {
-    for (const entry of entries.values()) entry.reset()
+  function resetAll(keepIds = null) {
+    for (const [id, entry] of entries.entries()) {
+      const shouldRestart = keepIds ? keepIds.has(id) : true
+      entry.reset(shouldRestart)
+    }
   }
 
   return {

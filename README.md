@@ -9,7 +9,7 @@
 
 **DOCKYARD** is an **English / German** real-time 3D web cockpit built for six-tool **VORON 2.4 Toolchangers** running Klipper, Moonraker and Mainsail — designed for Desktop, iPad and 7" Klipper Touchscreens. Built with **Vue 3 + Three.js** and a zero-dependency **Node.js 22+** backend, featuring real Fusion CAD geometry, live per-head LED sync, glowing thermal nozzle radiance, colored PTFE filament feeds, a volumetric 3D G-code viewer, CodeMirror 6 Klipper config editor, and a 6×6 Nudge XY / Beacon Z calibration workbench.
 
-> **App brand vs. your machine:** `DOCKYARD` is the cockpit application; your printer's name (e.g. `STORMTROOPER`) is configured via `PRINTER_NAME` in `.env.local` and rendered as a clean badge in the header.
+> **App brand vs. your machine:** `DOCKYARD` is the cockpit application; your printer's name (e.g. `STORMTROOPER`), Moonraker IP/URL, cameras and additional printer profiles can be configured directly inside the in-app **Settings (`⚙`)** modal (persisted in `.dockyard-settings.json`, bootstrapped from `.env.local` on first launch).
 
 This is an independent, toolchanger-focused application, not a Mainsail fork or a universal configuration generator. It does not install or replace your printer macros.
 
@@ -88,7 +88,8 @@ This is an independent, toolchanger-focused application, not a Mainsail fork or 
 - **WebSocket-Serialized Tool & Filament Actions:** Individual park, pickup, load, unload, nozzle clean and purge actions execute over Moonraker's `/websocket` endpoint (avoiding 60 s Nginx HTTP proxy timeouts) with live step progress and elapsed duration; bulk filament actions run step-by-step and abort cleanly on emergency stop.
 - **Loading Assistant:** Supports `LOAD_WATCH` / `LOAD_WATCH_STOP`, with confirmed armed state shown in Acid-Lime green. Installed macros manage their own temperatures.
 - **Precision Controls & Live Thermal History:** Direct X/Y/Z coordinate inputs, jogging, QGL, bed mesh, inline heater targets, Mainsail material presets, 140 °C preheat, independent bed cooldown, print-safe global cooldown (blocked during active print, allowed while paused), two-step confirmation for releasing motors when QGL is applied, CPAP / bed / Nevermore fan sliders, and 10-minute interactive temperature curves with SSE updates.
-- **Dual WebRTC + MJPEG Cameras:** Persistent `camera-streamer` WebRTC + MJPEG dual streams with automatic fallback, stall detection/auto-reconnect, manual transport toggle and seamless tab switching without tearing down streams.
+- **Dual WebRTC + MJPEG Cameras:** Persistent `camera-streamer` WebRTC + MJPEG dual streams as well as direct `ustreamer` / MJPEG camera endpoints per printer profile, with automatic fallback, stall detection/auto-reconnect, manual transport toggle and seamless tab switching without tearing down streams.
+- **In-App Settings & Multi-Printer Switcher:** Manage multiple printers (e.g. a multi-VORON fleet), update Moonraker IP/URLs without SSH or server restarts (ideal for 3D-printing Meets), run live Moonraker connection & latency probes, configure per-printer cameras and Mainsail links, toggle Meet/LAN access mode, and export/import printer profiles as JSON — accessible anytime from the masthead `⚙` button, the printer-pill quick-switcher, or the offline banner.
 - **Volumetric 3D G-Code Print Viewer:** Dedicated **Print** tab rendering multi-tool G-code on a 350 × 350 mm VORON build plate with per-tool OrcaSlicer filament/tool coloring, support toggle, interactive layer scrubber (solid-vs-ghost remaining preview and live layer tracking during prints), print metadata and tool weight breakdown.
 - **Print History Analytics:** Dedicated **History** tab showing Moonraker lifetime totals, searchable/filterable job history (by status, filename, single tool `T0–T5` or multi-tool prints), job detail inspector and one-click **Open in 3D** jump directly into the 3D Print viewer.
 - **System & Machine Workbench:** Host overview, **CodeMirror 6** Klipper configuration editor with custom Klipper/Jinja2 syntax highlighting, diff review, auto-backups and guarded restart, **6×6 Calibration Matrix** (`Nudge XY` ring closure, `Beacon Z` probing, thermal nozzle expansion & ShakeTune charts), plus service/update/log maintenance.
@@ -144,10 +145,19 @@ sudo loginctl enable-linger "$USER"
 ### Option B — Manual / system-wide systemd service
 
 1. Build the frontend once (`npm ci && VITE_MAINSAIL_URL=auto npm run build`).
-2. Configure `HOST=0.0.0.0` (or `HOST=::` for dual-stack IPv4/IPv6), `PORT=4173`, `PRINTER_URL=http://127.0.0.1`, `PRINTER_NAME=STORMTROOPER`, and explicit trusted LAN origins in `ALLOWED_ORIGINS` (e.g. `ALLOWED_ORIGINS=http://printer.local:4173`).
+2. Configure `HOST=0.0.0.0` (or `HOST=::` for dual-stack IPv4/IPv6), `PORT=4173`, `PRINTER_URL=http://127.0.0.1`, `PRINTER_NAME=STORMTROOPER`, and explicit trusted LAN origins in `ALLOWED_ORIGINS` (e.g. `ALLOWED_ORIGINS=http://printer.local:4173`) — or set `ALLOW_LAN_ORIGINS=1` for Meet / changing-DHCP LAN mode.
 3. Start via `npm start` or adapt the example systemd unit in [deploy/dockyard.service.example](deploy/dockyard.service.example).
 
-The backend checks exact request origins against loopback and `ALLOWED_ORIGINS`, plus `X-Cockpit-Request: 1` and JSON content-type. It has no remote authentication layer: keep it on a trusted local network rather than exposing it to the internet.
+The backend checks exact request origins against loopback, `ALLOWED_ORIGINS`, and (when enabled via UI or `ALLOW_LAN_ORIGINS=1`) private LAN origins (`192.168.x.x`, `10.x.x.x`, `172.16–31.x.x`, `.local`), plus `X-Cockpit-Request: 1` and JSON content-type. Runtime printer profiles and UI network settings are stored atomically in `.dockyard-settings.json` (excluded from Git; override path via `DOCKYARD_SETTINGS_PATH`). It has no remote authentication layer: keep it on a trusted local network rather than exposing it to the internet.
+
+### In-App Settings & Multi-Printer Switching
+
+Click the **`⚙`** button in the top header (or the **printer name badge** when multiple printers are configured, or **"Adjust IP / connection"** whenever offline) to open the Settings modal:
+
+- **Printers & connection:** Add, edit, duplicate, delete, or 1-click activate up to 16 printer profiles. Change a printer's Moonraker IP/URL live without restarting DOCKYARD, verify reachability with the inline **Test connection** probe (showing latency, Moonraker version, and Klipper state), and set `auto` or custom Mainsail links. Switching printers hot-reloads the Moonraker WebSocket feed, resets caches/cameras cleanly, and guards unsaved files in the Config Editor against cross-printer overwrites.
+- **Cameras:** Configure up to 6 cameras per printer profile (`camera-streamer` WebRTC+MJPEG or `ustreamer` direct MJPEG + optional snapshot URL), plus a local browser toggle to hide cameras on the current device.
+- **Interface (local):** Switch DE/EN language, 7" Touchscreen Display Mode, and default startup tab immediately in the current browser.
+- **Network & backup:** Toggle LAN/Meet mode (`allowLanOrigins`), manage trusted browser origins (with self-lockout protection), inspect server bind info, and export/import printer profiles as `dockyard-printers-backup.json` (Merge or Replace mode; network trust settings are excluded from JSON backups by design).
 
 ---
 

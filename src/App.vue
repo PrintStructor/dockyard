@@ -123,9 +123,9 @@ function applySettingsTransition(payload, { isFromSse = false } = {}) {
     if (tab.value === 'system' && systemSubtab.value === 'config' && editorRes.reloadList) {
       configEditor.loadFileList()
     }
-    camerasStore.resetAll()
+    camerasStore.resetAll(new Set(activeCameras.value.map(c => c.id)))
   } else if (camerasChanged) {
-    camerasStore.resetAll()
+    camerasStore.resetAll(new Set(activeCameras.value.map(c => c.id)))
   } else if (isFromSse && (payload.activePrinterChanged || payload.printerUrlChanged) && !hasBaseline) {
     // Edge case: SSE arrived before initial loadSettings completed.
     resetForPrinterSwitch()

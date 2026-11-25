@@ -3,7 +3,7 @@ dist/
 .env*
 !.env.example
 .dockyard-settings.json
-.dockyard-settings.json.tmp
+.dockyard-settings.json*.tmp
 *.local.md
 .DS_Store
 .impeccable/

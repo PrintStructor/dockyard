@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 export const DISPLAY_MODE_KEY = 'dockyard.displayMode'
 export const CAMERAS_HIDDEN_KEY = 'dockyard.camerasHidden'
 export const DEFAULT_TAB_KEY = 'dockyard.defaultTab'
-export const VALID_DEFAULT_TABS = ['tools', 'print', 'controls', 'cameras', 'history', 'system']
+export const VALID_DEFAULT_TABS = ['tools', 'print', 'controls', 'cameras', 'history', 'console', 'system']
 const LEGACY_DISPLAY_MODE_KEY = 'stormtrooper.displayMode'
 const LEGACY_CAMERAS_HIDDEN_KEY = 'stormtrooper.camerasHidden'
 

@@ -63,5 +63,11 @@ export function useControls(refresh) {
     }
   }
 
-  return { pending, stopping, feedback, send, syncServerResult }
+  function clearFeedback() {
+    feedback.value = null
+    lastResultId = null
+    initialized = false
+  }
+
+  return { pending, stopping, feedback, send, syncServerResult, clearFeedback }
 }

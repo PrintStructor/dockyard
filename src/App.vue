@@ -116,6 +116,8 @@ function applySettingsTransition(payload, { isFromSse = false } = {}) {
   if (targetChanged) {
     requestedPrintFile.value = ''
     lastUpdateEvent.value = null
+    lastMountedTool = undefined
+    clearFeedback()
     printerSwitchKey.value++
     resetForPrinterSwitch()
     consoleStore.clear()
@@ -191,7 +193,7 @@ function onGlobalKeydown(event) {
   }
 }
 
-const { pending, stopping, feedback, send, syncServerResult } = useControls(refresh)
+const { pending, stopping, feedback, send, syncServerResult, clearFeedback } = useControls(refresh)
 
 watch(
   () => status.value?.control?.lastResult,
@@ -200,16 +202,18 @@ watch(
 
 const fallbackPrinterName = (import.meta.env.VITE_PRINTER_NAME ?? 'STORMTROOPER').trim()
 const printerName = computed(() => {
-  const configured = settingsStore.activePrinter.value?.name
-  if (typeof configured === 'string' && configured.trim()) return configured.trim()
+  if (settingsStore.loaded.value && settingsStore.activePrinter.value) {
+    return String(settingsStore.activePrinter.value.name ?? '').trim()
+  }
   const remote = status.value?.printerName
-  return typeof remote === 'string' && remote.trim() ? remote.trim() : fallbackPrinterName
+  return typeof remote === 'string' ? remote.trim() : fallbackPrinterName
 })
 const printerSubtitle = computed(() => {
-  const configured = settingsStore.activePrinter.value?.subtitle
-  if (typeof configured === 'string' && configured.trim()) return configured.trim()
+  if (settingsStore.loaded.value && settingsStore.activePrinter.value) {
+    return String(settingsStore.activePrinter.value.subtitle ?? '').trim()
+  }
   const remote = status.value?.printerSubtitle
-  if (typeof remote === 'string' && remote.trim()) return remote.trim()
+  if (typeof remote === 'string') return remote.trim()
   return 'VORON 2.4 / 6-Toolchanger'
 })
 const activeCameras = computed(() => {
@@ -598,7 +602,7 @@ const pageSubtitle = computed(() => {
     tools: 'Werkzeug auswählen und seinen aktuellen Zustand prüfen.',
     print: 'Aktuellen Druck oder G-Code-Dateien als 3D-Modell prüfen.',
     history: 'Vergangene Druckjobs, Laufzeiten, Filamentverbrauch und Werkzeugnutzung.',
-    cameras: 'Tophat und Druckbett · kontinuierliche Livestreams.',
+    cameras: 'Aktive Druckerkameras · kontinuierliche Livestreams.',
     console: 'G-Code und Makros senden. Antworten direkt mitlesen.',
     system: 'Host, Konfiguration, Kalibrierung und Wartung deines Toolchangers.',
   }[tab.value]
@@ -679,7 +683,7 @@ async function acknowledgeUncertain() {
                   @click="quickSwitchPrinter(printer)"
                 >
                   <span class="printer-popover-meta">
-                    <strong>{{ printer.name }}</strong>
+                    <strong>{{ printer.name || printer.id }}</strong>
                     <small>{{ printer.url }}</small>
                   </span>
                   <Check v-if="settingsStore.activePrinter.value?.id === printer.id" :size="14" />
@@ -692,7 +696,7 @@ async function acknowledgeUncertain() {
               </div>
             </div>
           </span>
-          <small>{{ printerSubtitle }}</small>
+          <small v-if="printerSubtitle">{{ printerSubtitle }}</small>
         </span>
       </div>
       <div class="header-meta">
@@ -1323,6 +1327,7 @@ async function acknowledgeUncertain() {
 
         <ConsoleView
           v-if="tab === 'tools'"
+          :key="`console-compact-${printerSwitchKey}`"
           compact
           :status="status"
           :online="online"
@@ -1407,6 +1412,7 @@ async function acknowledgeUncertain() {
 
       <ConsoleView
         v-if="tab === 'console'"
+        :key="`console-${printerSwitchKey}`"
         :status="status"
         :online="online"
         :pending="pending"

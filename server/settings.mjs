@@ -59,6 +59,19 @@ function stripBrackets(hostname) {
     .toLowerCase()
     .replace(/^\[/, '')
     .replace(/\]$/, '')
+    .replace(/\.+$/, '')
+}
+
+function extractMappedIpv4(clean) {
+  const dotted = /^(?:::|(?:0+:){5})ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(clean)
+  if (dotted && parseIpv4Octets(dotted[1])) return dotted[1]
+  const hex = /^(?:::|(?:0+:){5})ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(clean)
+  if (hex) {
+    const hi = Number.parseInt(hex[1], 16)
+    const lo = Number.parseInt(hex[2], 16)
+    return `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`
+  }
+  return null
 }
 
 export function isBlockedUpstreamHost(hostname) {
@@ -66,6 +79,8 @@ export function isBlockedUpstreamHost(hostname) {
   if (!clean) return true
   if (BLOCKED_HOSTS.has(clean)) return true
   if (clean.endsWith('.metadata.google.internal')) return true
+  const mapped = extractMappedIpv4(clean)
+  if (mapped && BLOCKED_HOSTS.has(mapped)) return true
   return false
 }
 
@@ -81,7 +96,8 @@ export function isPrivateLanHostname(hostname) {
   if (!clean || isBlockedUpstreamHost(clean)) return false
   if (clean === 'localhost' || clean === '::1') return true
 
-  const ipv4 = parseIpv4Octets(clean)
+  const ipv4Target = extractMappedIpv4(clean) ?? clean
+  const ipv4 = parseIpv4Octets(ipv4Target)
   if (ipv4) {
     const [a, b] = ipv4
     if (a === 127) return true
@@ -388,12 +404,44 @@ export function createSettingsStore({ filePath = defaultSettingsFilePath, env } 
     // Missing or unreadable file safely keeps env-bootstrapped defaults.
   }
 
+  let writeQueue = Promise.resolve()
+  let tmpSeq = 0
+
   async function persistAtomic(nextState) {
     const dir = path.dirname(filePath)
     await mkdir(dir, { recursive: true })
-    const tmpPath = `${filePath}.tmp`
+    const tmpPath = `${filePath}.${process.pid}.${++tmpSeq}.tmp`
     await writeFile(tmpPath, `${JSON.stringify(nextState, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
     await rename(tmpPath, filePath)
+  }
+
+  function enqueueCommit(buildNextState) {
+    const run = writeQueue.then(async () => {
+      const prevActive = getActivePrinter()
+      const nextState = buildNextState(state)
+      await persistAtomic(nextState)
+      state = nextState
+      const nextActive = getActivePrinter()
+      const activePrinterChanged = prevActive.id !== nextActive.id
+      const printerUrlChanged = prevActive.url !== nextActive.url
+      const change = {
+        settings: getPublicSettings(),
+        activePrinterChanged,
+        printerUrlChanged,
+        previousPrinter: prevActive,
+        activePrinter: nextActive,
+      }
+      for (const listener of listeners) {
+        try {
+          listener(change)
+        } catch {
+          // Isolate change listener errors.
+        }
+      }
+      return change
+    })
+    writeQueue = run.catch(() => {})
+    return run
   }
 
   function getActivePrinter() {
@@ -430,30 +478,6 @@ export function createSettingsStore({ filePath = defaultSettingsFilePath, env } 
     }
   }
 
-  async function commit(nextState) {
-    const prevActive = getActivePrinter()
-    await persistAtomic(nextState)
-    state = nextState
-    const nextActive = getActivePrinter()
-    const activePrinterChanged = prevActive.id !== nextActive.id
-    const printerUrlChanged = prevActive.url !== nextActive.url
-    const change = {
-      settings: getPublicSettings(),
-      activePrinterChanged,
-      printerUrlChanged,
-      previousPrinter: prevActive,
-      activePrinter: nextActive,
-    }
-    for (const listener of listeners) {
-      try {
-        listener(change)
-      } catch {
-        // Isolate change listener errors.
-      }
-    }
-    return change
-  }
-
   return {
     filePath,
     getSettings: () => cloneData(state),
@@ -464,15 +488,18 @@ export function createSettingsStore({ filePath = defaultSettingsFilePath, env } 
     hasEnvLanOriginOverride,
     async saveSettings(payload) {
       const validated = validateSettingsPayload(payload)
-      return commit(validated)
+      return enqueueCommit(() => validated)
     },
     async switchPrinter(printerId) {
       const cleanId = String(printerId ?? '').trim().toLowerCase()
-      const exists = state.printers.some(p => p.id === cleanId)
-      if (!exists) throw new Error('Druckerprofil wurde nicht gefunden.')
-      const nextState = cloneData(state)
-      nextState.activePrinterId = cleanId
-      return commit(nextState)
+      return enqueueCommit(current => {
+        if (!current.printers.some(p => p.id === cleanId)) {
+          throw new Error('Druckerprofil wurde nicht gefunden.')
+        }
+        const nextState = cloneData(current)
+        nextState.activePrinterId = cleanId
+        return nextState
+      })
     },
     onChange(fn) {
       listeners.add(fn)

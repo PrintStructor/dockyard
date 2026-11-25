@@ -92,10 +92,11 @@ const languageOptions = computed(() => [
 
 const defaultTabOptions = computed(() => [
   { value: 'tools', label: t('Werkzeuge') },
-  { value: 'print', label: t('Drucken') },
-  { value: 'controls', label: t('Steuerung') },
-  { value: 'cameras', label: t('Kameras') },
+  { value: 'controls', label: t('Bedienung') },
+  { value: 'print', label: t('Druck') },
   { value: 'history', label: t('Verlauf') },
+  { value: 'cameras', label: t('Kameras') },
+  { value: 'console', label: t('Konsole') },
   { value: 'system', label: t('System') },
 ])
 
@@ -208,7 +209,7 @@ function uniquePrinterId(baseName) {
 }
 
 function addPrinter() {
-  if (draft.value.printers.length >= 16) return
+  if (draft.value.printers.length >= 20) return
   const num = draft.value.printers.length + 1
   const name = `VORON-${num}`
   const id = uniquePrinterId(name)
@@ -237,8 +238,8 @@ function addPrinter() {
 }
 
 function duplicatePrinter(printer) {
-  if (draft.value.printers.length >= 16) return
-  const copyName = `${printer.name} Copy`.slice(0, 32)
+  if (draft.value.printers.length >= 20) return
+  const copyName = `${printer.name || printer.id} Copy`.slice(0, 40)
   const id = uniquePrinterId(copyName)
   draft.value.printers.push({
     ...printer,
@@ -517,13 +518,11 @@ async function handleSave({ confirmSelfLockout = false, confirmedDirty = false }
   selfLockoutPending.value = false
   cloneDraftFromStore()
   saveFeedback.value = { ok: true, message: t('Einstellungen gespeichert und live übernommen.') }
-  if (res.data?.activePrinterChanged || res.data?.printerUrlChanged) {
-    emit('switched', {
-      activePrinterChanged: Boolean(res.data.activePrinterChanged),
-      printerUrlChanged: Boolean(res.data.printerUrlChanged),
-      settings: res.data,
-    })
-  }
+  emit('switched', {
+    activePrinterChanged: Boolean(res.data?.activePrinterChanged),
+    printerUrlChanged: Boolean(res.data?.printerUrlChanged),
+    settings: res.data,
+  })
 }
 
 function confirmDirtyConfigProceed() {
@@ -568,15 +567,11 @@ watch(
       saveFeedback.value = null
       importPreview.value = null
       importError.value = ''
-      if (!settingsStore.loaded.value) {
-        await settingsStore.loadSettings()
-      } else {
-        // Silently refresh runtime/canWrite and latest persisted settings when opening dialog.
-        await settingsStore.loadSettings()
-      }
+      await settingsStore.loadSettings()
+      if (!props.open) return
       cloneDraftFromStore()
       await nextTick()
-      if (dialogEl.value && !dialogEl.value.open) {
+      if (props.open && dialogEl.value && !dialogEl.value.open) {
         dialogEl.value.showModal()
       }
     } else if (dialogEl.value?.open) {
@@ -601,7 +596,9 @@ watch(
           <div>
             <h2>{{ t('Einstellungen') }}</h2>
             <p v-if="settingsStore.activePrinter.value">
-              {{ settingsStore.activePrinter.value.name }} ·
+              <template v-if="settingsStore.activePrinter.value.name">
+                {{ settingsStore.activePrinter.value.name }} ·
+              </template>
               <span class="settings-mono">{{ settingsStore.activePrinter.value.url }}</span>
             </p>
           </div>
@@ -666,7 +663,7 @@ watch(
               <button
                 type="button"
                 class="subtle-button"
-                :disabled="!canWrite || draft.printers.length >= 16"
+                :disabled="!canWrite || !settingsStore.loaded.value || draft.printers.length >= 20"
                 @click="addPrinter"
               >
                 <Plus :size="14" />{{ t('Drucker hinzufügen') }}
@@ -710,7 +707,7 @@ watch(
                   <button
                     type="button"
                     class="icon-button"
-                    :disabled="!canWrite || draft.printers.length >= 16"
+                    :disabled="!canWrite || draft.printers.length >= 20"
                     :title="t('Duplizieren')"
                     :aria-label="t('Duplizieren')"
                     @click="duplicatePrinter(printer)"
@@ -744,7 +741,7 @@ watch(
                   <input
                     v-model="selectedPrinter.name"
                     type="text"
-                    maxlength="32"
+                    maxlength="40"
                     :disabled="!canWrite"
                     placeholder="STORMTROOPER"
                   />
@@ -755,7 +752,7 @@ watch(
                   <input
                     v-model="selectedPrinter.subtitle"
                     type="text"
-                    maxlength="80"
+                    maxlength="64"
                     :disabled="!canWrite"
                     placeholder="VORON 2.4 / 6-Toolchanger"
                   />
@@ -898,7 +895,7 @@ watch(
                 <div class="settings-form-grid">
                   <label class="settings-field">
                     <span>{{ t('Name') }}</span>
-                    <input v-model="cam.name" type="text" maxlength="32" :disabled="!canWrite" />
+                    <input v-model="cam.name" type="text" maxlength="40" :disabled="!canWrite" />
                   </label>
 
                   <label class="settings-field">
@@ -1205,7 +1202,7 @@ watch(
                   <span>{{ t('{0} Druckerprofile erkannt', [importPreview.parsed.printers.length]) }}</span>
                 </div>
                 <p class="settings-hint">
-                  {{ importPreview.parsed.printers.map(p => p.name).join(' · ') }}
+                  {{ importPreview.parsed.printers.map(p => p.name || p.id).join(' · ') }}
                 </p>
                 <div class="settings-import-modes">
                   <label>

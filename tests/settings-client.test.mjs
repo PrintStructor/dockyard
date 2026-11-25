@@ -47,8 +47,46 @@ test('resolveDefaultTab and setDefaultTab validate and persist tab selection', (
   assert.equal(setDefaultTab('print', store), true)
   assert.equal(store.getItem(DEFAULT_TAB_KEY), 'print')
   assert.equal(resolveDefaultTab(store), 'print')
+  assert.equal(setDefaultTab('console', store), true)
+  assert.equal(resolveDefaultTab(store), 'console')
   assert.equal(setDefaultTab('invalid-tab', store), false)
-  assert.equal(resolveDefaultTab(store), 'print')
+  assert.equal(resolveDefaultTab(store), 'console')
+})
+
+test('printer export/import preserves camera description, preferredMode, underscore IDs, and empty names', () => {
+  const exported = buildPrintersExport({
+    activePrinterId: 'my_voron',
+    printers: [
+      {
+        id: 'my_voron',
+        name: '',
+        subtitle: '',
+        url: 'http://192.168.1.55',
+        mainsailUrl: 'auto',
+        cameras: [
+          {
+            id: 'tophat-cam',
+            name: 'Tophat',
+            description: 'Blick auf den Bauraum',
+            service: 'camera-streamer',
+            url: '/webcam',
+            preferredMode: 'mjpeg',
+            enabled: true,
+          },
+        ],
+      },
+    ],
+  })
+  const parsed = parsePrintersImport(JSON.stringify(exported))
+  assert.equal(parsed.printers[0].id, 'my_voron')
+  assert.equal(parsed.printers[0].name, '')
+  assert.equal(parsed.printers[0].cameras[0].id, 'tophat-cam')
+  assert.equal(parsed.printers[0].cameras[0].description, 'Blick auf den Bauraum')
+  assert.equal(parsed.printers[0].cameras[0].preferredMode, 'mjpeg')
+
+  const merged = mergePrinterProfiles(exported.printers, parsed.printers, 'merge', 'my_voron')
+  assert.equal(merged.printers.length, 1)
+  assert.equal(merged.printers[0].id, 'my_voron')
 })
 
 test('printer export/import excludes network and supports merge and replace modes', () => {

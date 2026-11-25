@@ -289,6 +289,29 @@ test('GET/POST /api/settings works offline, switches printers, tests connections
     })
     assert.equal(lanSaveRes.status, 400)
     assert.equal(lanSaveRes.body.code, 'SELF_LOCKOUT')
+
+    // 12. Open-redirect protection across Moonraker proxy routes (/api/system/config/file, /api/console, /api/status)
+    const switchToRedirect = await app.postJson('/api/settings', {
+      activePrinterId: 'redir',
+      printers: [
+        {
+          id: 'redir',
+          name: 'REDIR',
+          subtitle: '',
+          url: redirectServer.url,
+          mainsailUrl: 'auto',
+          cameras: [],
+        },
+      ],
+      network: { allowedOrigins: [], allowLanOrigins: false },
+    })
+    assert.equal(switchToRedirect.status, 200)
+    const consoleRedir = await fetch(`${app.base}/api/console`)
+    assert.equal(consoleRedir.status, 502)
+    const cfgListRedir = await fetch(`${app.base}/api/system/config/list`)
+    assert.equal(cfgListRedir.status, 502)
+    const statusRedir = await fetch(`${app.base}/api/status`)
+    assert.equal(statusRedir.status, 502)
   } finally {
     await app?.cleanup()
     await mockA.close()

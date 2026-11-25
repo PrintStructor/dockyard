@@ -55,6 +55,18 @@ test('dynamic command feedback, guards and parameters are localized without chan
   assert.equal(translate('Z-Offset +0.010 mm', 'en'), 'Z offset +0.010 mm')
   assert.equal(translate('Objekt überspringen · Part_A', 'en'), 'Exclude object · Part_A')
   assert.equal(translate('X auf 175.5 mm', 'en'), 'Move X to 175.5 mm')
+  assert.equal(
+    translate('Backup enthält mehr als 20 Druckerprofile.', 'en'),
+    'Backup contains more than 20 printer profiles.',
+  )
+  assert.equal(
+    translate('Diese Zieladresse ist aus Sicherheitsgründen gesperrt.', 'en'),
+    'This target address is blocked for security reasons.',
+  )
+  assert.equal(
+    translate('Druckerprofil "VORON-V0" hat keine Moonraker-Adresse.', 'en'),
+    'Printer profile "VORON-V0" is missing a Moonraker address.',
+  )
 })
 
 test('saved language accepts supported choices and safely falls back with blocked storage', () => {

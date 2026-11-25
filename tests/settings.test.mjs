@@ -238,3 +238,43 @@ test('sameOriginRequest and isOriginWriteAllowed enforce Meet LAN mode strictly'
     false,
   )
 })
+
+test('isBlockedUpstreamHost blocks trailing-dot metadata DNS and IPv4-mapped IPv6 metadata hosts', () => {
+  assert.throws(() => normalizePrinterOrigin('http://metadata.google.internal.'), /gesperrt|Sicherheitsgründen/i)
+  assert.throws(() => normalizePrinterOrigin('http://[::ffff:169.254.169.254]'), /gesperrt|Sicherheitsgründen/i)
+  assert.throws(() => normalizePrinterOrigin('http://[::ffff:169.254.170.2]'), /gesperrt|Sicherheitsgründen/i)
+  assert.equal(isPrivateLanHostname('::ffff:169.254.169.254'), false)
+  assert.equal(isPrivateLanHostname('metadata.google.internal.'), false)
+})
+
+test('createSettingsStore serializes concurrent commits cleanly without tmp race', async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'dockyard-race-'))
+  try {
+    const filePath = path.join(dir, '.dockyard-settings.json')
+    const store = createSettingsStore({
+      filePath,
+      env: { PRINTER_URL: 'http://127.0.0.1', PRINTER_NAME: 'P1' },
+    })
+    await store.saveSettings({
+      activePrinterId: 'p1',
+      printers: [
+        { id: 'p1', name: 'P1', subtitle: '', url: 'http://127.0.0.1:7125', mainsailUrl: 'auto', cameras: [] },
+        { id: 'p2', name: 'P2', subtitle: '', url: 'http://127.0.0.1:7126', mainsailUrl: 'auto', cameras: [] },
+      ],
+      network: { allowedOrigins: [], allowLanOrigins: false },
+    })
+    const results = await Promise.all([
+      store.switchPrinter('p2'),
+      store.switchPrinter('p1'),
+      store.switchPrinter('p2'),
+      store.switchPrinter('p1'),
+      store.switchPrinter('p2'),
+    ])
+    assert.equal(results.length, 5)
+    assert.equal(store.getActivePrinter().id, 'p2')
+    const onDisk = JSON.parse(await readFile(filePath, 'utf8'))
+    assert.equal(onDisk.activePrinterId, 'p2')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

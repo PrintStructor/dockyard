@@ -38,6 +38,7 @@ const pendingSwitchPath = ref('')
 const mobileTreeCollapsed = ref(false)
 const openDirs = ref(new Set(['']))
 const copiedMismatch = ref(false)
+const copyMismatchError = ref(false)
 
 let editorView = null
 let applyingExternal = false
@@ -97,14 +98,42 @@ const readonlyReason = computed(() => {
 })
 
 async function copyMismatchContent() {
-  try {
-    await navigator.clipboard?.writeText(store.content.value)
+  copyMismatchError.value = false
+  const text = store.content.value
+  let copied = false
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      copied = true
+    } catch {
+      copied = false
+    }
+  }
+  if (!copied && typeof document !== 'undefined') {
+    const helper = document.createElement('textarea')
+    helper.value = text
+    helper.setAttribute('readonly', '')
+    helper.style.position = 'fixed'
+    helper.style.top = '-9999px'
+    helper.style.left = '-9999px'
+    document.body.appendChild(helper)
+    helper.focus()
+    helper.select()
+    try {
+      copied = document.execCommand('copy')
+    } catch {
+      copied = false
+    }
+    helper.remove()
+  }
+  if (copied) {
     copiedMismatch.value = true
     setTimeout(() => {
       copiedMismatch.value = false
     }, 2000)
-  } catch {
+  } else {
     copiedMismatch.value = false
+    copyMismatchError.value = true
   }
 }
 
@@ -430,7 +459,7 @@ onBeforeUnmount(() => {
             <button
               type="button"
               class="subtle-button"
-              :disabled="!store.isDirty.value || store.saving.value"
+              :disabled="!store.isDirty.value || Boolean(store.printerMismatch.value) || store.saving.value"
               @click="store.discardChanges()"
             >
               <RotateCcw :size="14" />{{ t('Verwerfen') }}
@@ -468,7 +497,14 @@ onBeforeUnmount(() => {
           </span>
           <div class="config-editor-notice-actions">
             <button type="button" class="subtle-button" @click="copyMismatchContent">
-              <Copy :size="13" />{{ copiedMismatch ? t('Kopiert') : t('In Zwischenablage kopieren') }}
+              <Copy :size="13" />
+              {{
+                copiedMismatch
+                  ? t('Kopiert')
+                  : copyMismatchError
+                    ? t('Kopieren fehlgeschlagen — bitte manuell markieren')
+                    : t('In Zwischenablage kopieren')
+              }}
             </button>
             <button type="button" class="confirm-button" @click="discardMismatchAndReload">
               {{ t('Verwerfen & neu laden') }}

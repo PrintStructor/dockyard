@@ -90,7 +90,13 @@ function isLoopbackOrigin(req) {
 function requestOriginFor(req) {
   if (req?.headers?.origin) return String(req.headers.origin)
   const host = req?.headers?.host
-  return host ? `http://${host}` : ''
+  if (!host) return ''
+  const forwardedProto = String(req?.headers?.['x-forwarded-proto'] ?? '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase()
+  const protocol = forwardedProto === 'https' ? 'https:' : 'http:'
+  return `${protocol}//${host}`
 }
 
 function requestStream(url, onResponse) {
@@ -121,6 +127,7 @@ export function createPrinterRuntime({ store = defaultSettingsStore } = {}) {
   let lastResult = null
   let jobSequence = 0
   let activeUpdateJob = null
+  let runtimeEpoch = 0
   const releaseNotesCache = new Map()
 
   function resolveCameraTarget(id) {
@@ -136,11 +143,12 @@ export function createPrinterRuntime({ store = defaultSettingsStore } = {}) {
         : null
       return { cam, webrtcUrl: null, streamUrl: base, snapshotUrl }
     }
+    const cleanBase = base.replace(/\/+$/, '')
     return {
       cam,
-      webrtcUrl: `${base}/webrtc`,
-      streamUrl: `${base}/stream`,
-      snapshotUrl: `${base}/snapshot`,
+      webrtcUrl: `${cleanBase}/webrtc`,
+      streamUrl: `${cleanBase}/stream`,
+      snapshotUrl: `${cleanBase}/snapshot`,
     }
   }
 
@@ -181,6 +189,7 @@ export function createPrinterRuntime({ store = defaultSettingsStore } = {}) {
   function applyRuntimeSettingsChange({ activePrinterChanged, printerUrlChanged }) {
     const publicSettings = store.getPublicSettings()
     if (activePrinterChanged || printerUrlChanged) {
+      runtimeEpoch += 1
       configCache = null
       effectObjects = []
       fanObjects = []
@@ -283,7 +292,7 @@ async function fetchGithubReleases(owner, repoName) {
   return data
 }
 
-function startUpdateJob({ name, mode, hard = false }) {
+function startUpdateJob({ name, mode, hard = false, printer = activeUrl() }) {
   if (activeUpdateJob?.running) {
     throw new ControlError('Ein Update- oder Recovery-Vorgang läuft bereits.', 409)
   }
@@ -326,7 +335,7 @@ function startUpdateJob({ name, mode, hard = false }) {
   )
 
   executeMoonrakerRpc({
-    printer: activeUrl(),
+    printer,
     method,
     params,
     timeoutMs: 900_000,
@@ -407,7 +416,7 @@ function cachedCapabilities(raw) {
 }
 
 let live = null
-const readMaterials = createMaterialsReader(activeUrl, fetch, () => live?.notify())
+const readMaterials = createMaterialsReader(activeUrl, fetchUpstream, () => live?.notify())
 
 function normalized(raw) {
   const active = getActive()
@@ -452,14 +461,20 @@ async function readJson(req, max = 64_000) {
 }
 
 async function query(withConfig = false) {
+  const epoch = runtimeEpoch
   const base = activeUrl()
+  let nextFanObjects = fanObjects
   if (withConfig) {
     const response = await fetchUpstream(`${base}/printer/objects/list`, { signal: AbortSignal.timeout(5000) })
     if (!response.ok) throw new Error('Druckerobjekte nicht erreichbar.')
     const data = await response.json()
-    fanObjects = (data.result?.objects ?? []).filter(name => /^fan_generic [A-Za-z0-9_]+$/.test(name))
+    if (epoch !== runtimeEpoch) {
+      throw new ControlError('Der aktive Drucker wurde während der Abfrage gewechselt.', 409)
+    }
+    nextFanObjects = (data.result?.objects ?? []).filter(name => /^fan_generic [A-Za-z0-9_]+$/.test(name))
+    fanObjects = nextFanObjects
   }
-  const queryNames = [...objects, ...effectObjects, ...fanObjects].map(encodeURIComponent).join('&')
+  const queryNames = [...objects, ...effectObjects, ...nextFanObjects].map(encodeURIComponent).join('&')
   const response = await fetchUpstream(
     `${base}/printer/objects/query?${queryNames}${withConfig ? '&configfile=settings' : ''}`,
     { signal: AbortSignal.timeout(5000) },
@@ -467,6 +482,9 @@ async function query(withConfig = false) {
   if (!response.ok) throw new Error(`Moonraker HTTP ${response.status}`)
   const data = await response.json()
   if (!data.result?.status) throw new Error('Keine Statusdaten von Moonraker')
+  if (epoch !== runtimeEpoch) {
+    throw new ControlError('Der aktive Drucker wurde während der Abfrage gewechselt.', 409)
+  }
   if (withConfig) {
     capabilityCache = capabilities(data.result.status)
     capabilityAt = Date.now()
@@ -1008,9 +1026,9 @@ function printerMiddleware(req, res, next) {
       if (systemRoute) {
         if (systemSub === 'overview') {
           const [procRes, sysRes, infoRes] = await Promise.all([
-            fetch(`${printer}/machine/proc_stats`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
-            fetch(`${printer}/machine/system_info`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
-            fetch(`${printer}/server/info`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
+            fetchUpstream(`${printer}/machine/proc_stats`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
+            fetchUpstream(`${printer}/machine/system_info`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
+            fetchUpstream(`${printer}/server/info`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
           ])
           if (!procRes?.ok && !sysRes?.ok && !infoRes?.ok) {
             throw new Error('Moonraker-Systemdaten nicht erreichbar.')
@@ -1030,8 +1048,8 @@ function printerMiddleware(req, res, next) {
 
         if (systemSub === 'calibration') {
           const [listRes, filesRes] = await Promise.all([
-            fetch(`${printer}/printer/objects/list`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
-            fetch(`${printer}/server/files/list?root=config`, { signal: AbortSignal.timeout(6000) }).catch(() => null),
+            fetchUpstream(`${printer}/printer/objects/list`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
+            fetchUpstream(`${printer}/server/files/list?root=config`, { signal: AbortSignal.timeout(6000) }).catch(() => null),
           ])
           const availableObjects = listRes?.ok
             ? (await listRes.json().catch(() => null))?.result?.objects ?? []
@@ -1050,7 +1068,7 @@ function printerMiddleware(req, res, next) {
           ].filter(name => availSet.size === 0 || availSet.has(name))
 
           const queryStr = [...wanted.map(encodeURIComponent), 'configfile=settings'].join('&')
-          const qRes = await fetch(`${printer}/printer/objects/query?${queryStr}`, {
+          const qRes = await fetchUpstream(`${printer}/printer/objects/query?${queryStr}`, {
             signal: AbortSignal.timeout(6000),
           })
           if (!qRes.ok) throw new Error('Kalibrierungsdaten nicht erreichbar.')
@@ -1068,7 +1086,7 @@ function printerMiddleware(req, res, next) {
         if (systemSub === 'calibration/shaketune-image') {
           const imgPath = validateShakeTuneImagePath(parsedUrl.searchParams.get('path'))
           if (!imgPath) throw new ControlError('Ungültiger Bildpfad.', 400)
-          const response = await fetch(`${printer}/server/files/config/${encodeMoonrakerPath(imgPath)}`, {
+          const response = await fetchUpstream(`${printer}/server/files/config/${encodeMoonrakerPath(imgPath)}`, {
             signal: AbortSignal.timeout(8000),
           })
           if (!response.ok || !response.headers.get('content-type')?.startsWith('image/png')) {
@@ -1083,7 +1101,7 @@ function printerMiddleware(req, res, next) {
         }
 
         if (systemSub === 'config/list') {
-          const response = await fetch(`${printer}/server/files/list?root=config`, {
+          const response = await fetchUpstream(`${printer}/server/files/list?root=config`, {
             signal: AbortSignal.timeout(7000),
           })
           if (!response.ok) throw new Error('Konfigurationsdateien nicht erreichbar.')
@@ -1095,8 +1113,8 @@ function printerMiddleware(req, res, next) {
           const relPath = validateConfigPath(parsedUrl.searchParams.get('path'))
           if (!relPath) throw new ControlError('Ungültiger Konfigurationspfad.', 400)
           const [listRes, fileRes] = await Promise.all([
-            fetch(`${printer}/server/files/list?root=config`, { signal: AbortSignal.timeout(6000) }),
-            fetch(`${printer}/server/files/config/${encodeMoonrakerPath(relPath)}`, {
+            fetchUpstream(`${printer}/server/files/list?root=config`, { signal: AbortSignal.timeout(6000) }),
+            fetchUpstream(`${printer}/server/files/config/${encodeMoonrakerPath(relPath)}`, {
               signal: AbortSignal.timeout(8000),
             }),
           ])
@@ -1146,7 +1164,7 @@ function printerMiddleware(req, res, next) {
             }
           }
           await probeMachineWriteGuard(true)
-          const listRes = await fetch(`${printer}/server/files/list?root=config`, {
+          const listRes = await fetchUpstream(`${printer}/server/files/list?root=config`, {
             signal: AbortSignal.timeout(6000),
           })
           if (!listRes.ok) throw new Error('Konfigurationsliste nicht erreichbar.')
@@ -1167,7 +1185,7 @@ function printerMiddleware(req, res, next) {
 
           let restartSpec = null
           if (restartOption !== 'none') {
-            const sysRes = await fetch(`${printer}/machine/system_info`, { signal: AbortSignal.timeout(5000) }).catch(
+            const sysRes = await fetchUpstream(`${printer}/machine/system_info`, { signal: AbortSignal.timeout(5000) }).catch(
               () => null,
             )
             const sysJson = sysRes?.ok ? await sysRes.json().catch(() => null) : null
@@ -1175,7 +1193,7 @@ function printerMiddleware(req, res, next) {
             restartSpec = validateRestartTarget(restartOption, avail)
           }
 
-          const uploadRes = await fetch(`${printer}/server/files/upload`, {
+          const uploadRes = await fetchUpstream(`${printer}/server/files/upload`, {
             method: 'POST',
             body: buildConfigUploadFormData(validPath, content),
             signal: AbortSignal.timeout(10_000),
@@ -1195,7 +1213,7 @@ function printerMiddleware(req, res, next) {
                 ? uploadJson.result.item.modified
                 : null
           if (newModified == null) {
-            const refreshRes = await fetch(`${printer}/server/files/list?root=config`, {
+            const refreshRes = await fetchUpstream(`${printer}/server/files/list?root=config`, {
               signal: AbortSignal.timeout(5000),
             }).catch(() => null)
             const refreshJson = refreshRes?.ok ? await refreshRes.json().catch(() => null) : null
@@ -1234,7 +1252,7 @@ function printerMiddleware(req, res, next) {
         if (systemSub === 'service/restart') {
           const payload = await readJson(req, 4000)
           const target = payload?.target
-          const sysRes = await fetch(`${printer}/machine/system_info`, { signal: AbortSignal.timeout(5000) }).catch(
+          const sysRes = await fetchUpstream(`${printer}/machine/system_info`, { signal: AbortSignal.timeout(5000) }).catch(
             () => null,
           )
           const sysJson = sysRes?.ok ? await sysRes.json().catch(() => null) : null
@@ -1257,7 +1275,7 @@ function printerMiddleware(req, res, next) {
         }
 
         if (systemSub === 'updates') {
-          const response = await fetch(`${printer}/machine/update/status`, {
+          const response = await fetchUpstream(`${printer}/machine/update/status`, {
             signal: AbortSignal.timeout(8000),
           })
           if (!response.ok) throw new Error('Update-Status nicht erreichbar.')
@@ -1271,7 +1289,7 @@ function printerMiddleware(req, res, next) {
         if (systemSub === 'updates/notes') {
           const name = validateUpdateName(parsedUrl.searchParams.get('name'))
           if (!name) throw new ControlError('Ungültiger Komponentenname.', 400)
-          const response = await fetch(`${printer}/machine/update/status`, {
+          const response = await fetchUpstream(`${printer}/machine/update/status`, {
             signal: AbortSignal.timeout(8000),
           })
           if (!response.ok) throw new Error('Update-Status nicht erreichbar.')
@@ -1309,7 +1327,7 @@ function printerMiddleware(req, res, next) {
         if (systemSub === 'updates/refresh') {
           await readJson(req, 4000).catch(() => ({}))
           await probeMachineWriteGuard(false)
-          const response = await fetch(`${printer}/machine/update/refresh`, {
+          const response = await fetchUpstream(`${printer}/machine/update/refresh`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: '{}',
@@ -1324,27 +1342,35 @@ function printerMiddleware(req, res, next) {
         }
 
         if (systemSub === 'updates/upgrade') {
+          const epoch = runtimeEpoch
           const payload = await readJson(req, 4000)
           await probeMachineWriteGuard(false)
-          const statusRes = await fetch(`${printer}/machine/update/status`, { signal: AbortSignal.timeout(8000) })
+          const statusRes = await fetchUpstream(`${printer}/machine/update/status`, { signal: AbortSignal.timeout(8000) })
           if (!statusRes.ok) throw new Error('Update-Status nicht erreichbar.')
           const statusJson = await statusRes.json()
+          if (epoch !== runtimeEpoch) {
+            throw new ControlError('Der aktive Drucker wurde geändert. Update-Start abgebrochen.', 409)
+          }
           if (statusJson?.result?.busy) throw new ControlError('Moonraker führt bereits ein Update aus.', 409)
           const target = validateUpdateTarget(payload?.name, statusJson?.result?.version_info ?? {}, 'upgrade')
-          const job = startUpdateJob({ name: target.name, mode: 'upgrade' })
+          const job = startUpdateJob({ name: target.name, mode: 'upgrade', printer })
           return json(202, { accepted: true, job, message: `${target.name}: Update gestartet …` })
         }
 
         if (systemSub === 'updates/recover') {
+          const epoch = runtimeEpoch
           const payload = await readJson(req, 4000)
           await probeMachineWriteGuard(false)
-          const statusRes = await fetch(`${printer}/machine/update/status`, { signal: AbortSignal.timeout(8000) })
+          const statusRes = await fetchUpstream(`${printer}/machine/update/status`, { signal: AbortSignal.timeout(8000) })
           if (!statusRes.ok) throw new Error('Update-Status nicht erreichbar.')
           const statusJson = await statusRes.json()
+          if (epoch !== runtimeEpoch) {
+            throw new ControlError('Der aktive Drucker wurde geändert. Recovery-Start abgebrochen.', 409)
+          }
           if (statusJson?.result?.busy) throw new ControlError('Moonraker führt bereits ein Update aus.', 409)
           const target = validateUpdateTarget(payload?.name, statusJson?.result?.version_info ?? {}, 'recover')
           const hard = payload?.hard === true
-          const job = startUpdateJob({ name: target.name, mode: 'recover', hard })
+          const job = startUpdateJob({ name: target.name, mode: 'recover', hard, printer })
           return json(202, {
             accepted: true,
             job,
@@ -1353,7 +1379,7 @@ function printerMiddleware(req, res, next) {
         }
 
         if (systemSub === 'logs/list') {
-          const response = await fetch(`${printer}/server/files/list?root=logs`, {
+          const response = await fetchUpstream(`${printer}/server/files/list?root=logs`, {
             signal: AbortSignal.timeout(7000),
           })
           if (!response.ok) throw new Error('Logdateien nicht erreichbar.')
@@ -1365,7 +1391,7 @@ function printerMiddleware(req, res, next) {
           const logPath = validateLogPath(parsedUrl.searchParams.get('path'))
           if (!logPath) throw new ControlError('Ungültiger Logpfad.', 400)
           const url = `${printer}/server/files/logs/${encodeMoonrakerPath(logPath)}`
-          const response = await fetch(url, {
+          const response = await fetchUpstream(url, {
             headers: { Range: `bytes=-${LOG_TAIL_BYTES}` },
             signal: AbortSignal.timeout(8000),
           })
@@ -1399,6 +1425,7 @@ function printerMiddleware(req, res, next) {
       }
 
       if (path === '/api/history') {
+        const epoch = runtimeEpoch
         const rawLimit = Number(parsedUrl.searchParams.get('limit') ?? 40)
         const rawStart = Number(parsedUrl.searchParams.get('start') ?? 0)
         const limit = Number.isInteger(rawLimit) && rawLimit >= 1 && rawLimit <= 100 ? rawLimit : 40
@@ -1406,24 +1433,27 @@ function printerMiddleware(req, res, next) {
 
         const needFiles = !gcodeFileSetCache || Date.now() - gcodeFileSetAt > 30_000
         const [listRes, totalsRes, filesRes] = await Promise.all([
-          fetch(`${printer}/server/history/list?limit=${limit}&start=${start}&order=desc`, {
+          fetchUpstream(`${printer}/server/history/list?limit=${limit}&start=${start}&order=desc`, {
             signal: AbortSignal.timeout(7000),
           }),
           start === 0
-            ? fetch(`${printer}/server/history/totals`, { signal: AbortSignal.timeout(5000) }).catch(() => null)
+            ? fetchUpstream(`${printer}/server/history/totals`, { signal: AbortSignal.timeout(5000) }).catch(() => null)
             : Promise.resolve(null),
           needFiles
-            ? fetch(`${printer}/server/files/list?root=gcodes`, { signal: AbortSignal.timeout(6000) }).catch(() => null)
+            ? fetchUpstream(`${printer}/server/files/list?root=gcodes`, { signal: AbortSignal.timeout(6000) }).catch(() => null)
             : Promise.resolve(null),
         ])
 
         if (!listRes.ok) throw new Error('Druckverlauf nicht erreichbar.')
         const listJson = await listRes.json()
+        if (epoch !== runtimeEpoch) {
+          throw new ControlError('Der aktive Drucker wurde während der Abfrage gewechselt.', 409)
+        }
         const result = listJson.result ?? {}
 
         if (filesRes?.ok) {
           const filesJson = await filesRes.json().catch(() => null)
-          if (Array.isArray(filesJson?.result)) {
+          if (epoch === runtimeEpoch && Array.isArray(filesJson?.result)) {
             gcodeFileSetCache = new Set(filesJson.result.map(item => item?.path).filter(Boolean))
             gcodeFileSetAt = Date.now()
           }
@@ -1453,8 +1483,8 @@ function printerMiddleware(req, res, next) {
         const sub = printRoute[1]
         if (sub === 'files') {
           const [filesRes, historyRes] = await Promise.all([
-            fetch(`${printer}/server/files/list?root=gcodes`, { signal: AbortSignal.timeout(7000) }),
-            fetch(`${printer}/server/history/list?limit=10`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
+            fetchUpstream(`${printer}/server/files/list?root=gcodes`, { signal: AbortSignal.timeout(7000) }),
+            fetchUpstream(`${printer}/server/history/list?limit=10`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
           ])
           if (!filesRes.ok) throw new Error('Druckdateien nicht erreichbar.')
           const filesJson = await filesRes.json()
@@ -1492,7 +1522,7 @@ function printerMiddleware(req, res, next) {
         if (sub === 'metadata') {
           const filename = validateGcodeFilename(parsedUrl.searchParams.get('filename'))
           if (!filename) throw new ControlError('Ungültiger Dateiname.', 400)
-          const response = await fetch(
+          const response = await fetchUpstream(
             `${printer}/server/files/metadata?filename=${encodeURIComponent(filename)}`,
             { signal: AbortSignal.timeout(7000) },
           )
@@ -1508,7 +1538,7 @@ function printerMiddleware(req, res, next) {
             .split('/')
             .map(segment => encodeURIComponent(segment))
             .join('/')
-          const response = await fetch(`${printer}/server/files/gcodes/${encoded}`, {
+          const response = await fetchUpstream(`${printer}/server/files/gcodes/${encoded}`, {
             signal: AbortSignal.timeout(6000),
           })
           if (!response.ok || !response.headers.get('content-type')?.startsWith('image/')) {
@@ -1539,7 +1569,7 @@ function printerMiddleware(req, res, next) {
       }
 
       if (path === '/api/temperature-history') {
-        const response = await fetch(`${printer}/server/temperature_store`, { signal: AbortSignal.timeout(5000) })
+        const response = await fetchUpstream(`${printer}/server/temperature_store`, { signal: AbortSignal.timeout(5000) })
         if (!response.ok) throw new Error('Temperaturverlauf nicht erreichbar.')
         const data = await response.json()
         return json(200, temperatureHistory(data.result))
@@ -1547,10 +1577,10 @@ function printerMiddleware(req, res, next) {
 
       if (path === '/api/presets') {
         const [mainsailRes, legacyRes] = await Promise.all([
-          fetch(`${printer}/server/database/item?namespace=mainsail&key=presets`, {
+          fetchUpstream(`${printer}/server/database/item?namespace=mainsail&key=presets`, {
             signal: AbortSignal.timeout(5000),
           }).catch(() => null),
-          fetch(`${printer}/server/database/item?namespace=voyager-ui&key=settings.presets`, {
+          fetchUpstream(`${printer}/server/database/item?namespace=voyager-ui&key=settings.presets`, {
             signal: AbortSignal.timeout(5000),
           }).catch(() => null),
         ])
@@ -1560,7 +1590,7 @@ function printerMiddleware(req, res, next) {
       }
 
       if (path === '/api/console') {
-        const response = await fetch(`${printer}/server/gcode_store?count=200`, { signal: AbortSignal.timeout(5000) })
+        const response = await fetchUpstream(`${printer}/server/gcode_store?count=200`, { signal: AbortSignal.timeout(5000) })
         if (!response.ok) throw new Error('Konsolenausgabe nicht erreichbar.')
         const data = await response.json()
         if (!Array.isArray(data.result?.gcode_store)) throw new Error('Keine Konsolenausgabe erhalten.')

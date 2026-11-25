@@ -1,6 +1,7 @@
 import { computed, ref } from 'vue'
 
-const MAX_PRINTERS = 16
+const MAX_PRINTERS = 20
+const ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/
 
 const settings = ref(null)
 const loaded = ref(false)
@@ -36,23 +37,27 @@ const runtime = computed(
 )
 
 function slugifyProfileId(raw, fallback = 'printer') {
-  const slug = String(raw ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+  const cleaned = String(raw ?? '').trim().toLowerCase()
+  if (ID_PATTERN.test(cleaned)) return cleaned
+  const slug = cleaned
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^[^a-z0-9]+/, '')
+    .replace(/-+/g, '-')
+    .replace(/[-_]+$/, '')
     .slice(0, 32)
-  return slug || fallback
+  return slug && ID_PATTERN.test(slug) ? slug : fallback
 }
 
 function cloneCamera(cam, idx) {
-  const id = slugifyProfileId(cam?.id || cam?.name, `cam-${idx + 1}`).replace(/-/g, '_')
+  const id = slugifyProfileId(cam?.id || cam?.name, `cam_${idx + 1}`)
   const service = cam?.service === 'mjpeg' ? 'mjpeg' : 'camera-streamer'
   const out = {
     id,
-    name: String(cam?.name ?? '').trim() || id,
+    name: String(cam?.name ?? '').trim().slice(0, 40) || id,
+    description: String(cam?.description ?? '').trim().slice(0, 80),
     service,
     url: String(cam?.url ?? '').trim(),
+    preferredMode: service === 'mjpeg' ? 'mjpeg' : cam?.preferredMode === 'mjpeg' ? 'mjpeg' : 'webrtc',
     enabled: cam?.enabled !== false,
   }
   if (service === 'mjpeg' && typeof cam?.snapshotUrl === 'string' && cam.snapshotUrl.trim()) {
@@ -62,12 +67,12 @@ function cloneCamera(cam, idx) {
 }
 
 function clonePrinterProfile(profile, idx = 0) {
-  const name = String(profile?.name ?? '').trim()
+  const name = String(profile?.name ?? '').trim().slice(0, 40)
   const url = String(profile?.url ?? '').trim()
   return {
     id: slugifyProfileId(profile?.id || name, `printer-${idx + 1}`),
     name,
-    subtitle: String(profile?.subtitle ?? '').trim(),
+    subtitle: String(profile?.subtitle ?? '').trim().slice(0, 64),
     url,
     mainsailUrl: String(profile?.mainsailUrl ?? 'auto').trim() || 'auto',
     cameras: Array.isArray(profile?.cameras) ? profile.cameras.map(cloneCamera) : [],
@@ -112,11 +117,8 @@ export function parsePrintersImport(rawText) {
       throw new Error(`Ungültiges Druckerprofil an Position ${idx + 1}.`)
     }
     const profile = clonePrinterProfile(entry, idx)
-    if (!profile.name) {
-      throw new Error(`Druckerprofil ${idx + 1} hat keinen Namen.`)
-    }
     if (!profile.url) {
-      throw new Error(`Druckerprofil "${profile.name}" hat keine Moonraker-Adresse.`)
+      throw new Error(`Druckerprofil "${profile.name || profile.id}" hat keine Moonraker-Adresse.`)
     }
     return profile
   })

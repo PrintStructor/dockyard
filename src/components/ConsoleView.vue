@@ -86,6 +86,13 @@ function onVisibility() {
   else if (!loaded.value || props.status?.transport !== 'live') refresh()
 }
 
+watch(
+  () => [props.online, loaded.value],
+  ([isOnline, isLoaded]) => {
+    if (isOnline && !isLoaded && !document.hidden) refresh()
+  },
+)
+
 onMounted(() => {
   if (!loaded.value) refresh()
   else scrollToLatest()

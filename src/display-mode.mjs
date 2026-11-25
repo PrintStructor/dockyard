@@ -2,6 +2,8 @@ import { computed, ref } from 'vue'
 
 export const DISPLAY_MODE_KEY = 'dockyard.displayMode'
 export const CAMERAS_HIDDEN_KEY = 'dockyard.camerasHidden'
+export const DEFAULT_TAB_KEY = 'dockyard.defaultTab'
+export const VALID_DEFAULT_TABS = ['tools', 'print', 'controls', 'cameras', 'history', 'system']
 const LEGACY_DISPLAY_MODE_KEY = 'stormtrooper.displayMode'
 const LEGACY_CAMERAS_HIDDEN_KEY = 'stormtrooper.camerasHidden'
 
@@ -132,4 +134,28 @@ export function setCamerasHidden(hidden) {
   explicitCamerasOverride.value = displayMode.value ? next : null
   saveCamerasHiddenPreference(next)
   syncUrlParams(['cameras'])
+}
+
+export function resolveDefaultTab(storage) {
+  const store = safeStorage(storage)
+  try {
+    const saved = store?.getItem(DEFAULT_TAB_KEY)
+    if (saved && VALID_DEFAULT_TABS.includes(saved)) return saved
+  } catch {
+    // Ignore storage errors in restricted browser sessions.
+  }
+  return 'tools'
+}
+
+export const defaultTab = ref(resolveDefaultTab())
+
+export function setDefaultTab(tab, storage) {
+  if (!VALID_DEFAULT_TABS.includes(tab)) return false
+  defaultTab.value = tab
+  try {
+    safeStorage(storage)?.setItem(DEFAULT_TAB_KEY, tab)
+  } catch {
+    // Ignore storage errors in restricted browser sessions.
+  }
+  return true
 }

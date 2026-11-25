@@ -16,6 +16,7 @@ import {
   AlertTriangle,
   Lock,
   Check,
+  Copy,
   X,
   ChevronDown,
   ChevronRight,
@@ -36,12 +37,15 @@ const cmHost = ref(null)
 const pendingSwitchPath = ref('')
 const mobileTreeCollapsed = ref(false)
 const openDirs = ref(new Set(['']))
+const copiedMismatch = ref(false)
 
 let editorView = null
 let applyingExternal = false
 const readOnlyCompartment = new Compartment()
 
-const effectiveReadonly = computed(() => store.readonly.value || props.printLocked || !props.moonrakerOnline)
+const effectiveReadonly = computed(
+  () => store.readonly.value || Boolean(store.printerMismatch.value) || props.printLocked || !props.moonrakerOnline,
+)
 
 const visibleFiles = computed(() => {
   const q = store.search.value.trim().toLowerCase()
@@ -83,6 +87,7 @@ const restartActionLabel = computed(() => {
 })
 
 const readonlyReason = computed(() => {
+  if (store.printerMismatch.value) return t('Schreibgeschützt · Drucker gewechselt')
   if (props.printLocked) return t('Schreibgeschützt · Druck läuft')
   if (!props.moonrakerOnline) return t('Schreibgeschützt · Offline')
   if (store.isScript.value) return t('Schreibgeschützt · Skript')
@@ -90,6 +95,23 @@ const readonlyReason = computed(() => {
   if (store.readonly.value) return t('Schreibgeschützt')
   return ''
 })
+
+async function copyMismatchContent() {
+  try {
+    await navigator.clipboard?.writeText(store.content.value)
+    copiedMismatch.value = true
+    setTimeout(() => {
+      copiedMismatch.value = false
+    }, 2000)
+  } catch {
+    copiedMismatch.value = false
+  }
+}
+
+async function discardMismatchAndReload() {
+  pendingSwitchPath.value = ''
+  reportConnectivity(await store.acknowledgePrinterMismatchAndReload())
+}
 
 function isDirOpen(dir) {
   if (store.search.value.trim()) return true
@@ -208,7 +230,11 @@ watch(effectiveReadonly, isRo => {
 watch(
   () => [store.currentPath.value, store.loadingFile.value],
   async ([path, loading]) => {
-    if (!path || loading) return
+    if (!path) {
+      destroyEditor()
+      return
+    }
+    if (loading) return
     await nextTick()
     mountEditor()
   },
@@ -429,6 +455,26 @@ onBeforeUnmount(() => {
             </button>
           </div>
         </header>
+
+        <div v-if="store.printerMismatch.value" class="config-editor-notice amber" role="alert">
+          <AlertTriangle :size="15" />
+          <span>
+            {{
+              t(
+                'Der aktive Drucker wurde gewechselt. Diese ungespeicherte Datei gehört zu {0} — Speichern ist gesperrt, um ein Überschreiben auf dem falschen Drucker zu verhindern.',
+                [store.printerMismatch.value.fromPrinterName || store.printerMismatch.value.fromPrinterId],
+              )
+            }}
+          </span>
+          <div class="config-editor-notice-actions">
+            <button type="button" class="subtle-button" @click="copyMismatchContent">
+              <Copy :size="13" />{{ copiedMismatch ? t('Kopiert') : t('In Zwischenablage kopieren') }}
+            </button>
+            <button type="button" class="confirm-button" @click="discardMismatchAndReload">
+              {{ t('Verwerfen & neu laden') }}
+            </button>
+          </div>
+        </div>
 
         <div v-if="pendingSwitchPath" class="config-editor-notice amber" role="alert">
           <AlertTriangle :size="15" />

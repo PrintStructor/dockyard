@@ -915,5 +915,9 @@
   "Drucker-Kamerawinkel": "Printer camera angle",
   "Kameraperspektive": "Camera angle",
   "{0} Werkzeugwechsel": "{0} tool changes",
-  "· aufgenommen": "· mounted"
+  "· aufgenommen": "· mounted",
+  "Schreibgeschützt · Drucker gewechselt": "Read-only · Printer switched",
+  "Der aktive Drucker wurde gewechselt. Diese ungespeicherte Datei gehört zu {0} — Speichern ist gesperrt, um ein Überschreiben auf dem falschen Drucker zu verhindern.": "The active printer was switched. This unsaved file belongs to {0} — saving is locked to prevent overwriting the wrong printer.",
+  "In Zwischenablage kopieren": "Copy to clipboard",
+  "Verwerfen & neu laden": "Discard & reload"
 }

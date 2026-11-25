@@ -86,6 +86,13 @@ export function abortConsoleRefresh() {
   activeRequest?.abort()
 }
 
+export function clearConsole() {
+  activeRequest?.abort()
+  entries.value = []
+  loaded.value = false
+  error.value = ''
+}
+
 export function recordConsoleCommand(script) {
   const trimmed = script.trim()
   if (!trimmed) return
@@ -105,6 +112,7 @@ export function useConsole() {
     history,
     refresh: refreshConsole,
     abort: abortConsoleRefresh,
+    clear: clearConsole,
     pushEntry: pushConsoleEntry,
     recordCommand: recordConsoleCommand,
   }

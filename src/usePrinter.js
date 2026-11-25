@@ -1,6 +1,6 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 
-export function usePrinter({ onConsole, onUpdate, onReconnect } = {}) {
+export function usePrinter({ onConsole, onUpdate, onSettings, onReconnect } = {}) {
   const status = ref(null)
   const connection = ref('connecting')
   const error = ref('')
@@ -73,6 +73,13 @@ export function usePrinter({ onConsole, onUpdate, onReconnect } = {}) {
         // Ignore malformed update events.
       }
     })
+    events.addEventListener('settings', event => {
+      try {
+        onSettings?.(JSON.parse(event.data))
+      } catch {
+        // Ignore malformed settings events.
+      }
+    })
     events.addEventListener('offline', () => {
       liveAt = 0
       offline()
@@ -113,5 +120,15 @@ export function usePrinter({ onConsole, onUpdate, onReconnect } = {}) {
     document.removeEventListener('visibilitychange', visibility)
   })
 
-  return { status, connection, error, updating, refresh }
+  function resetForPrinterSwitch() {
+    controller?.abort()
+    wasOnline = false
+    liveAt = 0
+    status.value = null
+    connection.value = 'connecting'
+    error.value = ''
+    refresh()
+  }
+
+  return { status, connection, error, updating, refresh, resetForPrinterSwitch }
 }

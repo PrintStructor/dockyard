@@ -12,6 +12,7 @@ let visibilityBound = false
 function createCameraEntry(id) {
   const state = reactive({
     id,
+    service: 'camera-streamer', // 'camera-streamer' | 'mjpeg'
     preferredMode: 'webrtc', // 'webrtc' | 'mjpeg'
     activeTransport: null, // 'webrtc' | 'mjpeg' | null
     status: 'idle', // 'idle' | 'connecting' | 'live' | 'reconnecting' | 'error'
@@ -289,11 +290,44 @@ function createCameraEntry(id) {
   }
 
   function start() {
-    if (refs <= 0 || document.hidden) return
-    if (state.preferredMode === 'webrtc' && !state.webrtcFailed) {
+    if (refs <= 0 || (typeof document !== 'undefined' && document.hidden)) return
+    if (state.service !== 'mjpeg' && state.preferredMode === 'webrtc' && !state.webrtcFailed) {
       startWebRtc()
     } else {
       startMjpeg()
+    }
+  }
+
+  function configure({ service, preferredMode } = {}) {
+    const nextService = service === 'mjpeg' ? 'mjpeg' : 'camera-streamer'
+    const changedService = state.service !== nextService
+    state.service = nextService
+    if (nextService === 'mjpeg') {
+      state.preferredMode = 'mjpeg'
+      state.webrtcFailed = false
+    } else if (preferredMode === 'webrtc' || preferredMode === 'mjpeg') {
+      state.preferredMode = preferredMode
+      state.webrtcFailed = false
+    } else if (changedService) {
+      state.preferredMode = 'webrtc'
+      state.webrtcFailed = false
+    }
+    if (changedService && refs > 0 && !(typeof document !== 'undefined' && document.hidden)) {
+      reconnectAttempt = 0
+      start()
+    }
+  }
+
+  function reset() {
+    clearTimeout(graceTimer)
+    graceTimer = null
+    stopTransport(false)
+    state.lastFrameAt = 0
+    state.webrtcFailed = false
+    reconnectAttempt = 0
+    state.status = 'idle'
+    if (refs > 0 && !(typeof document !== 'undefined' && document.hidden)) {
+      start()
     }
   }
 
@@ -329,10 +363,14 @@ function createCameraEntry(id) {
 
   function setPreferredMode(mode) {
     if (mode !== 'webrtc' && mode !== 'mjpeg') return
+    if (state.service === 'mjpeg' && mode === 'webrtc') {
+      state.preferredMode = 'mjpeg'
+      return
+    }
     state.preferredMode = mode
     state.webrtcFailed = false
     reconnectAttempt = 0
-    if (refs > 0 && !document.hidden) start()
+    if (refs > 0 && !(typeof document !== 'undefined' && document.hidden)) start()
   }
 
   function handleVisibility() {
@@ -345,7 +383,7 @@ function createCameraEntry(id) {
     }
   }
 
-  return { state, attach, detach, reconnect, setPreferredMode, handleVisibility }
+  return { state, attach, detach, reconnect, setPreferredMode, configure, reset, handleVisibility }
 }
 
 function bindVisibility() {
@@ -364,11 +402,17 @@ export function useCameras() {
     return entries.get(id)
   }
 
+  function resetAll() {
+    for (const entry of entries.values()) entry.reset()
+  }
+
   return {
     getCamera: id => getEntry(id).state,
     attach: id => getEntry(id).attach(),
     detach: id => getEntry(id).detach(),
     reconnect: id => getEntry(id).reconnect(),
     setPreferredMode: (id, mode) => getEntry(id).setPreferredMode(mode),
+    configureCamera: (id, opts) => getEntry(id).configure(opts),
+    resetAll,
   }
 }

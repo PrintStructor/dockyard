@@ -21,7 +21,7 @@ import {
   ChevronRight,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
-import { klipperLanguage, stormtrooperEditorTheme } from '../klipper-lang.mjs'
+import { klipperLanguage, dockyardEditorTheme } from '../klipper-lang.mjs'
 import { useConfigEditor } from '../useConfigEditor.js'
 
 const props = defineProps({
@@ -153,7 +153,7 @@ function mountEditor() {
       indentUnit.of('    '),
       cmSearch({ top: true }),
       klipperLanguage,
-      ...stormtrooperEditorTheme,
+      ...dockyardEditorTheme,
       readOnlyCompartment.of([
         EditorState.readOnly.of(effectiveReadonly.value),
         EditorView.editable.of(!effectiveReadonly.value),

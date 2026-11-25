@@ -25,7 +25,18 @@ export function parseAllowedOrigins(raw = '') {
     .map(entry => parseHttpOrigin(entry, 'ALLOWED_ORIGINS entry', true))
 }
 
+export function resolvePrinterName(env = process.env) {
+  if (Object.hasOwn(env, 'PRINTER_NAME') && env.PRINTER_NAME !== undefined) {
+    return String(env.PRINTER_NAME).trim()
+  }
+  if (Object.hasOwn(env, 'VITE_PRINTER_NAME') && env.VITE_PRINTER_NAME !== undefined) {
+    return String(env.VITE_PRINTER_NAME).trim()
+  }
+  return 'STORMTROOPER'
+}
+
 export const printerUrl = parseHttpOrigin(process.env.PRINTER_URL || 'http://127.0.0.1', 'PRINTER_URL')
+export const printerName = resolvePrinterName()
 export const serverHost = (process.env.HOST || '127.0.0.1').trim() || '127.0.0.1'
 
 const parsedPort = Number(process.env.PORT || 4173)

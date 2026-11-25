@@ -24,7 +24,7 @@ import {
   Power,
   X,
 } from '@lucide/vue'
-import { t, locale, language, setLanguage } from './i18n.mjs'
+import { t, locale, language, setLanguage, setDocumentTitle } from './i18n.mjs'
 import { displayMode, showCameras, toggleDisplayMode, sanitizeTabForCameras } from './display-mode.mjs'
 import ControlsView from './components/ControlsView.vue'
 import ConsoleView from './components/ConsoleView.vue'
@@ -74,6 +74,16 @@ watch(
 )
 
 const configEditor = useConfigEditor()
+const fallbackPrinterName = (import.meta.env.VITE_PRINTER_NAME ?? 'STORMTROOPER').trim()
+const printerName = computed(() => {
+  const remote = status.value?.printerName
+  return typeof remote === 'string' ? remote.trim() : fallbackPrinterName
+})
+watch(
+  [language, printerName],
+  ([nextLang, nextPrinter]) => setDocumentTitle(nextLang, nextPrinter),
+  { immediate: true },
+)
 const mainsailUrl = resolveMainsailUrl(import.meta.env.VITE_MAINSAIL_URL)
 const validTabs = ['tools', 'controls', 'print', 'history', 'cameras', 'console', 'system']
 const validSystemSubtabs = ['overview', 'config', 'calibration', 'maintenance']
@@ -428,9 +438,15 @@ async function acknowledgeUncertain() {
 <template>
   <div class="app-shell" :class="{ 'controls-active': tab === 'controls', 'display-mode': displayMode }">
     <header class="masthead">
-      <a class="brand" href="#" :aria-label="t('STORMTROOPER Werkzeugübersicht')" @click.prevent="tab = 'tools'">
-        <img src="/voron-logo.svg" width="34" height="39" alt="VORON" />
-        <span>STORMTROOPER<small>VORON 2.4 <span class="brand-divider" aria-hidden="true">/</span> 6-Toolchanger</small></span>
+      <a class="brand" href="#" :aria-label="t('DOCKYARD Werkzeugübersicht')" @click.prevent="tab = 'tools'">
+        <img src="/voron-logo.svg" width="34" height="39" alt="DOCKYARD" />
+        <span>
+          <span class="brand-title">
+            DOCKYARD
+            <span v-if="printerName" class="brand-printer-pill">{{ printerName }}</span>
+          </span>
+          <small>VORON 2.4 <span class="brand-divider" aria-hidden="true">/</span> 6-Toolchanger</small>
+        </span>
       </a>
       <div class="header-meta">
         <button
@@ -1125,7 +1141,10 @@ async function acknowledgeUncertain() {
       />
 
       <footer class="page-footer">
-        <span>STORMTROOPER <span class="footer-divider" aria-hidden="true">/</span> {{ t('Lokale Druckerbedienung') }}</span>
+        <span>
+          DOCKYARD<template v-if="printerName"> · {{ printerName }}</template>
+          <span class="footer-divider" aria-hidden="true">/</span> {{ t('Lokale Druckerbedienung') }}
+        </span>
         <span>
           Moonraker · {{ online ? t('verbunden') : t(connectionLabel).toLowerCase() }}
           <span class="footer-divider" aria-hidden="true">/</span> {{ t('CAD-Referenz') }}

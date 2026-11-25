@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Deploy STORMTROOPER Toolchanger Cockpit to a Raspberry Pi / Linux printer host.
+# Deploy DOCKYARD Live 3D Toolchanger Cockpit to a Raspberry Pi / Linux printer host.
 # - Builds locally with VITE_MAINSAIL_URL=auto (no private IPs baked into dist/).
 # - Installs isolated Node.js 22 LTS into ~/.local/node22 (never touches /usr/bin/node).
 # - Syncs runtime files only (dist/, server/, src/, package.json) — zero node_modules on Pi.
-# - Runs as a user-level systemd service (~/.config/systemd/user/stormtrooper-cockpit.service).
+# - Runs as a user-level systemd service (~/.config/systemd/user/dockyard.service).
 # - Never touches HelixScreen, Klipper, Moonraker, Mainsail or Crowsnest.
 #
 # Usage:
@@ -14,9 +14,10 @@ set -euo pipefail
 # Optional environment variables:
 #   DEPLOY_HOST=<host>                 Target hostname or IP (defaults to host from local .env.local)
 #   DEPLOY_USER=pi                     SSH user (default: pi)
-#   DEPLOY_DIR=stormtrooper-toolchanger-cockpit
+#   DEPLOY_DIR=dockyard
 #   DEPLOY_PORT=4173                   Cockpit listen port (default: 4173)
 #   DEPLOY_PRINTER_URL=http://127.0.0.1
+#   DEPLOY_PRINTER_NAME=STORMTROOPER   Display badge shown next to DOCKYARD
 #   SKIP_TESTS=0                       Set to 1 to skip local `npm test`
 #   REFRESH_ENV=0                      Set to 1 to regenerate remote .env.local ALLOWED_ORIGINS
 
@@ -28,9 +29,10 @@ cd "${ROOT_DIR}"
 
 DEPLOY_USER="${DEPLOY_USER:-pi}"
 DEPLOY_HOST="${1:-${DEPLOY_HOST:-}}"
-DEPLOY_DIR="${DEPLOY_DIR:-stormtrooper-toolchanger-cockpit}"
+DEPLOY_DIR="${DEPLOY_DIR:-dockyard}"
 DEPLOY_PORT="${DEPLOY_PORT:-4173}"
 DEPLOY_PRINTER_URL="${DEPLOY_PRINTER_URL:-http://127.0.0.1}"
+DEPLOY_PRINTER_NAME="${DEPLOY_PRINTER_NAME:-STORMTROOPER}"
 SKIP_TESTS="${SKIP_TESTS:-0}"
 REFRESH_ENV="${REFRESH_ENV:-0}"
 
@@ -147,12 +149,12 @@ rsync -az --delete -e "ssh ${SSH_OPTS[*]}" "${ROOT_DIR}/src/" "${TARGET}:${DEPLO
 rsync -az -e "ssh ${SSH_OPTS[*]}" "${ROOT_DIR}/package.json" "${TARGET}:${DEPLOY_DIR}/package.json"
 
 echo "==> [5/6] Configuring remote .env.local & user-level systemd service..."
-sed "s|stormtrooper-toolchanger-cockpit|${DEPLOY_DIR}|g" \
-  "${ROOT_DIR}/deploy/stormtrooper-cockpit.user.service.example" \
-  | ssh "${SSH_OPTS[@]}" "${TARGET}" "cat > \"\$HOME/.config/systemd/user/stormtrooper-cockpit.service\""
+sed "s|%h/dockyard|%h/${DEPLOY_DIR}|g" \
+  "${ROOT_DIR}/deploy/dockyard.user.service.example" \
+  | ssh "${SSH_OPTS[@]}" "${TARGET}" "cat > \"\$HOME/.config/systemd/user/dockyard.service\""
 
 ssh "${SSH_OPTS[@]}" "${TARGET}" \
-  "DEPLOY_DIR='${DEPLOY_DIR}' DEPLOY_PORT='${DEPLOY_PORT}' DEPLOY_PRINTER_URL='${DEPLOY_PRINTER_URL}' REFRESH_ENV='${REFRESH_ENV}' bash -s" <<'EOF'
+  "DEPLOY_DIR='${DEPLOY_DIR}' DEPLOY_PORT='${DEPLOY_PORT}' DEPLOY_PRINTER_URL='${DEPLOY_PRINTER_URL}' DEPLOY_PRINTER_NAME='${DEPLOY_PRINTER_NAME}' REFRESH_ENV='${REFRESH_ENV}' bash -s" <<'EOF'
 set -euo pipefail
 APP_DIR="${HOME}/${DEPLOY_DIR}"
 ENV_FILE="${APP_DIR}/.env.local"
@@ -203,6 +205,7 @@ if [[ ! -f "${ENV_FILE}" || "${REFRESH_ENV}" == "1" ]]; then
 HOST=${BIND_HOST}
 PORT=${DEPLOY_PORT}
 PRINTER_URL=${DEPLOY_PRINTER_URL}
+PRINTER_NAME=${DEPLOY_PRINTER_NAME}
 ALLOWED_ORIGINS=${ORIGINS}
 ENVEOF
   echo "    Wrote ${ENV_FILE} (HOST=${BIND_HOST}, PORT=${DEPLOY_PORT})"
@@ -211,8 +214,9 @@ else
 fi
 
 systemctl --user daemon-reload
-systemctl --user enable stormtrooper-cockpit.service >/dev/null 2>&1 || true
-systemctl --user restart stormtrooper-cockpit.service
+systemctl --user disable --now stormtrooper-cockpit.service >/dev/null 2>&1 || true
+systemctl --user enable dockyard.service >/dev/null 2>&1 || true
+systemctl --user restart dockyard.service
 EOF
 
 echo "==> [6/6] Verifying live health (read-only)..."
@@ -232,9 +236,9 @@ for _ in $(seq 1 20); do
 done
 
 if [[ "${READY}" != "1" ]]; then
-  echo "Error: Cockpit did not become ready on port ${DEPLOY_PORT}." >&2
-  systemctl --user status stormtrooper-cockpit.service --no-pager >&2 || true
-  journalctl --user -u stormtrooper-cockpit.service -n 30 --no-pager >&2 || true
+  echo "Error: DOCKYARD did not become ready on port ${DEPLOY_PORT}." >&2
+  systemctl --user status dockyard.service --no-pager >&2 || true
+  journalctl --user -u dockyard.service -n 30 --no-pager >&2 || true
   exit 1
 fi
 
@@ -245,10 +249,10 @@ SUMMARY="$("${NODE_BIN}" -e "
   console.log(\`klipper=\${klipper}, tools=\${tools}\`);
 " "${STATUS_JSON}")"
 
-ACTIVE="$(systemctl --user is-active stormtrooper-cockpit.service || true)"
+ACTIVE="$(systemctl --user is-active dockyard.service || true)"
 LINGER="$(loginctl show-user "${USER}" -p Linger --value 2>/dev/null || echo unknown)"
 
-echo "    Service: stormtrooper-cockpit.service (${ACTIVE})"
+echo "    Service: dockyard.service (${ACTIVE})"
 echo "    Health : HTTP 200 / & /api/status (${SUMMARY})"
 echo "    URL    : http://${SHORT_HOST}.local:${DEPLOY_PORT}/"
 echo "    Kiosk  : http://${SHORT_HOST}.local:${DEPLOY_PORT}/?display=1"

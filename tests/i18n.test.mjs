@@ -67,6 +67,14 @@ test('saved language accepts supported choices and safely falls back with blocke
     }),
     'en',
   )
+  assert.equal(
+    savedLanguage({
+      getItem(key) {
+        return key === 'stormtrooper.language' ? 'en' : null
+      },
+    }),
+    'en',
+  )
   assert.equal(savedLanguage({ getItem: () => 'fr' }), 'de')
   assert.equal(
     savedLanguage({

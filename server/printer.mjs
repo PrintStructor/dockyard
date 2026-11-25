@@ -37,7 +37,7 @@ import {
 } from './machine.mjs'
 import { validateShakeTuneImagePath, normalizeCalibrationData } from './calibration.mjs'
 import { normalizePresets } from './presets.mjs'
-import { printerUrl as printer } from './config.mjs'
+import { printerUrl as printer, printerName } from './config.mjs'
 
 const objects = [
   'toolchanger',
@@ -105,7 +105,7 @@ async function fetchGithubReleases(owner, repoName) {
     `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repoName)}/releases?per_page=15`,
     {
       headers: {
-        'User-Agent': 'stormtrooper-toolchanger-cockpit',
+        'User-Agent': 'dockyard-toolchanger-cockpit',
         Accept: 'application/vnd.github+json',
       },
       signal: AbortSignal.timeout(6000),
@@ -245,6 +245,7 @@ const readMaterials = createMaterialsReader(printer, fetch, () => live?.notify()
 
 function normalized(raw) {
   const data = normalizeStatus(raw)
+  data.printerName = printerName
   const materials = readMaterials(raw)
   data.tools.forEach((tool, id) => {
     tool.material = materials[id]

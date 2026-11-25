@@ -1,39 +1,40 @@
-# VORON 2.4 Toolchanger Cockpit (STORMTROOPER)
+![DOCKYARD — Live 3D Toolchanger Cockpit](docs/dockyard-github-hero-banner.png)
+
+# DOCKYARD — Live 3D Toolchanger Cockpit
 
 ![Vue 3](https://img.shields.io/badge/Vue-3.5-42b883?style=flat-square&logo=vue.js&logoColor=white)
 ![Three.js](https://img.shields.io/badge/Three.js-Live%203D%20CAD-c5f76b?style=flat-square&logo=threedotjs&logoColor=111)
 ![Node.js](https://img.shields.io/badge/Node.js-22%2B%20Zero--Dep%20Backend-339933?style=flat-square&logo=node.js&logoColor=white)
 ![Klipper](https://img.shields.io/badge/Klipper%20%2B%20Moonraker-6--Tool%20VORON%202.4-1f2937?style=flat-square)
 
-A custom **English / German** real-time 3D cockpit for a six-tool **VORON 2.4 Toolchanger** running Klipper, Moonraker and Mainsail. Built with **Vue 3 + Three.js** and a zero-dependency **Node.js 22+** backend — featuring real Fusion CAD geometry, live per-head LED sync, glowing thermal nozzle radiance, colored PTFE filament feeds, a volumetric 3D G-code viewer, CodeMirror 6 Klipper config editor and a 6×6 Nudge XY / Beacon Z calibration workbench.
+**DOCKYARD** is an **English / German** real-time 3D web cockpit built for six-tool **VORON 2.4 Toolchangers** running Klipper, Moonraker and Mainsail — designed for Desktop, iPad and 7" Klipper Touchscreens. Built with **Vue 3 + Three.js** and a zero-dependency **Node.js 22+** backend, featuring real Fusion CAD geometry, live per-head LED sync, glowing thermal nozzle radiance, colored PTFE filament feeds, a volumetric 3D G-code viewer, CodeMirror 6 Klipper config editor, and a 6×6 Nudge XY / Beacon Z calibration workbench.
 
-![VORON 2.4 6-Toolchanger Live 3D Tools Cockpit](docs/screenshots/tools-cockpit.png)
+> **App brand vs. your machine:** `DOCKYARD` is the cockpit application; your printer's name (e.g. `STORMTROOPER`) is configured via `PRINTER_NAME` in `.env.local` and rendered as a clean badge in the header.
 
-*Live 3D Tools Cockpit showing real LED states, OrcaSlicer filament colors, thermal nozzle radiance, calibrated ΔZ offsets, and the compact 1-tap Machine & LED deck.*
-
-This is an independent, printer-specific application, not a Mainsail fork or a universal toolchanger configuration. It does not install or replace your printer macros.
+This is an independent, toolchanger-focused application, not a Mainsail fork or a universal configuration generator. It does not install or replace your printer macros.
 
 ---
 
-## Showcase Video
+## Showcase Videos
 
 <table>
   <tr>
     <td width="340" align="center">
-      <a href="https://github.com/PrintStructor/voron-2.4-toolchanger-cockpit/releases/download/v1.0.0/stormtrooper-reel-tools-v3-logic.mp4">
-        <img src="docs/media/cockpit-showcase.gif" alt="VORON 2.4 Toolchanger Cockpit 3D Showcase Preview" width="300" />
+      <a href="https://github.com/PrintStructor/dockyard/releases/download/v1.0.0/dockyard-epic-launch-reel.mp4">
+        <img src="docs/media/cockpit-showcase.gif" alt="DOCKYARD 3D Toolchanger Cockpit Showcase Preview" width="300" />
       </a>
     </td>
     <td valign="middle">
-      <h3>6 Tools. One Live 3D View.</h3>
+      <h3>6 Tools. One Live 3D Cockpit.</h3>
       <p>
-        Watch the full <strong>1080×1920 · 60 fps HD showcase video</strong> featuring live Three.js CAD flybys, sequential LED &amp; colored PTFE filament wake-up, real-time 255 °C thermal nozzle glow, hardware match-cut, and Tools cockpit close-ups — scored in Logic Pro Creator Studio.
+        Watch the <strong>DOCKYARD Launch Reel (1080×1920 · 60 fps)</strong> and the <strong>Blender Cycles 3D Ecosystem Flythrough (1920×1080)</strong> showcasing live Three.js CAD flybys, sequential LED &amp; colored PTFE filament wake-up, real-time 255 °C thermal nozzle glow, volumetric multi-tool 3D G-code preview, and the full 6-toolhead VORON 2.4 setup.
       </p>
       <p>
-        ▶ <a href="https://github.com/PrintStructor/voron-2.4-toolchanger-cockpit/releases/download/v1.0.0/stormtrooper-reel-tools-v3-logic.mp4"><strong>Watch / Download Tools Hero Cut (26 s · 60 fps · Logic Pro Audio)</strong></a><br/>
-        ▶ <a href="https://github.com/PrintStructor/voron-2.4-toolchanger-cockpit/releases/download/v1.0.0/stormtrooper-reel-print3d-logic.mp4"><strong>Watch / Download Print &amp; 3D Preview Cut (24 s · 60 fps · Logic Pro Audio)</strong></a><br/>
-        ▶ <a href="https://github.com/PrintStructor/voron-2.4-toolchanger-cockpit/releases/download/v1.0.0/stormtrooper-reel-instagram-v2.mp4"><strong>Watch / Download Extended 6-Tab Walkthrough (34 s · 60 fps)</strong></a><br/>
-        📦 <a href="https://github.com/PrintStructor/voron-2.4-toolchanger-cockpit/releases/tag/v1.0.0"><strong>View Release v1.0.0 Assets</strong></a>
+        🚀 <a href="https://github.com/PrintStructor/dockyard/releases/download/v1.0.0/dockyard-epic-launch-reel.mp4"><strong>Watch / Download Official DOCKYARD Launch Reel (35 s · 60 fps · Custom Soundtrack)</strong></a><br/>
+        🎬 <a href="https://github.com/PrintStructor/dockyard/releases/download/v1.0.0/dockyard-blender-flythrough.mp4"><strong>Watch / Download Blender Cycles 3D Ecosystem Flythrough (1080p · iPad Pro + VORON 2.4)</strong></a><br/>
+        ▶ <a href="https://github.com/PrintStructor/dockyard/releases/download/v1.0.0/stormtrooper-reel-tools-v3-logic.mp4"><strong>Watch / Download Tools Hero Cut (26 s · 60 fps · Logic Pro Audio)</strong></a><br/>
+        ▶ <a href="https://github.com/PrintStructor/dockyard/releases/download/v1.0.0/stormtrooper-reel-print3d-logic.mp4"><strong>Watch / Download Print &amp; 3D Preview Cut (24 s · 60 fps · Logic Pro Audio)</strong></a><br/>
+        📦 <a href="https://github.com/PrintStructor/dockyard/releases/tag/v1.0.0"><strong>View All Release v1.0.0 Assets</strong></a>
       </p>
     </td>
   </tr>
@@ -47,31 +48,31 @@ This is an independent, printer-specific application, not a Mainsail fork or a u
   <tr>
     <td width="50%">
       <strong>Tools · Live 3D CAD, LEDs, Filament RGB &amp; 1-Tap Deck</strong><br/>
-      <img src="docs/screenshots/tools-cockpit.png" alt="Tools Cockpit" />
+      <img src="docs/screenshots/tools-cockpit.png" alt="DOCKYARD Tools Cockpit" />
     </td>
     <td width="50%">
       <strong>Controls · Motion, Presets, 10-Min Thermal Curves &amp; Fans</strong><br/>
-      <img src="docs/screenshots/controls-thermal.png" alt="Controls and Thermal Curves" />
+      <img src="docs/screenshots/controls-thermal.png" alt="DOCKYARD Controls and Thermal Curves" />
     </td>
   </tr>
   <tr>
     <td width="50%">
       <strong>Print · Volumetric 3D G-Code Viewer &amp; Layer Scrubber</strong><br/>
-      <img src="docs/screenshots/print-3d-gcode.png" alt="3D G-Code Print Viewer" />
+      <img src="docs/screenshots/print-3d-gcode.png" alt="DOCKYARD 3D G-Code Print Viewer" />
     </td>
     <td width="50%">
       <strong>History · Moonraker Lifetime Stats, Tool Filters &amp; Open in 3D</strong><br/>
-      <img src="docs/screenshots/history-analytics.png" alt="Print History Analytics" />
+      <img src="docs/screenshots/history-analytics.png" alt="DOCKYARD Print History Analytics" />
     </td>
   </tr>
   <tr>
     <td width="50%">
       <strong>System · CodeMirror 6 Klipper Config Editor &amp; Auto-Backups</strong><br/>
-      <img src="docs/screenshots/system-config.png" alt="CodeMirror 6 Klipper Config Editor" />
+      <img src="docs/screenshots/system-config.png" alt="DOCKYARD CodeMirror 6 Klipper Config Editor" />
     </td>
     <td width="50%">
       <strong>System · 6×6 Nudge XY / Beacon Z Matrix &amp; Thermal Expansion</strong><br/>
-      <img src="docs/screenshots/system-calibration.png" alt="6x6 Calibration Matrix" />
+      <img src="docs/screenshots/system-calibration.png" alt="DOCKYARD 6x6 Calibration Matrix" />
     </td>
   </tr>
 </table>
@@ -91,7 +92,7 @@ This is an independent, printer-specific application, not a Mainsail fork or a u
 - **Volumetric 3D G-Code Print Viewer:** Dedicated **Print** tab rendering multi-tool G-code on a 350 × 350 mm VORON build plate with per-tool OrcaSlicer filament/tool coloring, support toggle, interactive layer scrubber (solid-vs-ghost remaining preview and live layer tracking during prints), print metadata and tool weight breakdown.
 - **Print History Analytics:** Dedicated **History** tab showing Moonraker lifetime totals, searchable/filterable job history (by status, filename, single tool `T0–T5` or multi-tool prints), job detail inspector and one-click **Open in 3D** jump directly into the 3D Print viewer.
 - **System & Machine Workbench:** Host overview, **CodeMirror 6** Klipper configuration editor with custom Klipper/Jinja2 syntax highlighting, diff review, auto-backups and guarded restart, **6×6 Calibration Matrix** (`Nudge XY` ring closure, `Beacon Z` probing, thermal nozzle expansion & ShakeTune charts), plus service/update/log maintenance.
-- **Real-Time Console & DE/EN UI:** Live console via Moonraker WebSocket `notify_gcode_response` with persistent command history across tabs/reloads, plus instant DE/EN language switching in the header.
+- **Real-Time Console, Display/Kiosk Mode & DE/EN UI:** Live console via Moonraker WebSocket `notify_gcode_response` with persistent command history across tabs/reloads, 1-click Display/Touchscreen mode (`?display=1`), configurable `PRINTER_NAME` header badge, and instant DE/EN switching.
 
 ---
 
@@ -100,13 +101,13 @@ This is an independent, printer-specific application, not a Mainsail fork or a u
 Requires **Node.js 22.12 or newer** and npm. The backend uses native WebSocket, fetch and environment-file support; Node 18 is not supported.
 
 ```sh
-git clone https://github.com/PrintStructor/voron-2.4-toolchanger-cockpit.git
-cd voron-2.4-toolchanger-cockpit
+git clone https://github.com/PrintStructor/dockyard.git
+cd dockyard
 npm ci
 cp .env.example .env.local
 ```
 
-Edit `.env.local` to point to your printer's **Mainsail nginx origin** (port 80), which exposes Moonraker API routes, `/websocket`, and `/webcam` / `/webcam2`. Set `VITE_MAINSAIL_URL` to the Mainsail URL reachable by your browser (or `auto` when hosted directly on the printer). The example points to loopback; replace it when running on another machine. `.env.local` stays out of Git.
+Edit `.env.local` to point to your printer's **Mainsail nginx origin** (port 80), which exposes Moonraker API routes, `/websocket`, and `/webcam` / `/webcam2`. Optionally set `PRINTER_NAME` to display your machine's name as a badge next to `DOCKYARD` (leave empty to hide). Set `VITE_MAINSAIL_URL` to the Mainsail URL reachable by your browser (or `auto` when hosted directly on the printer). `.env.local` stays out of Git.
 
 ```sh
 npm run dev
@@ -126,7 +127,7 @@ npm start
 
 ## Hosting on a printer / LAN host
 
-To run the cockpit directly on your printer host (e.g. Raspberry Pi 4 with Node.js >= 22.12):
+To run DOCKYARD directly on your printer host (e.g. Raspberry Pi 4 with Node.js >= 22.12):
 
 ### Option A — 1-command deploy over SSH (isolated Node 22 + user-level systemd)
 
@@ -134,7 +135,7 @@ To run the cockpit directly on your printer host (e.g. Raspberry Pi 4 with Node.
 ./scripts/deploy-pi.sh printer.local
 ```
 
-This runs `npm test` and `VITE_MAINSAIL_URL=auto npm run build` locally, installs an isolated SHA256-verified Node.js 22 LTS runtime into `~/.local/node22` on the host (leaving system `/usr/bin/node` untouched), syncs only runtime files (`dist/`, `server/`, `src/`, `package.json`), generates a host-local `.env.local` with detected LAN origins, and manages [deploy/stormtrooper-cockpit.user.service.example](deploy/stormtrooper-cockpit.user.service.example) under `~/.config/systemd/user/stormtrooper-cockpit.service`. Existing printer services (Klipper, Moonraker, HelixScreen, Mainsail, Crowsnest) are never modified. For 24/7 operation across SSH exits and reboots, enable systemd user linger once on the host:
+This runs `npm test` and `VITE_MAINSAIL_URL=auto npm run build` locally, installs an isolated SHA256-verified Node.js 22 LTS runtime into `~/.local/node22` on the host (leaving system `/usr/bin/node` untouched), syncs only runtime files (`dist/`, `server/`, `src/`, `package.json`), generates a host-local `.env.local` with detected LAN origins and `PRINTER_NAME`, and manages [deploy/dockyard.user.service.example](deploy/dockyard.user.service.example) under `~/.config/systemd/user/dockyard.service`. Existing printer services (Klipper, Moonraker, HelixScreen, Mainsail, Crowsnest) are never modified. For 24/7 operation across SSH exits and reboots, enable systemd user linger once on the host:
 
 ```sh
 sudo loginctl enable-linger "$USER"
@@ -143,8 +144,8 @@ sudo loginctl enable-linger "$USER"
 ### Option B — Manual / system-wide systemd service
 
 1. Build the frontend once (`npm ci && VITE_MAINSAIL_URL=auto npm run build`).
-2. Configure `HOST=0.0.0.0` (or `HOST=::` for dual-stack IPv4/IPv6), `PORT=4173`, `PRINTER_URL=http://127.0.0.1` and explicit trusted LAN origins in `ALLOWED_ORIGINS` (e.g. `ALLOWED_ORIGINS=http://printer.local:4173`).
-3. Start via `npm start` or adapt the example systemd unit in [deploy/stormtrooper-cockpit.service.example](deploy/stormtrooper-cockpit.service.example).
+2. Configure `HOST=0.0.0.0` (or `HOST=::` for dual-stack IPv4/IPv6), `PORT=4173`, `PRINTER_URL=http://127.0.0.1`, `PRINTER_NAME=STORMTROOPER`, and explicit trusted LAN origins in `ALLOWED_ORIGINS` (e.g. `ALLOWED_ORIGINS=http://printer.local:4173`).
+3. Start via `npm start` or adapt the example systemd unit in [deploy/dockyard.service.example](deploy/dockyard.service.example).
 
 The backend checks exact request origins against loopback and `ALLOWED_ORIGINS`, plus `X-Cockpit-Request: 1` and JSON content-type. It has no remote authentication layer: keep it on a trusted local network rather than exposing it to the internet.
 
@@ -174,7 +175,7 @@ The local backend serializes actions over Moonraker's WebSocket JSON-RPC API and
 
 The model is based on the owner's Fusion assembly, **VORON 2.4 Toolchanger 6 Head**. It includes older docks without KNOMI and an older rear shuttle. The 3D scene is a CAD reference, not a live simulation of carriage positions. Mesh provenance and optimization details are in `public/models/provenance.json`.
 
-Export helpers are in `scripts/`. Set `STORMTROOPER_EXPORT_ROOT` before running the Fusion scripts against the expected document. The optimization script consumes an explicit raw-export directory.
+Export helpers are in `scripts/`. Set `DOCKYARD_EXPORT_ROOT` before running the Fusion scripts against the expected document. The optimization script consumes an explicit raw-export directory.
 
 See [NOTICE.md](NOTICE.md) for sources and dependency attribution. No blanket license for upstream designs, logos or CAD components is implied by this repository.
 
@@ -182,4 +183,4 @@ See [NOTICE.md](NOTICE.md) for sources and dependency attribution. No blanket li
 
 ## Deutsch
 
-DE/EN lässt sich oben umschalten und bleibt im Browser gespeichert. Das Cockpit ist für einen konkreten VORON 2.4 mit sechs Tools ausgelegt; Makronamen, Sensoren und Bewegungsgrenzen müssen zum eigenen Drucker passen. Die Installation steht oben. Druckeradresse ausschließlich in `.env.local` eintragen. `npm run dev` startet die lokale Entwicklungsoberfläche, `npm run build && npm start` den eigenständigen Produktionsserver ohne Vite (`deploy/stormtrooper-cockpit.service.example` für systemd). GitHub Pages ersetzt den benötigten Backend-Dienst nicht.
+DE/EN lässt sich oben umschalten und bleibt im Browser gespeichert. **DOCKYARD** ist das Live-3D-Toolchanger-Cockpit für einen 6-Tool-VORON 2.4; dein individueller Druckername (z. B. `STORMTROOPER`) lässt sich über `PRINTER_NAME` in `.env.local` als Badge konfigurieren. Makronamen, Sensoren und Bewegungsgrenzen müssen zum eigenen Drucker passen. Die Installation steht oben. Druckeradresse ausschließlich in `.env.local` eintragen. `npm run dev` startet die lokale Entwicklungsoberfläche, `npm run build && npm start` den eigenständigen Produktionsserver ohne Vite (`deploy/dockyard.service.example` für systemd). GitHub Pages ersetzt den benötigten Backend-Dienst nicht.

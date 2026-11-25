@@ -53,6 +53,10 @@ test('URL overrides saved localStorage preferences and falls back safely when st
   assert.equal(overrideOff.displayMode, false)
   assert.equal(overrideOff.showCameras, true)
 
+  const legacyStorage = memoryStorage({ 'stormtrooper.displayMode': '1', 'stormtrooper.camerasHidden': '1' })
+  assert.equal(resolveDisplaySettings({ search: '', storage: legacyStorage }).displayMode, true)
+  assert.equal(resolveDisplaySettings({ search: '', storage: legacyStorage }).showCameras, false)
+
   const brokenStorage = {
     getItem() {
       throw new Error('blocked')

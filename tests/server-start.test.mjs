@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { parseAllowedOrigins } from '../server/config.mjs'
+import { parseAllowedOrigins, resolvePrinterName } from '../server/config.mjs'
 import { resolveStaticPath, createProductionServer } from '../server/start.mjs'
 import { resolveMainsailUrl } from '../src/printer-ui-url.mjs'
 import { normalizePresets } from '../server/presets.mjs'
@@ -81,8 +81,15 @@ test('parseAllowedOrigins validates strict HTTP(S) origins without paths or cred
   }
 })
 
+test('resolvePrinterName separates configurable printer badge from DOCKYARD brand', () => {
+  assert.equal(resolvePrinterName({}), 'STORMTROOPER')
+  assert.equal(resolvePrinterName({ PRINTER_NAME: '  VORON-LAB  ' }), 'VORON-LAB')
+  assert.equal(resolvePrinterName({ PRINTER_NAME: '' }), '')
+  assert.equal(resolvePrinterName({ VITE_PRINTER_NAME: 'ATLAS' }), 'ATLAS')
+})
+
 test('resolveStaticPath blocks directory traversal outside dist root', () => {
-  const root = '/tmp/stormtrooper-dist'
+  const root = '/tmp/dockyard-dist'
   assert.equal(resolveStaticPath('/', root), path.join(root, 'index.html'))
   assert.equal(resolveStaticPath('/assets/app.js', root), path.join(root, 'assets/app.js'))
   assert.equal(resolveStaticPath('/../.env.local', root), null)
@@ -90,7 +97,7 @@ test('resolveStaticPath blocks directory traversal outside dist root', () => {
 })
 
 test('standalone production server serves static files, API routes, and disables requestTimeout', async () => {
-  const dir = await mkdtemp(path.join(tmpdir(), 'stormtrooper-dist-'))
+  const dir = await mkdtemp(path.join(tmpdir(), 'dockyard-dist-'))
   await mkdir(path.join(dir, 'assets'))
   await writeFile(path.join(dir, 'index.html'), '<!doctype html><html><body>OK</body></html>')
   await writeFile(path.join(dir, 'assets', 'main.js'), 'console.log("ok")')

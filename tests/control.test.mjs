@@ -139,9 +139,14 @@ test('mock transport: serializes commands over WS, allows direct stop, keeps amb
     throw new Error('Unexpected HTTP POST for G-code')
   })
 
+  const waitFor = async (predicate, ms = 500) => {
+    const deadline = Date.now() + ms
+    while (!predicate() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5))
+  }
+
   // Start homing via WS RPC and verify concurrent request is blocked
   const first = control({ action: 'home', axis: 'all' }, { WebSocketImpl: MockWebSocket })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await waitFor(() => wsSent.length >= 1)
   await assert.rejects(control({ action: 'home', axis: 'all' }, { WebSocketImpl: MockWebSocket }), /läuft noch/)
 
   // Resolve WS script cleanly
@@ -153,7 +158,7 @@ test('mock transport: serializes commands over WS, allows direct stop, keeps amb
 
   // Direct emergency stop aborts an active WS job immediately
   const second = control({ action: 'home', axis: 'all' }, { WebSocketImpl: MockWebSocket })
-  await new Promise(resolve => setTimeout(resolve, 10))
+  await waitFor(() => wsSent.length >= 2)
   await control({ action: 'emergency_stop' })
   assert.equal(httpSent[0].url.endsWith('/printer/emergency_stop'), true)
   await assert.rejects(second, /Not-Aus/)
@@ -241,7 +246,7 @@ test('all-tools heating sets exactly six tools, leaves bed alone, and respects e
 test('move_to validates homed axis, travel bounds, and preserves coordinate mode in absolute G1 moves', () => {
   const raw = state()
   const moveX = commandFor({ action: 'move_to', axis: 'x', target: 175.5 }, raw)
-  assert.match(moveX.body.script, /^SAVE_GCODE_STATE NAME=STORMTROOPER_UI_MOVE\nG90\nG1 X175\.5 F3000\nM400\nRESTORE_GCODE_STATE/)
+  assert.match(moveX.body.script, /^SAVE_GCODE_STATE NAME=DOCKYARD_UI_MOVE\nG90\nG1 X175\.5 F3000\nM400\nRESTORE_GCODE_STATE/)
   assert.equal(moveX.label, 'X auf 175.5 mm')
 
   const moveZ = commandFor({ action: 'move_to', axis: 'z', target: 50 }, raw)

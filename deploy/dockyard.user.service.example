@@ -1,0 +1,27 @@
+# User-level systemd service for hosting DOCKYARD on a printer host (Node.js >= 22.12).
+# Keeps the service isolated from system packages and untouched by root services (e.g. HelixScreen).
+#
+# Install to:
+#   ~/.config/systemd/user/dockyard.service
+# Put private runtime config (HOST, PORT, PRINTER_URL, PRINTER_NAME, ALLOWED_ORIGINS) into:
+#   ~/dockyard/.env.local
+# Enable & start:
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now dockyard
+# Keep running after SSH logout and across reboots (one-time, requires sudo):
+#   sudo loginctl enable-linger "$USER"
+
+[Unit]
+Description=DOCKYARD — Live 3D Toolchanger Cockpit
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dockyard
+Environment=NODE_ENV=production
+EnvironmentFile=-%h/dockyard/.env.local
+ExecStart=%h/.local/node22/bin/node %h/dockyard/server/start.mjs
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

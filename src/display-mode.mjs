@@ -1,7 +1,9 @@
 import { computed, ref } from 'vue'
 
-export const DISPLAY_MODE_KEY = 'stormtrooper.displayMode'
-export const CAMERAS_HIDDEN_KEY = 'stormtrooper.camerasHidden'
+export const DISPLAY_MODE_KEY = 'dockyard.displayMode'
+export const CAMERAS_HIDDEN_KEY = 'dockyard.camerasHidden'
+const LEGACY_DISPLAY_MODE_KEY = 'stormtrooper.displayMode'
+const LEGACY_CAMERAS_HIDDEN_KEY = 'stormtrooper.camerasHidden'
 
 function parseBoolParam(raw) {
   if (raw == null) return null
@@ -20,9 +22,11 @@ function safeStorage(storage) {
   }
 }
 
-function readFlag(storage, key) {
+function readFlag(storage, key, legacyKey) {
   try {
-    return storage?.getItem(key) === '1'
+    const value = storage?.getItem(key)
+    if (value != null) return value === '1'
+    return legacyKey ? storage?.getItem(legacyKey) === '1' : false
   } catch {
     return false
   }
@@ -43,8 +47,8 @@ export function resolveDisplaySettings({ search = '', storage } = {}) {
   const urlCamerasParam = parseBoolParam(params.get('cameras'))
   const urlCamerasHidden = urlCamerasParam === null ? null : !urlCamerasParam
 
-  const savedDisplay = readFlag(store, DISPLAY_MODE_KEY)
-  const savedCamerasHidden = readFlag(store, CAMERAS_HIDDEN_KEY)
+  const savedDisplay = readFlag(store, DISPLAY_MODE_KEY, LEGACY_DISPLAY_MODE_KEY)
+  const savedCamerasHidden = readFlag(store, CAMERAS_HIDDEN_KEY, LEGACY_CAMERAS_HIDDEN_KEY)
 
   const displayMode = urlDisplay ?? savedDisplay
   const camerasHidden = urlCamerasHidden ?? (displayMode ? true : savedCamerasHidden)

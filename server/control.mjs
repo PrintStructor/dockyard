@@ -211,7 +211,7 @@ export function commandFor(input, raw) {
     }
     const axis = input.axis.toUpperCase()
     const feed = input.axis === 'z' ? 300 : 1800
-    script = `SAVE_GCODE_STATE NAME=STORMTROOPER_UI_JOG\nG91\nG1 ${axis}${input.distance} F${feed}\nM400\nRESTORE_GCODE_STATE NAME=STORMTROOPER_UI_JOG MOVE=0`
+    script = `SAVE_GCODE_STATE NAME=DOCKYARD_UI_JOG\nG91\nG1 ${axis}${input.distance} F${feed}\nM400\nRESTORE_GCODE_STATE NAME=DOCKYARD_UI_JOG MOVE=0`
     label = `${axis} ${input.distance > 0 ? '+' : ''}${input.distance} mm`
   } else if (action === 'move_to') {
     if (!['x', 'y', 'z'].includes(input.axis) || !finite(input.target)) {
@@ -231,7 +231,7 @@ export function commandFor(input, raw) {
     }
     const axis = input.axis.toUpperCase()
     const feed = input.axis === 'z' ? 600 : 3000
-    script = `SAVE_GCODE_STATE NAME=STORMTROOPER_UI_MOVE\nG90\nG1 ${axis}${target} F${feed}\nM400\nRESTORE_GCODE_STATE NAME=STORMTROOPER_UI_MOVE MOVE=0`
+    script = `SAVE_GCODE_STATE NAME=DOCKYARD_UI_MOVE\nG90\nG1 ${axis}${target} F${feed}\nM400\nRESTORE_GCODE_STATE NAME=DOCKYARD_UI_MOVE MOVE=0`
     label = `${axis} auf ${target} mm`
   } else if (action === 'temperature') {
     if (

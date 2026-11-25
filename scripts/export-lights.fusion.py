@@ -1,7 +1,7 @@
 import adsk.core,adsk.fusion,json,re,ast,os
 # Set to the workspace containing work/ before running inside Fusion.
-BASE=os.environ.get('STORMTROOPER_EXPORT_ROOT')
-if not BASE: raise RuntimeError('Set STORMTROOPER_EXPORT_ROOT before exporting CAD')
+BASE=os.environ.get('DOCKYARD_EXPORT_ROOT') or os.environ.get('STORMTROOPER_EXPORT_ROOT')
+if not BASE: raise RuntimeError('Set DOCKYARD_EXPORT_ROOT before exporting CAD')
 def run(_context: str):
     app=adsk.core.Application.get()
     doc=next(d for d in app.documents if d.name=='VORON 2.4 Toolchanger 6 Head')

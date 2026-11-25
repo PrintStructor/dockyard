@@ -191,4 +191,5 @@ const highlightStyle = HighlightStyle.define([
   { tag: t.punctuation, color: '#7d9199' },
 ])
 
-export const stormtrooperEditorTheme = [editorBaseTheme, syntaxHighlighting(highlightStyle)]
+export const dockyardEditorTheme = [editorBaseTheme, syntaxHighlighting(highlightStyle)]
+export const stormtrooperEditorTheme = dockyardEditorTheme

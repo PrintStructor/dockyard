@@ -805,6 +805,12 @@ input::placeholder{color:var(--muted);opacity:1}
 }
 
 /* 3D Showcase & touch target refinements */
+.brand-title{display:inline-flex;align-items:center;gap:8px;line-height:1.1}
+.brand-printer-pill{display:inline-flex;align-items:center;padding:2px 7px;border-radius:5px;border:1px solid var(--lime-line);background:var(--lime-tint);color:var(--lime);font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;line-height:1.25}
+@media(max-width:560px){
+  .brand-title{gap:6px}
+  .brand-printer-pill{font-size:9px;padding:1px 5px}
+}
 .scene-toolbar-left{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
 .scene-presets button{padding:7px 10px}
 .layer-tool-changes{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}

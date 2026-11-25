@@ -1,6 +1,7 @@
 {
-  "name": "stormtrooper-toolchanger-cockpit",
-  "version": "0.1.0",
+  "name": "dockyard",
+  "version": "1.0.0",
+  "description": "DOCKYARD — Live 3D Toolchanger Cockpit for 6-Tool VORON 2.4 on Klipper & Mainsail",
   "private": true,
   "type": "module",
   "scripts": {

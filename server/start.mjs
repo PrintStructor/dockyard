@@ -3,7 +3,7 @@ import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { printerMiddleware, closeLiveFeed } from './printer.mjs'
-import { serverHost, serverPort, printerUrl, allowedOrigins } from './config.mjs'
+import { serverHost, serverPort, printerUrl, printerName, allowedOrigins } from './config.mjs'
 
 const distRoot = path.resolve(fileURLToPath(new URL('../dist', import.meta.url)))
 
@@ -122,7 +122,8 @@ if (isEntrypoint) {
 
   server.listen(serverPort, serverHost, () => {
     const displayHost = serverHost.includes(':') && !serverHost.startsWith('[') ? `[${serverHost}]` : serverHost
-    console.log(`STORMTROOPER cockpit listening on http://${displayHost}:${serverPort}/`)
+    const nameSuffix = printerName ? ` (${printerName})` : ''
+    console.log(`DOCKYARD${nameSuffix} listening on http://${displayHost}:${serverPort}/`)
     console.log(`Printer origin: ${printerUrl}`)
     if (allowedOrigins.length) console.log(`Trusted origins: ${allowedOrigins.join(', ')}`)
   })

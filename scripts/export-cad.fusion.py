@@ -1,7 +1,7 @@
 import adsk.core, adsk.fusion, json, struct, array, os, re, time
 # Set to the workspace containing work/ before running inside Fusion.
-BASE=os.environ.get('STORMTROOPER_EXPORT_ROOT')
-if not BASE: raise RuntimeError('Set STORMTROOPER_EXPORT_ROOT before exporting CAD')
+BASE=os.environ.get('DOCKYARD_EXPORT_ROOT') or os.environ.get('STORMTROOPER_EXPORT_ROOT')
+if not BASE: raise RuntimeError('Set DOCKYARD_EXPORT_ROOT before exporting CAD')
 # Export raw meshes outside the live application; optimize them before replacement.
 OUT=BASE+'/work/cad-export'
 

@@ -1,12 +1,15 @@
 import { ref } from 'vue'
 
-export const historyStorageKey = 'stormtrooper.consoleHistory'
+export const historyStorageKey = 'dockyard.consoleHistory'
+const legacyHistoryStorageKey = 'stormtrooper.consoleHistory'
 const MAX_ENTRIES = 200
 const MAX_HISTORY = 50
 
 function readStoredHistory() {
   try {
-    const raw = globalThis.localStorage?.getItem(historyStorageKey)
+    const raw =
+      globalThis.localStorage?.getItem(historyStorageKey) ??
+      globalThis.localStorage?.getItem(legacyHistoryStorageKey)
     if (!raw) return []
     const parsed = JSON.parse(raw)
     return Array.isArray(parsed)

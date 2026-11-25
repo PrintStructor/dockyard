@@ -1,11 +1,13 @@
 import { computed, ref } from 'vue'
 import en from './locales/en.json' with { type: 'json' }
 
-export const storageKey = 'stormtrooper.language'
+export const storageKey = 'dockyard.language'
+const legacyStorageKey = 'stormtrooper.language'
 
 export function savedLanguage(storage) {
   try {
-    return storage?.getItem(storageKey) === 'en' ? 'en' : 'de'
+    const raw = storage?.getItem(storageKey) ?? storage?.getItem(legacyStorageKey)
+    return raw === 'en' ? 'en' : 'de'
   } catch {
     return 'de'
   }
@@ -21,11 +23,14 @@ const storage = () => {
 
 export const language = ref(savedLanguage(storage()))
 export const locale = computed(() => (language.value === 'en' ? 'en-GB' : 'de-DE'))
+let currentPrinterName = ''
 
-function applyDocumentLanguage(value) {
+export function setDocumentTitle(value = language.value, printerName = currentPrinterName) {
+  currentPrinterName = typeof printerName === 'string' ? printerName.trim() : ''
   if (typeof document === 'undefined') return
   document.documentElement.lang = value
-  document.title = value === 'en' ? 'STORMTROOPER · Toolchanger cockpit' : 'STORMTROOPER · Toolchanger-Cockpit'
+  const suffix = value === 'en' ? 'Toolchanger cockpit' : 'Toolchanger-Cockpit'
+  document.title = currentPrinterName ? `DOCKYARD · ${currentPrinterName} — ${suffix}` : `DOCKYARD · ${suffix}`
 }
 
 export function setLanguage(value) {
@@ -36,10 +41,10 @@ export function setLanguage(value) {
   } catch {
     // Language still works with blocked storage.
   }
-  applyDocumentLanguage(value)
+  setDocumentTitle(value)
 }
 
-applyDocumentLanguage(language.value)
+setDocumentTitle(language.value)
 
 const escapeRegex = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 

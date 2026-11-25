@@ -35,8 +35,15 @@ export function resolvePrinterName(env = process.env) {
   return 'STORMTROOPER'
 }
 
-export const printerUrl = parseHttpOrigin(process.env.PRINTER_URL || 'http://127.0.0.1', 'PRINTER_URL')
+export function resolveAllowLanOrigins(env = process.env) {
+  const raw = env?.ALLOW_LAN_ORIGINS
+  if (raw == null) return false
+  return ['1', 'true', 'yes', 'on'].includes(String(raw).trim().toLowerCase())
+}
+
+export const printerUrl = parseHttpOrigin(process.env.PRINTER_URL || 'http://127.0.0.1', 'PRINTER_URL', true)
 export const printerName = resolvePrinterName()
+export const mainsailUrlEnv = String(process.env.MAINSAIL_URL ?? process.env.VITE_MAINSAIL_URL ?? 'auto').trim() || 'auto'
 export const serverHost = (process.env.HOST || '127.0.0.1').trim() || '127.0.0.1'
 
 const parsedPort = Number(process.env.PORT || 4173)
@@ -45,3 +52,7 @@ if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
 }
 export const serverPort = parsedPort
 export const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGINS)
+export const allowLanOriginsEnv = resolveAllowLanOrigins()
+export const settingsFilePath =
+  (process.env.DOCKYARD_SETTINGS_PATH || '').trim() ||
+  fileURLToPath(new URL('../.dockyard-settings.json', import.meta.url))

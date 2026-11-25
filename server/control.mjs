@@ -13,7 +13,7 @@ import {
   calibrationCommand,
 } from './calibration.mjs'
 import { canHomeBeforeInitialization } from './status.mjs'
-import { allowedOrigins } from './config.mjs'
+import { getEffectiveAllowedOrigins, isLanOriginAllowed, isPrivateLanHostname } from './settings.mjs'
 
 export class ControlError extends Error {
   constructor(message, status = 400) {
@@ -273,20 +273,39 @@ export function commandFor(input, raw) {
   }
 }
 
-export function sameOriginRequest(req, extraAllowedOrigins = allowedOrigins) {
+export function isOriginWriteAllowed(req, extraAllowedOrigins, options) {
   try {
-    const origin = new URL(req.headers.origin)
+    const rawOrigin = req?.headers?.origin
+    const rawHost = req?.headers?.host
+    if (!rawOrigin || !rawHost) return false
+    const origin = new URL(rawOrigin)
+    if (origin.protocol !== 'http:' && origin.protocol !== 'https:') return false
+    if (origin.host !== rawHost) return false
+
+    const effectiveAllowed =
+      extraAllowedOrigins !== undefined ? extraAllowedOrigins : getEffectiveAllowedOrigins()
+    const allowLan =
+      options?.allowLanOrigins !== undefined
+        ? Boolean(options.allowLanOrigins)
+        : extraAllowedOrigins !== undefined
+          ? false
+          : isLanOriginAllowed()
+
     const isLoopback =
       ['127.0.0.1', 'localhost', '[::1]'].includes(origin.hostname) && origin.protocol === 'http:'
-    const isExplicitlyAllowed = Array.isArray(extraAllowedOrigins) && extraAllowedOrigins.includes(origin.origin)
-    const originAllowed = isLoopback || isExplicitlyAllowed
-    return (
-      originAllowed &&
-      origin.host === req.headers.host &&
-      req.headers['x-cockpit-request'] === '1' &&
-      req.headers['content-type']?.split(';')[0] === 'application/json'
-    )
+    const isExplicitlyAllowed = Array.isArray(effectiveAllowed) && effectiveAllowed.includes(origin.origin)
+    const isAllowedLan = allowLan && isPrivateLanHostname(origin.hostname)
+
+    return isLoopback || isExplicitlyAllowed || isAllowedLan
   } catch {
     return false
   }
+}
+
+export function sameOriginRequest(req, extraAllowedOrigins, options) {
+  return (
+    isOriginWriteAllowed(req, extraAllowedOrigins, options) &&
+    req.headers['x-cockpit-request'] === '1' &&
+    req.headers['content-type']?.split(';')[0] === 'application/json'
+  )
 }

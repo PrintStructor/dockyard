@@ -8,10 +8,20 @@ const props = defineProps({
   id: String,
   name: String,
   description: String,
+  service: { type: String, default: 'camera-streamer' },
+  preferredMode: { type: String, default: 'webrtc' },
 })
 
 const cameras = useCameras()
 const camera = cameras.getCamera(props.id)
+
+watch(
+  () => [props.service, props.preferredMode],
+  ([service, preferredMode]) => {
+    cameras.configureCamera(props.id, { service, preferredMode })
+  },
+  { immediate: true },
+)
 
 const expanded = ref(false)
 const dialog = ref(null)
@@ -82,10 +92,11 @@ onBeforeUnmount(() => {
       <div>
         <Camera :size="17" />
         <h3>{{ t(name) }}</h3>
-        <span>{{ t(description) }}</span>
+        <span v-if="description">{{ t(description) }}</span>
       </div>
       <div class="camera-controls">
         <button
+          v-if="props.service !== 'mjpeg'"
           class="camera-mode-toggle"
           type="button"
           :title="

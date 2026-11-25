@@ -14,6 +14,7 @@ const props = defineProps({
   selected: Number,
   send: Function,
   showCameras: { type: Boolean, default: true },
+  cameras: { type: Array, default: () => [] },
 })
 
 const emit = defineEmits(['command', 'select', 'refresh', 'context'])
@@ -632,8 +633,15 @@ watch(motion, allowed => {
     </div>
 
     <aside v-if="showCameras" class="control-cameras" :aria-label="t('Livekameras während der Bedienung')">
-      <CameraView id="tophat" name="Tophat" description="Bauraum" />
-      <CameraView id="heatbed" name="Druckbett" description="Druckfläche" />
+      <CameraView
+        v-for="cam in cameras"
+        :key="cam.id"
+        :id="cam.id"
+        :name="cam.name"
+        :description="cam.description"
+        :service="cam.service"
+        :preferred-mode="cam.preferredMode"
+      />
       <FanControl :status="status" :online="online" :pending="pending" :send="send" />
     </aside>
   </section>

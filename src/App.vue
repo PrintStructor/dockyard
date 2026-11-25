@@ -8,6 +8,7 @@ import {
   ArrowUpRight,
   Check,
   AlertTriangle,
+  ChevronDown,
   ChevronRight,
   Wifi,
   WifiOff,
@@ -22,10 +23,11 @@ import {
   Monitor,
   RotateCw,
   Power,
+  Settings,
   X,
 } from '@lucide/vue'
 import { t, locale, language, setLanguage, setDocumentTitle } from './i18n.mjs'
-import { displayMode, showCameras, toggleDisplayMode, sanitizeTabForCameras } from './display-mode.mjs'
+import { displayMode, showCameras, defaultTab, toggleDisplayMode, sanitizeTabForCameras } from './display-mode.mjs'
 import ControlsView from './components/ControlsView.vue'
 import ConsoleView from './components/ConsoleView.vue'
 import LedControls from './components/LedControls.vue'
@@ -35,10 +37,13 @@ import ThermalGauge from './components/ThermalGauge.vue'
 import CameraView from './components/CameraView.vue'
 import CockpitSelect from './components/CockpitSelect.vue'
 import LivePrintTuning from './components/LivePrintTuning.vue'
+import SettingsDialog from './components/SettingsDialog.vue'
 import { useControls } from './useControls.js'
 import { usePrinter } from './usePrinter.js'
 import { useConsole } from './useConsole.js'
 import { useConfigEditor } from './useConfigEditor.js'
+import { useSettings } from './useSettings.js'
+import { useCameras } from './useCameras.js'
 import { auxActionReason } from './aux-action-state.mjs'
 import { toolActionReason, filamentToolIds, mountedToolId, maintenanceRestriction } from './tool-action-state.mjs'
 import { resolveMainsailUrl } from './printer-ui-url.mjs'
@@ -55,16 +60,136 @@ const languageOptions = [
 ]
 
 const consoleStore = useConsole()
+const configEditor = useConfigEditor()
+const settingsStore = useSettings()
+const camerasStore = useCameras()
 const lastUpdateEvent = ref(null)
-const { status, connection, error, updating, refresh } = usePrinter({
+const printerSwitchKey = ref(0)
+const settingsOpen = ref(false)
+const settingsInitialSection = ref('printers')
+const printerPopoverOpen = ref(false)
+const switcherRoot = ref(null)
+const popoverDirtyConfirm = ref(null)
+const popoverError = ref('')
+
+let lastAppliedTarget = { id: '', url: '', camerasJson: '' }
+
+function syncCamerasFromActive(active) {
+  const list = Array.isArray(active?.cameras) ? active.cameras : []
+  for (const cam of list) {
+    camerasStore.configureCamera(cam.id, {
+      service: cam.service,
+      preferredMode: cam.preferredMode,
+    })
+  }
+}
+
+const { status, connection, error, updating, refresh, resetForPrinterSwitch } = usePrinter({
   onConsole: entry => consoleStore.pushEntry(entry),
   onUpdate: payload => {
     lastUpdateEvent.value = { ...payload, _seq: Date.now() + Math.random() }
+  },
+  onSettings: payload => {
+    applySettingsTransition(payload, { isFromSse: true })
   },
   onReconnect: () => {
     if (consoleStore.loaded.value) consoleStore.refresh()
   },
 })
+
+function applySettingsTransition(payload, { isFromSse = false } = {}) {
+  if (!payload || typeof payload !== 'object') return
+  settingsStore.applyRemoteSettings(payload)
+  const active = settingsStore.activePrinter.value
+  const nextId = active?.id || payload.activePrinterId || ''
+  const nextUrl = active?.url || ''
+  const nextCamerasJson = JSON.stringify(active?.cameras ?? [])
+
+  const hasBaseline = Boolean(lastAppliedTarget.id || lastAppliedTarget.url)
+  const targetChanged =
+    hasBaseline && (lastAppliedTarget.id !== nextId || lastAppliedTarget.url !== nextUrl)
+  const camerasChanged = hasBaseline && !targetChanged && lastAppliedTarget.camerasJson !== nextCamerasJson
+
+  lastAppliedTarget = { id: nextId, url: nextUrl, camerasJson: nextCamerasJson }
+  syncCamerasFromActive(active)
+
+  if (targetChanged) {
+    requestedPrintFile.value = ''
+    lastUpdateEvent.value = null
+    printerSwitchKey.value++
+    resetForPrinterSwitch()
+    consoleStore.clear()
+    const editorRes = configEditor.handlePrinterSwitch(nextId, active?.name || nextId)
+    if (tab.value === 'system' && systemSubtab.value === 'config' && editorRes.reloadList) {
+      configEditor.loadFileList()
+    }
+    camerasStore.resetAll()
+  } else if (camerasChanged) {
+    camerasStore.resetAll()
+  } else if (isFromSse && (payload.activePrinterChanged || payload.printerUrlChanged) && !hasBaseline) {
+    // Edge case: SSE arrived before initial loadSettings completed.
+    resetForPrinterSwitch()
+  }
+}
+
+function openSettings(section = 'printers') {
+  printerPopoverOpen.value = false
+  popoverDirtyConfirm.value = null
+  popoverError.value = ''
+  settingsInitialSection.value = section
+  settingsOpen.value = true
+}
+
+function onSettingsDialogSwitched(event) {
+  if (event?.settings) {
+    applySettingsTransition(event.settings)
+  }
+}
+
+function onPrinterPillClick() {
+  if (settingsStore.printers.value.length > 1) {
+    popoverDirtyConfirm.value = null
+    popoverError.value = ''
+    printerPopoverOpen.value = !printerPopoverOpen.value
+  } else {
+    openSettings('printers')
+  }
+}
+
+async function quickSwitchPrinter(printer, confirmedDirty = false) {
+  popoverError.value = ''
+  const currentId = settingsStore.activePrinter.value?.id || ''
+  if (printer.id === currentId) {
+    printerPopoverOpen.value = false
+    return
+  }
+  if (!confirmedDirty && configEditor.isDirty.value) {
+    popoverDirtyConfirm.value = printer
+    return
+  }
+  popoverDirtyConfirm.value = null
+  const res = await settingsStore.switchPrinter(printer.id)
+  if (!res.ok) {
+    popoverError.value = res.error || 'Druckerwechsel fehlgeschlagen.'
+    return
+  }
+  printerPopoverOpen.value = false
+  applySettingsTransition(res.data)
+}
+
+function onGlobalPointerDown(event) {
+  if (printerPopoverOpen.value && switcherRoot.value && !switcherRoot.value.contains(event.target)) {
+    printerPopoverOpen.value = false
+    popoverDirtyConfirm.value = null
+  }
+}
+
+function onGlobalKeydown(event) {
+  if (event.key === 'Escape' && printerPopoverOpen.value) {
+    printerPopoverOpen.value = false
+    popoverDirtyConfirm.value = null
+  }
+}
 
 const { pending, stopping, feedback, send, syncServerResult } = useControls(refresh)
 
@@ -73,25 +198,62 @@ watch(
   result => syncServerResult(result),
 )
 
-const configEditor = useConfigEditor()
 const fallbackPrinterName = (import.meta.env.VITE_PRINTER_NAME ?? 'STORMTROOPER').trim()
 const printerName = computed(() => {
+  const configured = settingsStore.activePrinter.value?.name
+  if (typeof configured === 'string' && configured.trim()) return configured.trim()
   const remote = status.value?.printerName
-  return typeof remote === 'string' ? remote.trim() : fallbackPrinterName
+  return typeof remote === 'string' && remote.trim() ? remote.trim() : fallbackPrinterName
+})
+const printerSubtitle = computed(() => {
+  const configured = settingsStore.activePrinter.value?.subtitle
+  if (typeof configured === 'string' && configured.trim()) return configured.trim()
+  const remote = status.value?.printerSubtitle
+  if (typeof remote === 'string' && remote.trim()) return remote.trim()
+  return 'VORON 2.4 / 6-Toolchanger'
+})
+const activeCameras = computed(() => {
+  if (settingsStore.loaded.value && settingsStore.activePrinter.value) {
+    return (settingsStore.activePrinter.value.cameras ?? []).filter(c => c.enabled !== false)
+  }
+  return [
+    {
+      id: 'tophat',
+      name: 'Tophat',
+      description: 'Blick auf den Bauraum',
+      service: 'camera-streamer',
+      preferredMode: 'webrtc',
+      enabled: true,
+    },
+    {
+      id: 'heatbed',
+      name: 'Druckbett',
+      description: 'Blick auf die Druckfläche',
+      service: 'camera-streamer',
+      preferredMode: 'webrtc',
+      enabled: true,
+    },
+  ]
 })
 watch(
   [language, printerName],
   ([nextLang, nextPrinter]) => setDocumentTitle(nextLang, nextPrinter),
   { immediate: true },
 )
-const mainsailUrl = resolveMainsailUrl(import.meta.env.VITE_MAINSAIL_URL)
+const mainsailUrl = computed(() =>
+  resolveMainsailUrl(
+    settingsStore.activePrinter.value?.mainsailUrl ?? import.meta.env.VITE_MAINSAIL_URL,
+    globalThis.location,
+    settingsStore.activePrinter.value?.url ?? '',
+  ),
+)
 const validTabs = ['tools', 'controls', 'print', 'history', 'cameras', 'console', 'system']
 const validSystemSubtabs = ['overview', 'config', 'calibration', 'maintenance']
 
 function parseRouteHash(rawHash) {
   const clean = (rawHash || '').replace(/^#/, '')
   const [mainTab, sub] = clean.split('/')
-  const rawTab = validTabs.includes(mainTab) ? mainTab : 'tools'
+  const rawTab = clean && validTabs.includes(mainTab) ? mainTab : defaultTab.value
   const nextTab = sanitizeTabForCameras(rawTab, showCameras.value)
   const nextSub = nextTab === 'system' && validSystemSubtabs.includes(sub) ? sub : 'overview'
   return { nextTab, nextSub }
@@ -140,12 +302,26 @@ const nowTick = ref(Date.now())
 let clockTimer = null
 onMounted(() => {
   window.addEventListener('hashchange', handleHashChange)
+  document.addEventListener('pointerdown', onGlobalPointerDown)
+  document.addEventListener('keydown', onGlobalKeydown)
+  settingsStore.loadSettings().then(res => {
+    if (res.ok && res.data?.activePrinter) {
+      lastAppliedTarget = {
+        id: res.data.activePrinter.id,
+        url: res.data.activePrinter.url,
+        camerasJson: JSON.stringify(res.data.activePrinter.cameras ?? []),
+      }
+      syncCamerasFromActive(res.data.activePrinter)
+    }
+  })
   clockTimer = setInterval(() => {
     if (status.value?.control?.job) nowTick.value = Date.now()
   }, 1000)
 })
 onBeforeUnmount(() => {
   window.removeEventListener('hashchange', handleHashChange)
+  document.removeEventListener('pointerdown', onGlobalPointerDown)
+  document.removeEventListener('keydown', onGlobalKeydown)
   clearInterval(clockTimer)
   clearTimeout(recoveryConfirmTimer)
 })
@@ -438,17 +614,97 @@ async function acknowledgeUncertain() {
 <template>
   <div class="app-shell" :class="{ 'controls-active': tab === 'controls', 'display-mode': displayMode }">
     <header class="masthead">
-      <a class="brand" href="#" :aria-label="t('DOCKYARD Werkzeugübersicht')" @click.prevent="tab = 'tools'">
-        <img src="/voron-logo.svg" width="34" height="39" alt="DOCKYARD" />
+      <div class="brand">
+        <a href="#" :aria-label="t('DOCKYARD Werkzeugübersicht')" @click.prevent="tab = 'tools'">
+          <img src="/voron-logo.svg" width="34" height="39" alt="DOCKYARD" />
+        </a>
         <span>
           <span class="brand-title">
-            DOCKYARD
-            <span v-if="printerName" class="brand-printer-pill">{{ printerName }}</span>
+            <a href="#" @click.prevent="tab = 'tools'">DOCKYARD</a>
+            <div v-if="printerName" ref="switcherRoot" class="brand-printer-switcher">
+              <button
+                type="button"
+                class="brand-printer-pill interactive"
+                :aria-expanded="settingsStore.printers.value.length > 1 ? printerPopoverOpen : undefined"
+                :aria-haspopup="settingsStore.printers.value.length > 1 ? 'menu' : 'dialog'"
+                :title="settingsStore.printers.value.length > 1 ? t('Drucker wechseln') : t('Einstellungen')"
+                @click="onPrinterPillClick"
+              >
+                <span>{{ printerName }}</span>
+                <ChevronDown v-if="settingsStore.printers.value.length > 1" :size="11" />
+              </button>
+
+              <div
+                v-if="printerPopoverOpen && settingsStore.printers.value.length > 1"
+                class="printer-popover"
+                role="menu"
+                :aria-label="t('Drucker wechseln')"
+              >
+                <div v-if="popoverDirtyConfirm" class="printer-popover-confirm" role="alert">
+                  <span>
+                    {{
+                      t(
+                        'Im Konfigurations-Editor sind ungespeicherte Änderungen in {0} offen. Beim Wechsel auf {1} bleibt der Editor geschützt im Lesemodus.',
+                        [configEditor.currentPath.value, popoverDirtyConfirm.name],
+                      )
+                    }}
+                  </span>
+                  <div class="printer-popover-confirm-actions">
+                    <button type="button" class="subtle-button" @click="popoverDirtyConfirm = null">
+                      {{ t('Abbrechen') }}
+                    </button>
+                    <button
+                      type="button"
+                      class="confirm-button"
+                      @click="quickSwitchPrinter(popoverDirtyConfirm, true)"
+                    >
+                      {{ t('Trotzdem wechseln') }}
+                    </button>
+                  </div>
+                </div>
+
+                <p v-if="popoverError" class="settings-inline-error" style="padding: 4px 8px; margin: 0">
+                  {{ t(popoverError) }}
+                </p>
+
+                <button
+                  v-for="printer in settingsStore.printers.value"
+                  :key="printer.id"
+                  type="button"
+                  role="menuitemradio"
+                  class="printer-popover-item"
+                  :class="{ active: settingsStore.activePrinter.value?.id === printer.id }"
+                  :aria-checked="settingsStore.activePrinter.value?.id === printer.id"
+                  :disabled="settingsStore.saving.value"
+                  @click="quickSwitchPrinter(printer)"
+                >
+                  <span class="printer-popover-meta">
+                    <strong>{{ printer.name }}</strong>
+                    <small>{{ printer.url }}</small>
+                  </span>
+                  <Check v-if="settingsStore.activePrinter.value?.id === printer.id" :size="14" />
+                </button>
+
+                <div class="printer-popover-divider" />
+                <button type="button" role="menuitem" class="printer-popover-manage" @click="openSettings('printers')">
+                  <Settings :size="14" />{{ t('Drucker verwalten …') }}
+                </button>
+              </div>
+            </div>
           </span>
-          <small>VORON 2.4 <span class="brand-divider" aria-hidden="true">/</span> 6-Toolchanger</small>
+          <small>{{ printerSubtitle }}</small>
         </span>
-      </a>
+      </div>
       <div class="header-meta">
+        <button
+          type="button"
+          class="settings-trigger-btn"
+          :aria-label="t('Einstellungen')"
+          :title="t('Einstellungen')"
+          @click="openSettings('printers')"
+        >
+          <Settings :size="16" />
+        </button>
         <button
           type="button"
           class="icon-button display-toggle-btn"
@@ -639,7 +895,10 @@ async function acknowledgeUncertain() {
               : t('Temperaturen und Werkzeugzustände werden angezeigt, sobald die Verbindung steht.')
           }}
         </span>
-        <button type="button" :disabled="updating" @click="refresh">{{ t('Erneut verbinden') }}</button>
+        <div class="notice-actions">
+          <button type="button" @click="openSettings('printers')">{{ t('IP / Verbindung anpassen') }}</button>
+          <button type="button" :disabled="updating" @click="refresh">{{ t('Erneut verbinden') }}</button>
+        </div>
       </div>
 
       <div v-if="klipperNeedsRecovery" class="klipper-recovery-banner" role="alert">
@@ -1075,12 +1334,14 @@ async function acknowledgeUncertain() {
 
       <ControlsView
         v-if="tab === 'controls'"
+        :key="`controls-${printerSwitchKey}`"
         :status="status"
         :online="online"
         :pending="pending"
         :selected="selected"
         :send="send"
         :show-cameras="showCameras"
+        :cameras="activeCameras"
         @select="selectTool"
         @command="send"
         @refresh="refresh"
@@ -1089,6 +1350,7 @@ async function acknowledgeUncertain() {
 
       <PrintView
         v-if="tab === 'print'"
+        :key="`print-${printerSwitchKey}`"
         :status="status"
         :online="online"
         :pending="pending"
@@ -1098,6 +1360,7 @@ async function acknowledgeUncertain() {
 
       <HistoryView
         v-if="tab === 'history'"
+        :key="`history-${printerSwitchKey}`"
         :status="status"
         :online="online"
         :pending="pending"
@@ -1106,15 +1369,39 @@ async function acknowledgeUncertain() {
         @print-started="openPrintFile"
       />
 
-      <section v-if="showCameras && (tab === 'tools' || tab === 'cameras')" class="camera-section" :aria-label="t('Druckerkameras')">
+      <section
+        v-if="showCameras && (tab === 'cameras' || (tab === 'tools' && activeCameras.length > 0))"
+        class="camera-section"
+        :aria-label="t('Druckerkameras')"
+      >
         <div v-if="tab === 'tools'" class="section-heading">
           <h2>{{ t('Am Drucker') }}</h2>
-          <span>{{ t('Live aus beiden Kameras') }}</span>
+          <span>
+            {{
+              activeCameras.length === 1
+                ? t('Live aus der Kamera')
+                : t('Live aus {0} Kameras', [activeCameras.length])
+            }}
+          </span>
         </div>
         <h2 v-else class="sr-only">{{ t('Druckerkameras') }}</h2>
-        <div class="camera-grid">
-          <CameraView id="tophat" name="Tophat" description="Blick auf den Bauraum" />
-          <CameraView id="heatbed" name="Druckbett" description="Blick auf die Druckfläche" />
+        <div v-if="activeCameras.length > 0" class="camera-grid">
+          <CameraView
+            v-for="cam in activeCameras"
+            :key="`${printerSwitchKey}-${cam.id}`"
+            :id="cam.id"
+            :name="cam.name"
+            :description="cam.description"
+            :service="cam.service"
+            :preferred-mode="cam.preferredMode"
+          />
+        </div>
+        <div v-else class="settings-empty">
+          <Camera :size="24" />
+          <p>{{ t('Für diesen Drucker sind aktuell keine Kameras aktiviert.') }}</p>
+          <button type="button" class="subtle-button" @click="openSettings('cameras')">
+            <Settings :size="14" />{{ t('Kameras einrichten') }}
+          </button>
         </div>
       </section>
 
@@ -1128,6 +1415,7 @@ async function acknowledgeUncertain() {
 
       <SystemView
         v-if="tab === 'system'"
+        :key="`system-${printerSwitchKey}`"
         :status="status"
         :online="online"
         :pending="pending"
@@ -1151,5 +1439,12 @@ async function acknowledgeUncertain() {
         </span>
       </footer>
     </main>
+
+    <SettingsDialog
+      :open="settingsOpen"
+      :initial-section="settingsInitialSection"
+      @close="settingsOpen = false"
+      @switched="onSettingsDialogSwitched"
+    />
   </div>
 </template>

@@ -2,6 +2,13 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createLiveFeed } from '../server/live.mjs'
 
+async function waitForCondition(predicate, timeoutMs = 600) {
+  const deadline = Date.now() + timeoutMs
+  while (!predicate() && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+}
+
 test('live feed suppresses idle LED poll broadcasts, emits on diff, sends ping and pushes console output', async () => {
   const sentToWs = []
   let activeSocket = null
@@ -76,7 +83,7 @@ test('live feed suppresses idle LED poll broadcasts, emits on diff, sends ping a
   }
 
   feed.handle({}, fakeRes)
-  await new Promise(resolve => setTimeout(resolve, 30))
+  await waitForCondition(() => events.some(e => e.event === 'status'))
 
   // Initial subscribe emits 1 status event
   assert.equal(events.filter(e => e.event === 'status').length, 1)
@@ -123,8 +130,8 @@ test('live feed suppresses idle LED poll broadcasts, emits on diff, sends ping a
   assert.equal(consoleEvents[0].data.message, '// Tool T1 connected')
   assert.equal(consoleEvents[0].data.type, 'response')
 
-  // Wait for idle ping heartbeat (allow up to 3 poll ticks for timer jitter)
-  await new Promise(resolve => setTimeout(resolve, 150))
+  // Wait for idle ping heartbeat
+  await waitForCondition(() => events.some(e => e.event === 'ping'))
   assert.ok(events.some(e => e.event === 'ping'))
 
   // Explicit notify() forces immediate status broadcast
@@ -301,14 +308,14 @@ test('live feed reconnects dynamically via getPrinter and broadcasts settings ev
 
   try {
     feed.handle({}, fakeRes)
-    await new Promise(resolve => setTimeout(resolve, 35))
+    await waitForCondition(() => events.some(e => e.event === 'status'))
     assert.equal(connectedUrls[0], 'ws://127.0.0.1:7101/websocket')
     assert.equal(events.filter(e => e.event === 'status').at(-1)?.data.tc, 'ws://127.0.0.1:7101/websocket')
 
     activeUrl = 'https://192.168.50.22'
     feed.emitSettings({ activePrinterId: 'v0', printerUrlChanged: true })
     feed.reconnect()
-    await new Promise(resolve => setTimeout(resolve, 35))
+    await waitForCondition(() => events.filter(e => e.event === 'status').length >= 2)
 
     assert.ok(events.some(e => e.event === 'settings' && e.data.activePrinterId === 'v0'))
     assert.ok(events.some(e => e.event === 'offline'))

@@ -123,8 +123,8 @@ test('live feed suppresses idle LED poll broadcasts, emits on diff, sends ping a
   assert.equal(consoleEvents[0].data.message, '// Tool T1 connected')
   assert.equal(consoleEvents[0].data.type, 'response')
 
-  // Wait for idle ping heartbeat
-  await new Promise(resolve => setTimeout(resolve, 110))
+  // Wait for idle ping heartbeat (allow up to 3 poll ticks for timer jitter)
+  await new Promise(resolve => setTimeout(resolve, 150))
   assert.ok(events.some(e => e.event === 'ping'))
 
   // Explicit notify() forces immediate status broadcast

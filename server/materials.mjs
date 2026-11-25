@@ -28,7 +28,8 @@ export function materialsFromMetadata(metadata, filename) {
   }))
 }
 
-export function createMaterialsReader(printer, fetchImpl = fetch, onUpdate = null) {
+export function createMaterialsReader(printerOrGetter, fetchImpl = fetch, onUpdate = null) {
+  const resolvePrinter = () => (typeof printerOrGetter === 'function' ? printerOrGetter() : printerOrGetter)
   let key = ''
   let materials = Array(6).fill(null)
   let signature = ''
@@ -45,7 +46,16 @@ export function createMaterialsReader(printer, fetchImpl = fetch, onUpdate = nul
     }
   }
 
-  return raw => {
+  function reset() {
+    key = ''
+    materials = Array(6).fill(null)
+    signature = JSON.stringify(materials)
+    requestedAt = 0
+    pending = false
+    version++
+  }
+
+  const read = raw => {
     const filename = ['printing', 'paused'].includes(raw.print_stats?.state) ? raw.print_stats.filename : ''
     if (filename !== key) {
       key = filename
@@ -59,8 +69,9 @@ export function createMaterialsReader(printer, fetchImpl = fetch, onUpdate = nul
       pending = true
       requestedAt = Date.now()
       const requestVersion = version
-      fetchImpl(`${printer}/server/files/metadata?filename=${encodeURIComponent(filename)}`, {
+      fetchImpl(`${resolvePrinter()}/server/files/metadata?filename=${encodeURIComponent(filename)}`, {
         signal: AbortSignal.timeout(5000),
+        redirect: 'error',
       })
         .then(async response => {
           if (!response.ok) throw new Error('metadata')
@@ -76,4 +87,6 @@ export function createMaterialsReader(printer, fetchImpl = fetch, onUpdate = nul
     }
     return materials
   }
+  read.reset = reset
+  return read
 }

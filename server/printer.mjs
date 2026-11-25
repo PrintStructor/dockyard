@@ -1,9 +1,10 @@
 import http from 'node:http'
+import https from 'node:https'
 import { createMaterialsReader } from './materials.mjs'
 import { createLiveFeed } from './live.mjs'
 import { normalizeStatus } from './status.mjs'
 import { temperatureHistory } from './temperature.mjs'
-import { capabilities, commandFor, ControlError, sameOriginRequest } from './control.mjs'
+import { capabilities, commandFor, ControlError, isOriginWriteAllowed, sameOriginRequest } from './control.mjs'
 import { executeGcodeScript, executeMoonrakerRpc, AbortedCommandError } from './ws-rpc.mjs'
 import {
   validateGcodeFilename,
@@ -37,7 +38,12 @@ import {
 } from './machine.mjs'
 import { validateShakeTuneImagePath, normalizeCalibrationData } from './calibration.mjs'
 import { normalizePresets } from './presets.mjs'
-import { printerUrl as printer, printerName } from './config.mjs'
+import { serverHost, serverPort } from './config.mjs'
+import {
+  settingsStore as defaultSettingsStore,
+  normalizePrinterOrigin,
+  validateSettingsPayload,
+} from './settings.mjs'
 
 const objects = [
   'toolchanger',
@@ -65,22 +71,181 @@ const objects = [
   ]).flat(),
 ]
 
-const cameras = { tophat: '/webcam', heatbed: '/webcam2' }
+function isLoopbackOrigin(req) {
+  try {
+    const rawOrigin = req?.headers?.origin
+    if (rawOrigin) {
+      const origin = new URL(rawOrigin)
+      return ['127.0.0.1', 'localhost', '[::1]'].includes(origin.hostname) && origin.protocol === 'http:'
+    }
+    const rawHost = String(req?.headers?.host || '').trim()
+    if (!rawHost) return false
+    const parsed = new URL(`http://${rawHost}`)
+    return ['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname)
+  } catch {
+    return false
+  }
+}
 
-let configCache = null
-let effectObjects = []
-let fanObjects = []
-let capabilityCache = null
-let capabilityAt = 0
-let gcodeFileSetCache = null
-let gcodeFileSetAt = 0
-let liveCapabilityRef = { config: null, load: null, unload: null, fans: '', hasExclude: false, value: null }
-let currentJob = null
-let activeJobAbort = null
-let lastResult = null
-let jobSequence = 0
-let activeUpdateJob = null
-const releaseNotesCache = new Map()
+function requestOriginFor(req) {
+  if (req?.headers?.origin) return String(req.headers.origin)
+  const host = req?.headers?.host
+  return host ? `http://${host}` : ''
+}
+
+function requestStream(url, onResponse) {
+  const parsed = new URL(url)
+  const client = parsed.protocol === 'https:' ? https : http
+  return client.get(parsed, onResponse)
+}
+
+function fetchUpstream(url, init = {}) {
+  return fetch(url, { redirect: 'error', ...init })
+}
+
+export function createPrinterRuntime({ store = defaultSettingsStore } = {}) {
+  const getActive = () => store.getActivePrinter()
+  const activeUrl = () => getActive().url
+
+  let configCache = null
+  let effectObjects = []
+  let fanObjects = []
+  let capabilityCache = null
+  let capabilityAt = 0
+  let gcodeFileSetCache = null
+  let gcodeFileSetAt = 0
+  let liveCapabilityRef = { config: null, load: null, unload: null, fans: '', hasExclude: false, value: null }
+  let currentJob = null
+  let activeJobAbort = null
+  const uncertainJobsByPrinter = new Map()
+  let lastResult = null
+  let jobSequence = 0
+  let activeUpdateJob = null
+  const releaseNotesCache = new Map()
+
+  function resolveCameraTarget(id) {
+    const active = getActive()
+    const cam = (active.cameras ?? []).find(entry => entry.id === id && entry.enabled !== false)
+    if (!cam) return null
+    const base = cam.url.startsWith('/') ? `${active.url}${cam.url}` : cam.url
+    if (cam.service === 'mjpeg') {
+      const snapshotUrl = cam.snapshotUrl
+        ? cam.snapshotUrl.startsWith('/')
+          ? `${active.url}${cam.snapshotUrl}`
+          : cam.snapshotUrl
+        : null
+      return { cam, webrtcUrl: null, streamUrl: base, snapshotUrl }
+    }
+    return {
+      cam,
+      webrtcUrl: `${base}/webrtc`,
+      streamUrl: `${base}/stream`,
+      snapshotUrl: `${base}/snapshot`,
+    }
+  }
+
+  function buildRuntimeMeta(req) {
+    const reqOrigin = requestOriginFor(req)
+    const syntheticReq = {
+      headers: {
+        origin: reqOrigin,
+        host: req?.headers?.host,
+      },
+    }
+    const canWrite = isOriginWriteAllowed(syntheticReq, store.getEffectiveAllowedOrigins(), {
+      allowLanOrigins: store.isLanOriginAllowed(),
+    })
+    return {
+      host: serverHost,
+      port: serverPort,
+      requestOrigin: reqOrigin,
+      canWrite,
+    }
+  }
+
+  function assertNoActiveJobForSwitch() {
+    if (currentJob && !currentJob.uncertain) {
+      throw new ControlError(
+        'Drucker oder Verbindung kann nicht gewechselt werden, solange ein Cockpit-Befehl läuft.',
+        409,
+      )
+    }
+    if (activeUpdateJob?.running) {
+      throw new ControlError(
+        'Drucker oder Verbindung kann nicht gewechselt werden, solange ein System-Update läuft.',
+        409,
+      )
+    }
+  }
+
+  function applyRuntimeSettingsChange({ activePrinterChanged, printerUrlChanged }) {
+    const publicSettings = store.getPublicSettings()
+    if (activePrinterChanged || printerUrlChanged) {
+      configCache = null
+      effectObjects = []
+      fanObjects = []
+      capabilityCache = null
+      capabilityAt = 0
+      gcodeFileSetCache = null
+      gcodeFileSetAt = 0
+      liveCapabilityRef = { config: null, load: null, unload: null, fans: '', hasExclude: false, value: null }
+      lastResult = null
+      if (activeUpdateJob && !activeUpdateJob.running) activeUpdateJob = null
+      readMaterials.reset()
+      live.emitSettings({ ...publicSettings, activePrinterChanged, printerUrlChanged })
+      live.reconnect()
+    } else {
+      live.emitSettings({ ...publicSettings, activePrinterChanged: false, printerUrlChanged: false })
+      live.notify()
+    }
+  }
+
+  async function probeMoonrakerConnection(rawUrl) {
+    let url
+    try {
+      url = normalizePrinterOrigin(rawUrl)
+    } catch (err) {
+      throw new ControlError(err.message, 400)
+    }
+    const started = Date.now()
+    try {
+      const infoRes = await fetchUpstream(`${url}/server/info`, { signal: AbortSignal.timeout(3500) })
+      const latencyMs = Date.now() - started
+      if (!infoRes.ok) {
+        return { ok: false, url, latencyMs, error: `Moonraker antwortete mit HTTP ${infoRes.status}.` }
+      }
+      const infoJson = await infoRes.json().catch(() => null)
+      const serverInfo = infoJson?.result ?? null
+      if (!serverInfo || typeof serverInfo !== 'object') {
+        return { ok: false, url, latencyMs, error: 'Unerwartete Antwort (kein Moonraker-Endpunkt).' }
+      }
+      let printerInfo = null
+      try {
+        const pRes = await fetchUpstream(`${url}/printer/info`, { signal: AbortSignal.timeout(2500) })
+        if (pRes.ok) printerInfo = (await pRes.json().catch(() => null))?.result ?? null
+      } catch {
+        printerInfo = null
+      }
+      return {
+        ok: true,
+        url,
+        latencyMs,
+        moonrakerVersion: typeof serverInfo.moonraker_version === 'string' ? serverInfo.moonraker_version : null,
+        klippyState: typeof serverInfo.klippy_state === 'string' ? serverInfo.klippy_state : null,
+        hostname: typeof printerInfo?.hostname === 'string' ? printerInfo.hostname : null,
+        softwareVersion: typeof printerInfo?.software_version === 'string' ? printerInfo.software_version : null,
+      }
+    } catch (err) {
+      const latencyMs = Date.now() - started
+      const message =
+        err?.name === 'TimeoutError'
+          ? 'Zeitüberschreitung (3,5 s) — Adresse oder Port nicht erreichbar.'
+          : err?.cause?.code === 'ECONNREFUSED'
+            ? 'Verbindung abgelehnt — läuft Moonraker/Nginx auf dieser Adresse?'
+            : err?.message || 'Verbindung fehlgeschlagen.'
+      return { ok: false, url, latencyMs, error: message }
+    }
+  }
 
 function serializeUpdateJob(job) {
   if (!job) return null
@@ -161,7 +326,7 @@ function startUpdateJob({ name, mode, hard = false }) {
   )
 
   executeMoonrakerRpc({
-    printer,
+    printer: activeUrl(),
     method,
     params,
     timeoutMs: 900_000,
@@ -210,9 +375,10 @@ function serializeJob(job) {
   }
 }
 
-export function getControlState() {
+function getControlState() {
+  const activeJobOrLock = currentJob ?? uncertainJobsByPrinter.get(getActive().id) ?? null
   return {
-    job: serializeJob(currentJob),
+    job: serializeJob(activeJobOrLock),
     lastResult,
   }
 }
@@ -241,11 +407,14 @@ function cachedCapabilities(raw) {
 }
 
 let live = null
-const readMaterials = createMaterialsReader(printer, fetch, () => live?.notify())
+const readMaterials = createMaterialsReader(activeUrl, fetch, () => live?.notify())
 
 function normalized(raw) {
+  const active = getActive()
   const data = normalizeStatus(raw)
-  data.printerName = printerName
+  data.printerName = active.name
+  data.printerSubtitle = active.subtitle
+  data.activePrinterId = active.id
   const materials = readMaterials(raw)
   data.tools.forEach((tool, id) => {
     tool.material = materials[id]
@@ -254,7 +423,7 @@ function normalized(raw) {
 }
 
 live = createLiveFeed({
-  printer,
+  getPrinter: activeUrl,
   baseObjects: objects,
   snapshot: raw => ({
     ...normalized(raw),
@@ -264,7 +433,7 @@ live = createLiveFeed({
   }),
 })
 
-export const closeLiveFeed = () => live.close()
+const closeLiveFeed = () => live.close()
 
 async function readJson(req, max = 64_000) {
   const chunks = []
@@ -283,15 +452,16 @@ async function readJson(req, max = 64_000) {
 }
 
 async function query(withConfig = false) {
+  const base = activeUrl()
   if (withConfig) {
-    const response = await fetch(`${printer}/printer/objects/list`, { signal: AbortSignal.timeout(5000) })
+    const response = await fetchUpstream(`${base}/printer/objects/list`, { signal: AbortSignal.timeout(5000) })
     if (!response.ok) throw new Error('Druckerobjekte nicht erreichbar.')
     const data = await response.json()
     fanObjects = (data.result?.objects ?? []).filter(name => /^fan_generic [A-Za-z0-9_]+$/.test(name))
   }
   const queryNames = [...objects, ...effectObjects, ...fanObjects].map(encodeURIComponent).join('&')
-  const response = await fetch(
-    `${printer}/printer/objects/query?${queryNames}${withConfig ? '&configfile=settings' : ''}`,
+  const response = await fetchUpstream(
+    `${base}/printer/objects/query?${queryNames}${withConfig ? '&configfile=settings' : ''}`,
     { signal: AbortSignal.timeout(5000) },
   )
   if (!response.ok) throw new Error(`Moonraker HTTP ${response.status}`)
@@ -314,15 +484,20 @@ function successMessageFor(action, label) {
   return `${label}: abgeschlossen.`
 }
 
-export async function control(input, options = {}) {
+async function control(input, options = {}) {
   const { async: allowAsync = false, WebSocketImpl = WebSocket } = options
+  const activePrinter = getActive()
+  const activePrinterId = activePrinter.id
+  const targetPrinterUrl = activePrinter.url
 
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new ControlError('Ungültiger Befehl.')
   }
 
+  const uncertainForActive = uncertainJobsByPrinter.get(activePrinterId) ?? null
+
   if (input.action === 'acknowledge') {
-    if (Object.keys(input).some(key => key !== 'action') || !currentJob?.uncertain) {
+    if (Object.keys(input).some(key => key !== 'action') || !uncertainForActive) {
       throw new ControlError('Keine ungeklärte Aktion vorhanden.', 409)
     }
     const raw = await query()
@@ -333,7 +508,7 @@ export async function control(input, options = {}) {
     ) {
       throw new ControlError('Drucker ist noch nicht bereit.', 409)
     }
-    currentJob = null
+    uncertainJobsByPrinter.delete(activePrinterId)
     activeJobAbort = null
     lastResult = {
       id: ++jobSequence,
@@ -348,11 +523,11 @@ export async function control(input, options = {}) {
 
   const isStop = input.action === 'emergency_stop'
   const isBatchAbort = input.action === 'calibrate_beacon_abort'
-  if (isBatchAbort && !currentJob?.uncertain) {
+  if (isBatchAbort && !uncertainForActive) {
     const raw = await query(true)
     const abortCmd = commandFor(input, raw)
     await executeGcodeScript({
-      printer,
+      printer: targetPrinterUrl,
       script: abortCmd.body.script,
       timeoutMs: abortCmd.timeoutMs ?? 60_000,
       WebSocketImpl,
@@ -369,13 +544,13 @@ export async function control(input, options = {}) {
     return { message }
   }
 
-  if (currentJob && !isStop) {
+  if ((currentJob || uncertainForActive) && !isStop) {
     throw new ControlError('Ein Befehl läuft noch oder sein Ergebnis ist ungeklärt.', 409)
   }
 
   if (isStop) {
     activeJobAbort?.abort()
-    const response = await fetch(`${printer}/printer/emergency_stop`, {
+    const response = await fetchUpstream(`${targetPrinterUrl}/printer/emergency_stop`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
@@ -400,6 +575,7 @@ export async function control(input, options = {}) {
   // Reserve the slot before awaiting state, preventing concurrent requests from both passing.
   const job = {
     id: ++jobSequence,
+    printerId: activePrinterId,
     action: input.action,
     label: 'Druckerzustand prüfen',
     startedAt: new Date().toISOString(),
@@ -449,7 +625,7 @@ export async function control(input, options = {}) {
           live.notify()
           issued = true
           await executeGcodeScript({
-            printer,
+            printer: targetPrinterUrl,
             script: currentStep.script,
             timeoutMs: stepTimeoutMs,
             signal: abortController.signal,
@@ -460,7 +636,7 @@ export async function control(input, options = {}) {
         live.notify()
         issued = true
         await executeMoonrakerRpc({
-          printer,
+          printer: targetPrinterUrl,
           method: command.rpcMethod,
           params: command.rpcParams ?? {},
           timeoutMs: stepTimeoutMs,
@@ -472,7 +648,7 @@ export async function control(input, options = {}) {
         live.notify()
         issued = true
         await executeGcodeScript({
-          printer,
+          printer: targetPrinterUrl,
           script: command.body.script,
           timeoutMs: stepTimeoutMs,
           signal: abortController.signal,
@@ -512,11 +688,11 @@ export async function control(input, options = {}) {
         return { message }
       }
       if (currentJob === job) {
+        currentJob = null
         if (issued) {
           job.uncertain = true
           job.label = `${command.label} · Ergebnis prüfen`
-        } else {
-          currentJob = null
+          uncertainJobsByPrinter.set(job.printerId, job)
         }
       }
       const message = issued
@@ -545,7 +721,14 @@ export async function control(input, options = {}) {
 }
 
 function streamCamera(id, res) {
-  const upstream = http.get(`${printer}${cameras[id]}/stream`, response => {
+  const target = resolveCameraTarget(id)
+  if (!target?.streamUrl) {
+    res.statusCode = 404
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify({ error: 'Kamera nicht konfiguriert oder deaktiviert.' }))
+    return
+  }
+  const upstream = requestStream(target.streamUrl, response => {
     if (
       response.statusCode !== 200 ||
       !response.headers['content-type']?.startsWith('multipart/x-mixed-replace')
@@ -576,7 +759,7 @@ function streamCamera(id, res) {
 }
 
 function streamLogDownload(relPath, res) {
-  const upstream = http.get(`${printer}/server/files/logs/${encodeMoonrakerPath(relPath)}`, response => {
+  const upstream = requestStream(`${activeUrl()}/server/files/logs/${encodeMoonrakerPath(relPath)}`, response => {
     if (response.statusCode !== 200) {
       response.destroy()
       res.statusCode = response.statusCode === 404 ? 404 : 502
@@ -609,11 +792,12 @@ function streamLogDownload(relPath, res) {
 }
 
 async function probeMachineWriteGuard(allowUncertainRecovery = false) {
+  const base = activeUrl()
   let queryStatus = 503
   let queryData = null
   try {
-    const qRes = await fetch(
-      `${printer}/printer/objects/query?print_stats&webhooks&idle_timeout`,
+    const qRes = await fetchUpstream(
+      `${base}/printer/objects/query?print_stats&webhooks&idle_timeout`,
       { signal: AbortSignal.timeout(5000) },
     )
     queryStatus = qRes.status
@@ -628,7 +812,7 @@ async function probeMachineWriteGuard(allowUncertainRecovery = false) {
   let serverInfo = null
   if (queryStatus !== 200 || !queryData?.print_stats?.state) {
     try {
-      const infoRes = await fetch(`${printer}/server/info`, { signal: AbortSignal.timeout(5000) })
+      const infoRes = await fetchUpstream(`${base}/server/info`, { signal: AbortSignal.timeout(5000) })
       if (infoRes.ok) {
         const infoJson = await infoRes.json().catch(() => null)
         serverInfo = infoJson?.result ?? null
@@ -648,8 +832,9 @@ async function probeMachineWriteGuard(allowUncertainRecovery = false) {
 }
 
 async function executeRestartTarget(spec) {
+  const base = activeUrl()
   if (spec.kind === 'klipper') {
-    const response = await fetch(`${printer}/printer/restart`, {
+    const response = await fetchUpstream(`${base}/printer/restart`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
@@ -659,7 +844,7 @@ async function executeRestartTarget(spec) {
     return
   }
   if (spec.kind === 'firmware') {
-    const response = await fetch(`${printer}/printer/firmware_restart`, {
+    const response = await fetchUpstream(`${base}/printer/firmware_restart`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
@@ -668,8 +853,8 @@ async function executeRestartTarget(spec) {
     if (!response.ok) throw new ControlError(`Firmware-Neustart fehlgeschlagen (HTTP ${response.status}).`, 502)
     return
   }
-  const response = await fetch(
-    `${printer}/machine/services/restart?service=${encodeURIComponent(spec.service)}`,
+  const response = await fetchUpstream(
+    `${base}/machine/services/restart?service=${encodeURIComponent(spec.service)}`,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -683,7 +868,7 @@ async function executeRestartTarget(spec) {
   }
 }
 
-export function printerMiddleware(req, res, next) {
+function printerMiddleware(req, res, next) {
   const parsedUrl = new URL(req.url, 'http://localhost')
   const path = parsedUrl.pathname
   if (!path.startsWith('/api/')) return next()
@@ -696,8 +881,9 @@ export function printerMiddleware(req, res, next) {
     res.end(JSON.stringify(value))
   }
 
-  const camera = path.match(/^\/api\/camera\/(tophat|heatbed)(?:\/(stream|webrtc))?$/)
+  const camera = path.match(/^\/api\/camera\/([a-z0-9][a-z0-9_-]{0,31})(?:\/(stream|webrtc))?$/)
   const printRoute = path.match(/^\/api\/print\/(files|metadata|thumbnail|model)$/)
+  const settingsRoute = path.match(/^\/api\/settings(?:\/(switch|test))?$/)
   const systemRoute = path.match(
     /^\/api\/system\/(overview|calibration|calibration\/shaketune-image|config\/list|config\/file|config\/save|service\/restart|updates|updates\/refresh|updates\/notes|updates\/upgrade|updates\/recover|logs\/list|logs\/tail|logs\/download)$/,
   )
@@ -711,22 +897,34 @@ export function printerMiddleware(req, res, next) {
     path !== '/api/history' &&
     !camera &&
     !printRoute &&
+    !settingsRoute &&
     !systemRoute
   ) {
     return json(404, { error: 'Unbekannter Endpunkt' })
   }
 
   const systemSub = systemRoute?.[1]
+  const settingsSub = settingsRoute?.[1]
+  const isSettingsGet = path === '/api/settings' && req.method === 'GET'
   const write =
-    path === '/api/control' ||
-    camera?.[2] === 'webrtc' ||
-    systemSub === 'config/save' ||
-    systemSub === 'service/restart' ||
-    systemSub === 'updates/refresh' ||
-    systemSub === 'updates/upgrade' ||
-    systemSub === 'updates/recover'
-  if (req.method !== (write ? 'POST' : 'GET')) return json(405, { error: 'Methode nicht erlaubt.' })
-  if (write && !sameOriginRequest(req)) {
+    !isSettingsGet &&
+    (path === '/api/control' ||
+      path === '/api/settings' ||
+      settingsSub === 'switch' ||
+      settingsSub === 'test' ||
+      camera?.[2] === 'webrtc' ||
+      systemSub === 'config/save' ||
+      systemSub === 'service/restart' ||
+      systemSub === 'updates/refresh' ||
+      systemSub === 'updates/upgrade' ||
+      systemSub === 'updates/recover')
+  if (!isSettingsGet && req.method !== (write ? 'POST' : 'GET')) {
+    return json(405, { error: 'Methode nicht erlaubt.' })
+  }
+  if (
+    write &&
+    !sameOriginRequest(req, store.getEffectiveAllowedOrigins(), { allowLanOrigins: store.isLanOriginAllowed() })
+  ) {
     return json(403, { error: 'Befehle sind nur aus dieser lokalen Oberfläche erlaubt.' })
   }
   if (path === '/api/events') return live.handle(req, res)
@@ -739,6 +937,74 @@ export function printerMiddleware(req, res, next) {
 
   ;(async () => {
     try {
+      if (settingsRoute) {
+        if (isSettingsGet) {
+          return json(200, store.getPublicSettings(buildRuntimeMeta(req)))
+        }
+        if (settingsSub === 'test') {
+          const payload = await readJson(req, 4096)
+          const result = await probeMoonrakerConnection(payload?.url)
+          return json(200, result)
+        }
+        if (settingsSub === 'switch') {
+          const payload = await readJson(req, 4096)
+          const nextId = String(payload?.printerId ?? '').trim().toLowerCase()
+          const currentActive = getActive()
+          const targetProfile = store.getSettings().printers.find(p => p.id === nextId)
+          if (!targetProfile) throw new ControlError('Druckerprofil wurde nicht gefunden.', 404)
+          if (targetProfile.id !== currentActive.id || targetProfile.url !== currentActive.url) {
+            assertNoActiveJobForSwitch()
+          }
+          const change = await store.switchPrinter(nextId)
+          applyRuntimeSettingsChange(change)
+          return json(200, {
+            ...store.getPublicSettings(buildRuntimeMeta(req)),
+            activePrinterChanged: change.activePrinterChanged,
+            printerUrlChanged: change.printerUrlChanged,
+          })
+        }
+        // POST /api/settings
+        const payload = await readJson(req, 64_000)
+        let validated
+        try {
+          validated = validateSettingsPayload(payload)
+        } catch (err) {
+          throw new ControlError(err.message, 400)
+        }
+
+        // Prevent accidental self-lockout from a non-loopback LAN/Meet browser
+        if (!isLoopbackOrigin(req) && payload?.confirmSelfLockout !== true) {
+          const publicCurrent = store.getPublicSettings()
+          const nextAllowed = Array.from(
+            new Set([...publicCurrent.network.envAllowedOrigins, ...validated.network.allowedOrigins]),
+          )
+          const nextAllowLan = publicCurrent.network.envAllowLanOrigins || validated.network.allowLanOrigins
+          if (!isOriginWriteAllowed(req, nextAllowed, { allowLanOrigins: nextAllowLan })) {
+            const lockoutError = new ControlError(
+              'Diese Netzwerkeinstellungen würden deinem aktuellen Browser den Schreibzugriff entziehen. Bitte bestätigen, wenn das gewollt ist.',
+              400,
+            )
+            lockoutError.code = 'SELF_LOCKOUT'
+            throw lockoutError
+          }
+        }
+
+        const currentActive = getActive()
+        const nextActive = validated.printers.find(p => p.id === validated.activePrinterId) ?? validated.printers[0]
+        if (nextActive.id !== currentActive.id || nextActive.url !== currentActive.url) {
+          assertNoActiveJobForSwitch()
+        }
+
+        const change = await store.saveSettings(validated)
+        applyRuntimeSettingsChange(change)
+        return json(200, {
+          ...store.getPublicSettings(buildRuntimeMeta(req)),
+          activePrinterChanged: change.activePrinterChanged,
+          printerUrlChanged: change.printerUrlChanged,
+        })
+      }
+
+      const printer = activeUrl()
       if (systemRoute) {
         if (systemSub === 'overview') {
           const [procRes, sysRes, infoRes] = await Promise.all([
@@ -854,6 +1120,7 @@ export function printerMiddleware(req, res, next) {
           const meta = classifyConfigFile(rawEntry)
           return json(200, {
             path: relPath,
+            printerId: getActive().id,
             content: bytes.toString('utf8'),
             size: bytes.length,
             modified: meta?.modified ?? null,
@@ -867,6 +1134,16 @@ export function printerMiddleware(req, res, next) {
           const payload = await readJson(req, MAX_CONFIG_BYTES + 80_000)
           if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
             throw new ControlError('Ungültige Speicheranfrage.', 400)
+          }
+          if (payload.expectedPrinterId !== undefined && payload.expectedPrinterId !== null) {
+            if (String(payload.expectedPrinterId).trim().toLowerCase() !== getActive().id) {
+              const err = new ControlError(
+                'Der aktive Drucker wurde geändert. Speichern abgebrochen, um ein Überschreiben auf dem falschen Drucker zu verhindern.',
+                409,
+              )
+              err.code = 'PRINTER_CHANGED'
+              throw err
+            }
           }
           await probeMachineWriteGuard(true)
           const listRes = await fetch(`${printer}/server/files/list?root=config`, {
@@ -1307,7 +1584,14 @@ export function printerMiddleware(req, res, next) {
       }
 
       const id = camera[1]
+      const target = resolveCameraTarget(id)
+      if (!target) {
+        throw new ControlError('Kamera nicht konfiguriert oder deaktiviert.', 404)
+      }
       if (camera[2] === 'webrtc') {
+        if (!target.webrtcUrl) {
+          throw new ControlError('WebRTC wird für diesen Kameratyp nicht unterstützt.', 404)
+        }
         const data = await readJson(req)
         if (!data || !['request', 'answer', 'remote_candidate'].includes(data.type)) {
           throw new ControlError('Ungültige Kamera-Anfrage.')
@@ -1318,7 +1602,7 @@ export function printerMiddleware(req, res, next) {
             : data.type === 'answer'
               ? { type: 'answer', id: data.id, sdp: data.sdp }
               : { type: 'remote_candidate', id: data.id, candidates: data.candidates }
-        const response = await fetch(`${printer}${cameras[id]}/webrtc`, {
+        const response = await fetchUpstream(target.webrtcUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
@@ -1328,7 +1612,10 @@ export function printerMiddleware(req, res, next) {
         return json(200, await response.json())
       }
 
-      const response = await fetch(`${printer}${cameras[id]}/snapshot`, { signal: AbortSignal.timeout(5000) })
+      if (!target.snapshotUrl) {
+        throw new ControlError('Kein Snapshot-Endpunkt konfiguriert.', 404)
+      }
+      const response = await fetchUpstream(target.snapshotUrl, { signal: AbortSignal.timeout(5000) })
       if (!response.ok || !response.headers.get('content-type')?.startsWith('image/')) {
         throw new Error('Kein Kamerabild verfügbar')
       }
@@ -1344,3 +1631,12 @@ export function printerMiddleware(req, res, next) {
     }
   })()
 }
+
+  return { printerMiddleware, control, getControlState, closeLiveFeed }
+}
+
+const defaultRuntime = createPrinterRuntime()
+export const printerMiddleware = defaultRuntime.printerMiddleware
+export const control = defaultRuntime.control
+export const getControlState = defaultRuntime.getControlState
+export const closeLiveFeed = defaultRuntime.closeLiveFeed

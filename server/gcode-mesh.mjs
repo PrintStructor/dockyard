@@ -563,10 +563,11 @@ export function parseGcodeText(text, options = {}) {
 const meshCache = new Map()
 
 export async function fetchGcodeMeshBinary({ printer, filename, cacheKey = filename, fetchImpl = fetch }) {
-  if (meshCache.has(cacheKey)) {
-    const cached = meshCache.get(cacheKey)
-    meshCache.delete(cacheKey)
-    meshCache.set(cacheKey, cached)
+  const scopedCacheKey = `${printer}|${cacheKey}`
+  if (meshCache.has(scopedCacheKey)) {
+    const cached = meshCache.get(scopedCacheKey)
+    meshCache.delete(scopedCacheKey)
+    meshCache.set(scopedCacheKey, cached)
     return cached
   }
 
@@ -576,6 +577,7 @@ export async function fetchGcodeMeshBinary({ printer, filename, cacheKey = filen
     .join('/')
   const response = await fetchImpl(`${printer}/server/files/gcodes/${encoded}`, {
     signal: AbortSignal.timeout(45_000),
+    redirect: 'error',
   })
   if (!response.ok || !response.body) {
     throw new Error(`G-Code-Datei konnte nicht geladen werden (HTTP ${response.status}).`)
@@ -604,7 +606,7 @@ export async function fetchGcodeMeshBinary({ printer, filename, cacheKey = filen
 
   const binary = encodeGcodeMeshBinary(parser.finalize())
 
-  meshCache.set(cacheKey, binary)
+  meshCache.set(scopedCacheKey, binary)
   while (meshCache.size > MAX_CACHE_ENTRIES) {
     const oldestKey = meshCache.keys().next().value
     meshCache.delete(oldestKey)

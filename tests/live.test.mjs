@@ -238,3 +238,83 @@ test('live feed accelerates LED polling while colors animate and relaxes when st
     feed.close()
   }
 })
+
+test('live feed reconnects dynamically via getPrinter and broadcasts settings events', async () => {
+  const connectedUrls = []
+  let activeUrl = 'http://127.0.0.1:7101'
+
+  class DynamicWS {
+    constructor(url) {
+      this.url = url
+      this.readyState = 1
+      connectedUrls.push(url)
+      setImmediate(() => this.onopen?.())
+    }
+    send(payload) {
+      const msg = JSON.parse(payload)
+      if (msg.id === 1) {
+        setImmediate(() =>
+          this.onmessage?.({
+            data: JSON.stringify({ jsonrpc: '2.0', id: 1, result: { objects: ['toolchanger'] } }),
+          }),
+        )
+      } else if (msg.id === 2) {
+        setImmediate(() =>
+          this.onmessage?.({
+            data: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 2,
+              result: { status: { toolchanger: { status: this.url } } },
+            }),
+          }),
+        )
+      }
+    }
+    close() {
+      this.readyState = 3
+    }
+  }
+
+  const feed = createLiveFeed({
+    getPrinter: () => activeUrl,
+    baseObjects: ['toolchanger'],
+    snapshot: raw => ({ tc: raw.toolchanger?.status }),
+    WebSocketImpl: DynamicWS,
+    ledPollMs: 200,
+    pingIntervalMs: 1000,
+  })
+
+  const events = []
+  const fakeRes = {
+    destroyed: false,
+    writableLength: 0,
+    setHeader() {},
+    flushHeaders() {},
+    write(chunk) {
+      const match = chunk.match(/^event: (\w+)\ndata: (.+)\n\n$/s)
+      if (match) events.push({ event: match[1], data: JSON.parse(match[2]) })
+    },
+    end() {},
+    destroy() {},
+    on() {},
+  }
+
+  try {
+    feed.handle({}, fakeRes)
+    await new Promise(resolve => setTimeout(resolve, 35))
+    assert.equal(connectedUrls[0], 'ws://127.0.0.1:7101/websocket')
+    assert.equal(events.filter(e => e.event === 'status').at(-1)?.data.tc, 'ws://127.0.0.1:7101/websocket')
+
+    activeUrl = 'https://192.168.50.22'
+    feed.emitSettings({ activePrinterId: 'v0', printerUrlChanged: true })
+    feed.reconnect()
+    await new Promise(resolve => setTimeout(resolve, 35))
+
+    assert.ok(events.some(e => e.event === 'settings' && e.data.activePrinterId === 'v0'))
+    assert.ok(events.some(e => e.event === 'offline'))
+    assert.equal(connectedUrls[1], 'wss://192.168.50.22/websocket')
+    assert.equal(events.filter(e => e.event === 'status').at(-1)?.data.tc, 'wss://192.168.50.22/websocket')
+  } finally {
+    feed.close()
+  }
+})

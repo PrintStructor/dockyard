@@ -15,6 +15,7 @@ function colorDataEqual(a, b) {
 
 export function createLiveFeed({
   printer,
+  getPrinter,
   baseObjects,
   snapshot,
   WebSocketImpl = WebSocket,
@@ -23,6 +24,7 @@ export function createLiveFeed({
   ledActiveWindowMs = 2000,
   pingIntervalMs = 2000,
 }) {
+  const resolvePrinter = () => (typeof getPrinter === 'function' ? getPrinter() : printer)
   const clients = new Set()
   let ws = null
   let retry = null
@@ -117,7 +119,8 @@ export function createLiveFeed({
     lastLedChangeAt = 0
     ledPending = 0
 
-    const socket = new WebSocketImpl(printer.replace(/^http/, 'ws') + '/websocket')
+    const targetPrinter = resolvePrinter()
+    const socket = new WebSocketImpl(targetPrinter.replace(/^http/, 'ws') + '/websocket')
     ws = socket
 
     socket.onopen = () => send(1, 'printer.objects.list')
@@ -239,6 +242,16 @@ export function createLiveFeed({
     },
     emitUpdate(payload) {
       if (clients.size && payload) emit('update', payload)
+    },
+    emitSettings(payload) {
+      if (clients.size && payload) emit('settings', payload)
+    },
+    reconnect() {
+      close()
+      if (clients.size) {
+        emit('offline', {})
+        connect()
+      }
     },
     close() {
       for (const res of clients) res.end()

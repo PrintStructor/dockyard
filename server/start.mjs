@@ -3,7 +3,8 @@ import { readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { printerMiddleware, closeLiveFeed } from './printer.mjs'
-import { serverHost, serverPort, printerUrl, printerName, allowedOrigins } from './config.mjs'
+import { serverHost, serverPort } from './config.mjs'
+import { getActivePrinter, getEffectiveAllowedOrigins, isLanOriginAllowed } from './settings.mjs'
 
 const distRoot = path.resolve(fileURLToPath(new URL('../dist', import.meta.url)))
 
@@ -121,10 +122,13 @@ if (isEntrypoint) {
   process.on('SIGTERM', shutdown)
 
   server.listen(serverPort, serverHost, () => {
+    const active = getActivePrinter()
+    const effectiveOrigins = getEffectiveAllowedOrigins()
     const displayHost = serverHost.includes(':') && !serverHost.startsWith('[') ? `[${serverHost}]` : serverHost
-    const nameSuffix = printerName ? ` (${printerName})` : ''
+    const nameSuffix = active.name ? ` (${active.name})` : ''
     console.log(`DOCKYARD${nameSuffix} listening on http://${displayHost}:${serverPort}/`)
-    console.log(`Printer origin: ${printerUrl}`)
-    if (allowedOrigins.length) console.log(`Trusted origins: ${allowedOrigins.join(', ')}`)
+    console.log(`Printer origin: ${active.url}`)
+    if (effectiveOrigins.length) console.log(`Trusted origins: ${effectiveOrigins.join(', ')}`)
+    if (isLanOriginAllowed()) console.log('LAN Meet mode: enabled (private LAN / .local same-origin writes allowed)')
   })
 }

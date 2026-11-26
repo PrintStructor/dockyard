@@ -1102,8 +1102,14 @@ input::placeholder{color:var(--muted);opacity:1}
 .settings-model-slot-head strong{display:block;font-size:12.5px;font-weight:500;color:var(--text)}
 .settings-model-slot-actions{display:flex;align-items:center;gap:6px}
 .settings-model-file{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 9px;border-radius:6px;border:1px solid var(--lime-line);background:var(--lime-tint);font-size:11.5px;color:var(--lime)}
-.settings-model-empty{width:100%;text-align:left;padding:10px 12px;border:1px dashed var(--line-strong);border-radius:6px;font-size:11.5px;color:var(--muted);cursor:pointer;transition:border-color .15s,color .15s,background .15s}
-.settings-model-empty:hover:not(:disabled){border-color:var(--lime-line);color:var(--text);background:var(--surface)}
+.settings-model-unsaved{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 12px;border:1px dashed var(--line-strong);border-radius:var(--radius);background:var(--surface-deep)}
+.settings-upload-label{display:inline-flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
+.settings-upload-label.disabled{opacity:.5;pointer-events:none}
+.settings-model-dropzone{position:relative;display:flex;align-items:center;padding:11px 12px;border:1px dashed var(--line-strong);border-radius:6px;font-size:11.5px;color:var(--muted);cursor:pointer;transition:border-color .15s,color .15s,background .15s;overflow:hidden}
+.settings-model-dropzone.compact{padding:7px 10px;font-size:11px}
+.settings-model-dropzone:hover{border-color:var(--lime-line);color:var(--text);background:var(--surface)}
+.settings-file-overlay{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;z-index:2}
+.settings-file-overlay:disabled{cursor:default}
 .settings-cad-help{margin-top:4px;font-size:12px;color:var(--muted)}
 .settings-cad-help summary{cursor:pointer;color:var(--text);font-weight:500}
 .settings-cad-help p{margin:6px 0 0;line-height:1.45}
@@ -1119,4 +1125,5 @@ input::placeholder{color:var(--muted);opacity:1}
 .app-shell.display-mode .spoolman-clear-btn{min-height:44px;padding:6px 10px}
 .app-shell.display-mode .settings-swatch{width:44px;height:44px}
 .app-shell.display-mode .settings-color-custom{min-height:44px}
-.app-shell.display-mode .settings-model-empty{min-height:44px}
+.app-shell.display-mode .settings-model-dropzone{min-height:44px}
+.app-shell.display-mode .settings-upload-label{min-height:44px}

@@ -1251,5 +1251,10 @@
   "Das 3D-Modell überschreitet selbst nach automatischer Komprimierung das 25-MB-Limit. Bitte in Fusion 360 mit „Kompakt“ exportieren.": "The 3D model still exceeds the 25 MB limit after automatic compression. Please export from Fusion 360 using \"Compact\".",
   "3D-Modell automatisch optimiert ({0} → {1}) und live aktiviert.": "3D model automatically optimized ({0} → {1}) and activated live.",
   "Nur Lesezugriff von diesem Browser-Origin.": "Read-only access from this browser origin.",
-  "Keine Datei erkannt. Falls die Datei in iCloud liegt, bitte zuerst lokal laden oder über „.glb hochladen“ auswählen.": "No file detected. If the file is stored in iCloud, please download it locally first or choose it via \"Upload .glb\"."
+  "Keine Datei erkannt. Falls die Datei in iCloud liegt, bitte zuerst lokal laden oder über „.glb hochladen“ auswählen.": "No file detected. If the file is stored in iCloud, please download it locally first or choose it via \"Upload .glb\".",
+  "Profil jetzt speichern": "Save profile now",
+  "Neue .glb wählen": "Choose new .glb",
+  "Datei auswählen & hochladen": "Choose file & upload",
+  "Andere .glb hier ablegen oder klicken zum Ersetzen": "Drop another .glb here or click to replace",
+  "Datei hier ablegen oder klicken zum Auswählen (.glb · automatische Komprimierung)": "Drop file here or click to browse (.glb · automatic compression)"
 }

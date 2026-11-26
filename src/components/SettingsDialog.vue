@@ -1089,9 +1089,19 @@ watch(
 
                 <div v-if="visibleModelSlots.length" class="settings-field settings-field-full">
                   <span>{{ t('Eigene CAD-Dateien (.glb)') }}</span>
-                  <p v-if="!isPersistedSelectedPrinter" class="settings-hint">
-                    {{ t('Profil zuerst speichern, um eigene .glb-Dateien hochzuladen.') }}
-                  </p>
+                  <div v-if="!isPersistedSelectedPrinter" class="settings-model-unsaved">
+                    <p class="settings-hint">
+                      {{ t('Profil zuerst speichern, um eigene .glb-Dateien hochzuladen.') }}
+                    </p>
+                    <button
+                      type="button"
+                      class="subtle-button"
+                      :disabled="!canWrite || settingsStore.saving.value"
+                      @click="handleSave()"
+                    >
+                      <Check :size="13" />{{ t('Profil jetzt speichern') }}
+                    </button>
+                  </div>
                   <div v-else class="settings-model-slots">
                     <div
                       v-for="slot in visibleModelSlots"
@@ -1109,18 +1119,10 @@ watch(
                           <small class="settings-hint">{{ t(slot.hint) }}</small>
                         </div>
                         <div class="settings-model-slot-actions">
-                          <input
-                            :ref="el => { if (el) modelFileInputs[slot.id] = el }"
-                            type="file"
-                            accept=".glb,model/gltf-binary"
-                            class="sr-only"
-                            @change="onModelFileInputChange(slot.id, $event)"
-                          />
-                          <button
-                            type="button"
-                            class="subtle-button"
-                            :disabled="!canWrite || Boolean(modelUploadState[slot.id])"
-                            @click="triggerModelFilePicker(slot.id)"
+                          <label
+                            :for="`dockyard-model-input-${slot.id}`"
+                            class="subtle-button settings-upload-label"
+                            :class="{ disabled: !canWrite || Boolean(modelUploadState[slot.id]) }"
                           >
                             <Upload :size="13" />
                             {{
@@ -1129,10 +1131,10 @@ watch(
                                 : modelUploadState[slot.id] === 'uploading'
                                   ? t('Lade hoch …')
                                   : customSlotMeta(slot.id)
-                                    ? t('Ersetzen')
-                                    : t('.glb hochladen')
+                                    ? t('Neue .glb wählen')
+                                    : t('Datei auswählen & hochladen')
                             }}
-                          </button>
+                          </label>
                           <button
                             v-if="customSlotMeta(slot.id)"
                             type="button"
@@ -1150,15 +1152,24 @@ watch(
                         <span>{{ customSlotMeta(slot.id).filename }}</span>
                         <span>{{ formatBytes(customSlotMeta(slot.id).bytes) }}</span>
                       </div>
-                      <button
-                        v-else
-                        type="button"
-                        class="settings-model-empty"
-                        :disabled="!canWrite || Boolean(modelUploadState[slot.id])"
-                        @click="triggerModelFilePicker(slot.id)"
-                      >
-                        {{ t('Datei hier ablegen oder .glb auswählen (große Exporte werden automatisch komprimiert).') }}
-                      </button>
+                      <div class="settings-model-dropzone" :class="{ compact: Boolean(customSlotMeta(slot.id)) }">
+                        <input
+                          :id="`dockyard-model-input-${slot.id}`"
+                          :ref="el => { if (el) modelFileInputs[slot.id] = el }"
+                          type="file"
+                          class="settings-file-overlay"
+                          :disabled="!canWrite || Boolean(modelUploadState[slot.id])"
+                          :aria-label="t(slot.title)"
+                          @change="onModelFileInputChange(slot.id, $event)"
+                        />
+                        <span>
+                          {{
+                            customSlotMeta(slot.id)
+                              ? t('Andere .glb hier ablegen oder klicken zum Ersetzen')
+                              : t('Datei hier ablegen oder klicken zum Auswählen (.glb · automatische Komprimierung)')
+                          }}
+                        </span>
+                      </div>
                     </div>
                   </div>
                   <p

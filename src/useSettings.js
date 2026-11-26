@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 
 const MAX_PRINTERS = 20
 const ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/
+const MODEL_PRESETS = ['auto', 'stormtrooper-6tc', 'none']
 
 const settings = ref(null)
 const loaded = ref(false)
@@ -66,6 +67,11 @@ function cloneCamera(cam, idx) {
   return out
 }
 
+function cloneModel(model) {
+  const presetRaw = String(model?.preset ?? 'auto').trim().toLowerCase()
+  return { preset: MODEL_PRESETS.includes(presetRaw) ? presetRaw : 'auto' }
+}
+
 function clonePrinterProfile(profile, idx = 0) {
   const name = String(profile?.name ?? '').trim().slice(0, 40)
   const url = String(profile?.url ?? '').trim()
@@ -75,6 +81,7 @@ function clonePrinterProfile(profile, idx = 0) {
     subtitle: String(profile?.subtitle ?? '').trim().slice(0, 64),
     url,
     mainsailUrl: String(profile?.mainsailUrl ?? 'auto').trim() || 'auto',
+    model: cloneModel(profile?.model),
     cameras: Array.isArray(profile?.cameras) ? profile.cameras.map(cloneCamera) : [],
   }
 }

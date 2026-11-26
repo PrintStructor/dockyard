@@ -5,11 +5,13 @@ import os from 'node:os'
 import path from 'node:path'
 
 import {
+  MODEL_PRESETS,
   normalizePrinterOrigin,
   isBlockedUpstreamHost,
   isPrivateLanHostname,
   normalizeCamera,
   normalizeMainsailSetting,
+  normalizeModelSetting,
   slugifyId,
   validateSettingsPayload,
   createSettingsStore,
@@ -277,4 +279,37 @@ test('createSettingsStore serializes concurrent commits cleanly without tmp race
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('normalizeModelSetting and validateSettingsPayload default missing model to auto and reject invalid presets', () => {
+  assert.deepEqual(MODEL_PRESETS, ['auto', 'stormtrooper-6tc', 'none'])
+  assert.deepEqual(normalizeModelSetting(undefined), { preset: 'auto' })
+  assert.deepEqual(normalizeModelSetting({}), { preset: 'auto' })
+  assert.deepEqual(normalizeModelSetting({ preset: 'stormtrooper-6tc' }), { preset: 'stormtrooper-6tc' })
+  assert.deepEqual(normalizeModelSetting({ preset: 'none' }), { preset: 'none' })
+  assert.throws(() => normalizeModelSetting({ preset: 'bogus' }), /Modell|Preset/i)
+  assert.throws(() => normalizeModelSetting('invalid'), /Modell/i)
+
+  const validated = validateSettingsPayload({
+    activePrinterId: 'v01',
+    printers: [
+      { id: 'v01', name: 'V0.1', url: 'http://192.168.1.60', cameras: [] },
+      { id: 'st', name: 'ST', url: 'http://192.168.1.50', model: { preset: 'stormtrooper-6tc' }, cameras: [] },
+      { id: 'trident', name: 'Trident', url: 'http://192.168.1.61', model: { preset: 'none' }, cameras: [] },
+    ],
+    network: { allowedOrigins: [], allowLanOrigins: false },
+  })
+  assert.deepEqual(validated.printers[0].model, { preset: 'auto' })
+  assert.deepEqual(validated.printers[1].model, { preset: 'stormtrooper-6tc' })
+  assert.deepEqual(validated.printers[2].model, { preset: 'none' })
+
+  assert.throws(
+    () =>
+      validateSettingsPayload({
+        activePrinterId: 'bad',
+        printers: [{ id: 'bad', name: 'Bad', url: 'http://192.168.1.70', model: { preset: 'bogus' }, cameras: [] }],
+        network: {},
+      }),
+    /Modell|Preset/i,
+  )
 })

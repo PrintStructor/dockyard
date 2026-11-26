@@ -242,3 +242,43 @@ test('ConfigEditor locks dirty buffer non-destructively on printer switch and re
     globalThis.fetch = originalFetch
   }
 })
+
+test('printer export/import and merge preserve model.preset and default legacy profiles to auto', () => {
+  const exported = buildPrintersExport({
+    activePrinterId: 'st',
+    printers: [
+      {
+        id: 'st',
+        name: 'STORMTROOPER',
+        url: 'http://192.168.1.10',
+        model: { preset: 'stormtrooper-6tc' },
+        cameras: [],
+      },
+      {
+        id: 'v01',
+        name: 'V0.1',
+        url: 'http://192.168.1.11',
+        model: { preset: 'none' },
+        cameras: [],
+      },
+      {
+        id: 'legacy',
+        name: 'Legacy',
+        url: 'http://192.168.1.12',
+        cameras: [],
+      },
+    ],
+  })
+  assert.deepEqual(exported.printers[0].model, { preset: 'stormtrooper-6tc' })
+  assert.deepEqual(exported.printers[1].model, { preset: 'none' })
+  assert.deepEqual(exported.printers[2].model, { preset: 'auto' })
+
+  const parsed = parsePrintersImport(JSON.stringify(exported))
+  assert.deepEqual(parsed.printers[0].model, { preset: 'stormtrooper-6tc' })
+  assert.deepEqual(parsed.printers[1].model, { preset: 'none' })
+  assert.deepEqual(parsed.printers[2].model, { preset: 'auto' })
+
+  const merged = mergePrinterProfiles([exported.printers[0]], [parsed.printers[1]], 'merge', 'st')
+  assert.deepEqual(merged.printers.find(p => p.id === 'st').model, { preset: 'stormtrooper-6tc' })
+  assert.deepEqual(merged.printers.find(p => p.id === 'v01').model, { preset: 'none' })
+})

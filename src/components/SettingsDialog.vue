@@ -110,6 +110,17 @@ const cameraTransportOptions = computed(() => [
   { value: 'mjpeg', label: t('MJPEG-Stream') },
 ])
 
+const modelPresetOptions = computed(() => [
+  { value: 'auto', label: t('Automatisch (Standard)') },
+  { value: 'stormtrooper-6tc', label: t('STORMTROOPER 6-Toolchanger (3D CAD)') },
+  { value: 'none', label: t('Kompakt (ohne 3D-Szene)') },
+])
+
+function cloneModelDraft(model) {
+  const preset = String(model?.preset ?? 'auto').trim().toLowerCase()
+  return { preset: ['auto', 'stormtrooper-6tc', 'none'].includes(preset) ? preset : 'auto' }
+}
+
 const canWrite = computed(() => settingsStore.runtime.value?.canWrite !== false)
 const envAllowLan = computed(() => Boolean(settingsStore.network.value?.envAllowLanOrigins))
 const envAllowedOrigins = computed(() => settingsStore.network.value?.envAllowedOrigins ?? [])
@@ -122,6 +133,7 @@ function cloneDraftFromStore() {
     subtitle: p.subtitle ?? '',
     url: p.url,
     mainsailUrl: p.mainsailUrl || 'auto',
+    model: cloneModelDraft(p.model),
     cameras: (p.cameras ?? []).map(c => ({
       id: c.id,
       name: c.name,
@@ -219,6 +231,7 @@ function addPrinter() {
     subtitle: 'VORON',
     url: 'http://192.168.1.100',
     mainsailUrl: 'auto',
+    model: { preset: 'auto' },
     cameras: [
       {
         id: 'webcam',
@@ -245,6 +258,7 @@ function duplicatePrinter(printer) {
     ...printer,
     id,
     name: copyName,
+    model: cloneModelDraft(printer.model),
     cameras: printer.cameras.map(c => ({ ...c })),
   })
   selectedPrinterId.value = id
@@ -434,6 +448,7 @@ function applyImportToDraft() {
     )
     draft.value.printers = merged.printers.map(p => ({
       ...p,
+      model: cloneModelDraft(p.model),
       cameras: (p.cameras ?? []).map(c => ({
         id: c.id,
         name: c.name,
@@ -468,6 +483,7 @@ function buildSavePayload(confirmSelfLockout = false) {
       subtitle: p.subtitle.trim(),
       url: p.url.trim(),
       mainsailUrl: p.mainsailUrl.trim() || 'auto',
+      model: cloneModelDraft(p.model),
       cameras: p.cameras.map(c => {
         const cam = {
           id: c.id,
@@ -822,6 +838,19 @@ watch(
                     <span class="settings-mono">{{ resolvedMainsailPreview }}</span>
                   </small>
                 </label>
+
+                <div class="settings-field settings-field-full">
+                  <span>{{ t('3D-Ansicht / Modell') }}</span>
+                  <CockpitSelect
+                    v-model="selectedPrinter.model.preset"
+                    :options="modelPresetOptions"
+                    :disabled="!canWrite"
+                    :aria-label="t('3D-Ansicht / Modell')"
+                  />
+                  <small class="settings-hint">
+                    {{ t('„Automatisch“ zeigt die 3D-Szene nur bei Toolchangern und nutzt für Single-Tool-Drucker die kompakte Live-Übersicht.') }}
+                  </small>
+                </div>
               </div>
             </div>
           </section>

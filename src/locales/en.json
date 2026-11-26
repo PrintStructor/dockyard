@@ -1088,5 +1088,22 @@
   "Verbindungsfehler beim Druckerwechsel.": "Connection error while switching printers.",
   "Verbindungstest fehlgeschlagen.": "Connection test failed.",
   "Import fehlgeschlagen.": "Import failed.",
-  "Import konnte nicht angewendet werden.": "Import could not be applied."
+  "Import konnte nicht angewendet werden.": "Import could not be applied.",
+  "3D-Ansicht / Modell": "3D view / model",
+  "Automatisch (Standard)": "Automatic (default)",
+  "STORMTROOPER 6-Toolchanger (3D CAD)": "STORMTROOPER 6-Toolchanger (3D CAD)",
+  "Kompakt (ohne 3D-Szene)": "Compact (no 3D scene)",
+  "„Automatisch“ zeigt die 3D-Szene nur bei Toolchangern und nutzt für Single-Tool-Drucker die kompakte Live-Übersicht.": "\"Automatic\" shows the 3D scene only for toolchangers and uses the compact live overview for single-tool printers.",
+  "Ungültige 3D-Modell-Konfiguration.": "Invalid 3D model configuration.",
+  "Ungültiges 3D-Modell-Preset.": "Invalid 3D model preset.",
+  "Bauteillüfter": "Part cooling fan",
+  "Z-Tilt ist nicht konfiguriert.": "Z-Tilt is not configured.",
+  "Z-Tilt ausrichten": "Run Z-Tilt adjust",
+  "Gemeinsames Heizen ist nur bei mehreren Werkzeugen verfügbar.": "Heating all tools at once is only available with multiple tools.",
+  "Nur für Toolchanger verfügbar.": "Only available for toolchangers.",
+  "Extruder auf {0} °C": "Extruder to {0} °C",
+  "Filament laden": "Load filament",
+  "Filament entladen": "Unload filament",
+  "Nozzle Clean": "Nozzle clean",
+  "Purge": "Purge"
 }

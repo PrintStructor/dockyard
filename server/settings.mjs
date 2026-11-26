@@ -18,6 +18,7 @@ const MAX_PRINTERS = 20
 const MAX_CAMERAS = 6
 const MAX_ALLOWED_ORIGINS = 24
 const ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/
+export const MODEL_PRESETS = ['auto', 'stormtrooper-6tc', 'none']
 
 const DEFAULT_SUBTITLE = 'VORON 2.4 / 6-Toolchanger'
 const BLOCKED_HOSTS = new Set([
@@ -274,6 +275,18 @@ export function normalizeCamera(raw, index = 0) {
   return { id, name, description, service, url, snapshotUrl, enabled, preferredMode }
 }
 
+export function normalizeModelSetting(raw) {
+  if (raw == null) return { preset: 'auto' }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('Ungültige 3D-Modell-Konfiguration.')
+  }
+  const presetRaw = raw.preset == null ? 'auto' : String(raw.preset).trim().toLowerCase()
+  if (!MODEL_PRESETS.includes(presetRaw)) {
+    throw new Error('Ungültiges 3D-Modell-Preset.')
+  }
+  return { preset: presetRaw }
+}
+
 function normalizePrinterProfile(raw, index, usedIds) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error('Ungültiges Druckerprofil.')
@@ -286,6 +299,7 @@ function normalizePrinterProfile(raw, index, usedIds) {
 
   const url = normalizePrinterOrigin(raw.url)
   const mainsailUrl = normalizeMainsailSetting(raw.mainsailUrl)
+  const model = normalizeModelSetting(raw.model)
   const rawId = typeof raw.id === 'string' && raw.id.trim() ? raw.id.trim().toLowerCase() : slugifyId(name, `printer-${index + 1}`)
   const id = uniqueId(rawId, usedIds)
 
@@ -300,7 +314,7 @@ function normalizePrinterProfile(raw, index, usedIds) {
     return normalized
   })
 
-  return { id, name, subtitle: subtitleRaw, url, mainsailUrl, cameras }
+  return { id, name, subtitle: subtitleRaw, url, mainsailUrl, model, cameras }
 }
 
 function normalizeAllowedOriginList(rawList) {
@@ -377,6 +391,7 @@ function bootstrapFromEnv(env) {
         subtitle: DEFAULT_SUBTITLE,
         url,
         mainsailUrl,
+        model: { preset: 'auto' },
         cameras: createDefaultCameras(),
       },
     ],

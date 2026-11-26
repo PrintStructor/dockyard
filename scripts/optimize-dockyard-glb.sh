@@ -80,11 +80,13 @@ mkdir -p "$(dirname "${OUTPUT}")"
 BEFORE_BYTES=$(wc -c < "${INPUT}" | tr -d ' ')
 echo "==> Optimizing ${INPUT} (preset=${PRESET}, ratio=${RATIO}, error=${ERROR})..."
 
-# --flatten false, --join false, and --prune false preserve named live nodes & empty anchors (VORON_ACCENT, LED_*, NOZZLE_TIP, FILAMENT_INLET).
+# --flatten false, --join false, --palette false, and --prune false preserve
+# solid material colors, named live nodes & empty anchors (VORON_ACCENT, LED_*, NOZZLE_TIP, FILAMENT_INLET).
 npx --yes @gltf-transform/cli@4.5.1 optimize "${INPUT}" "${OUTPUT}" \
   --compress meshopt \
   --flatten false \
   --join false \
+  --palette false \
   --prune false \
   --simplify \
   --simplify-ratio "${RATIO}" \

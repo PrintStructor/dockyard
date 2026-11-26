@@ -175,6 +175,62 @@ class _MockXrefBody:
 key = mod._safe_body_key(_MockXrefBody(), 'fallback')
 assert key == ('xref', 'comp-xref-42', 'Body1', 1.25, 6.5), key
 
+# Verify occurrence appearance override & non-white shader property precedence
+class _Color:
+    def __init__(self, r, g, b):
+        self.red, self.green, self.blue = r, g, b
+
+class _Prop:
+    def __init__(self, pid, name, rgb, tex=False):
+        self.id = pid
+        self.name = name
+        self.value = _Color(*rgb)
+        self.hasConnectedTexture = tex
+
+class _Props:
+    def __init__(self, items):
+        self._items = items
+    def itemByName(self, n):
+        return next((p for p in self._items if p.name == n), None)
+    def itemById(self, pid):
+        return next((p for p in self._items if p.id == pid), None)
+    def __iter__(self):
+        return iter(self._items)
+
+class _App:
+    def __init__(self, aid, name, props):
+        self.id = aid
+        self.name = name
+        self.appearanceProperties = _Props(props)
+
+class _OccWithApp:
+    def __init__(self, appearance=None, parent=None):
+        self.appearance = appearance
+        self.assemblyContext = parent
+
+class _BodyWithApp:
+    def __init__(self, appearance=None):
+        self.appearance = appearance
+
+white_body = _BodyWithApp(_App('a-white', 'ABS (White)', [_Prop('opaque_albedo', 'Color', (255, 255, 255))]))
+black_occ = _OccWithApp(
+    appearance=_App(
+        'a-black',
+        'Aluminum - Anodized Glossy (Black)',
+        [_Prop('opaque_albedo', 'Color', (255, 255, 255), tex=True), _Prop('metal_f0', 'Reflectance', (22, 24, 26))],
+    )
+)
+rgba_black, name_black = mod._extract_appearance_rgba(white_body, black_occ, {})
+assert name_black == 'Aluminum - Anodized Glossy (Black)'
+assert rgba_black[0] < 0.05 and rgba_black[1] < 0.05 and rgba_black[2] < 0.05, rgba_black
+
+# Verify name fallback when textured library material only reports white
+tex_only_occ = _OccWithApp(
+    appearance=_App('a-tex-black', 'Carbon Fiber - Plain', [_Prop('opaque_albedo', 'Color', (255, 255, 255), tex=True)])
+)
+rgba_cf, _ = mod._extract_appearance_rgba(white_body, tex_only_occ, {})
+assert rgba_cf[0] < 0.06 and rgba_cf[1] < 0.06 and rgba_cf[2] < 0.06, rgba_cf
+
 glb = mod.build_glb_bytes([
   {
     'name': 'AcrylPanel',
@@ -208,6 +264,11 @@ sys.stdout.write(base64.b64encode(glb).decode('ascii'))
     assert.equal(png.readUInt32BE(16), expected, `${file} width must be ${expected}`)
     assert.equal(png.readUInt32BE(20), expected, `${file} height must be ${expected}`)
   }
+
+  // Verify optimizer keeps --palette false and --prune false so colors and live tags survive
+  const optSrc = await readFile(path.join(ROOT, 'scripts/optimize-dockyard-glb.sh'), 'utf8')
+  assert.match(optSrc, /--palette false/)
+  assert.match(optSrc, /--prune false/)
 
   // Verify installer script syntax and installation into an isolated temp directory
   execFileSync('bash', ['-n', INSTALL_ADDIN_SCRIPT], { stdio: 'pipe' })

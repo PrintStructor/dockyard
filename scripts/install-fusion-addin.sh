@@ -26,6 +26,7 @@ trap 'rm -rf "${TMP_DIR}"' EXIT
 
 cp -R "${SRC_DIR}/." "${TMP_DIR}/"
 rm -rf "${TMP_DIR}/__pycache__"
+printf '%s\n' "${ROOT_DIR}/scripts/optimize-dockyard-glb.sh" > "${TMP_DIR}/.dockyard-optimizer-path"
 chmod 755 "${TMP_DIR}"
 
 rm -rf "${TARGET_DIR}"

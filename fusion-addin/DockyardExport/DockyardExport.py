@@ -334,14 +334,110 @@ def _safe_transform_array(occ):
     return None
 
 
-def _extract_appearance_rgba(body, appearance_cache):
+def infer_color_from_appearance_name(app_name):
+    """Fallback linear RGBA for texture-driven Autodesk library appearances whose scalar RGB is white."""
+    lower = str(app_name or "").lower()
+    if not lower:
+        return None
+    if is_transparent_appearance(lower):
+        return (0.18, 0.28, 0.32, 0.14)
+    if any(k in lower for k in ("white", "weiß", "weiss", "ivory", "snow")):
+        return None
+    if any(k in lower for k in ("black", "schwarz", "carbon", "ebony", "obsidian", "graphite", "anthrazit")):
+        return (0.032, 0.035, 0.040, 1.0)
+    if any(k in lower for k in ("lime", "neon green", "acid")):
+        return (0.12, 0.88, 0.05, 1.0)
+    if any(k in lower for k in ("green", "grün", "gruen")):
+        return (0.05, 0.48, 0.08, 1.0)
+    if any(k in lower for k in ("red", "rot", "crimson")):
+        return (0.62, 0.05, 0.05, 1.0)
+    if any(k in lower for k in ("blue", "blau", "cobalt")):
+        return (0.05, 0.20, 0.68, 1.0)
+    if any(k in lower for k in ("gold", "brass", "messing", "bronze", "copper", "kupfer", "pei")):
+        return (0.76, 0.48, 0.12, 1.0)
+    if any(k in lower for k in ("orange", "amber")):
+        return (0.82, 0.28, 0.03, 1.0)
+    if any(k in lower for k in ("yellow", "gelb")):
+        return (0.86, 0.72, 0.06, 1.0)
+    if any(k in lower for k in ("grey", "gray", "grau", "titanium", "gunmetal")):
+        return (0.18, 0.20, 0.22, 1.0)
+    if any(k in lower for k in ("steel", "aluminum", "aluminium", "chrome", "chrom", "silver", "silber", "stainless", "nickel")):
+        return (0.46, 0.49, 0.53, 1.0)
+    return None
+
+
+def _resolve_body_appearance(body, occ=None):
+    """Resolve Fusion's effective appearance: occurrence overrides -> body -> native -> component material."""
+    # Walk from innermost occurrence up to root assembly for occurrence-level overrides
+    cur = occ
+    visited = set()
+    while cur is not None and id(cur) not in visited:
+        visited.add(id(cur))
+        try:
+            occ_app = getattr(cur, "appearance", None)
+            if occ_app is not None:
+                return occ_app
+        except Exception:
+            pass
+        try:
+            cur = getattr(cur, "assemblyContext", None)
+        except Exception:
+            cur = None
+
+    try:
+        body_app = getattr(body, "appearance", None)
+        body_src = getattr(body, "appearanceSourceType", None)
+        is_body_override = adsk is not None and body_src in (
+            adsk.core.AppearanceSourceTypes.OverrideAppearanceSource,
+            adsk.core.AppearanceSourceTypes.BodyAppearanceSource,
+        )
+        if body_app is not None and is_body_override:
+            return body_app
+    except Exception:
+        body_app = None
+
+    # Check first face for face-level appearance override when body itself has no override
+    try:
+        faces = getattr(body, "faces", None)
+        if faces and faces.count > 0:
+            face0 = faces.item(0)
+            face_src = getattr(face0, "appearanceSourceType", None)
+            if adsk is not None and face_src in (
+                adsk.core.AppearanceSourceTypes.OverrideAppearanceSource,
+                adsk.core.AppearanceSourceTypes.FaceAppearanceSource,
+            ):
+                face_app = getattr(face0, "appearance", None)
+                if face_app is not None:
+                    return face_app
+    except Exception:
+        pass
+
+    if body_app is not None:
+        return body_app
+
+    native = _safe_native(body)
+    if native is not body:
+        try:
+            nat_app = getattr(native, "appearance", None)
+            if nat_app is not None:
+                return nat_app
+        except Exception:
+            pass
+
+    if occ is not None:
+        try:
+            mat = getattr(getattr(occ, "component", None), "material", None)
+            if mat is not None and getattr(mat, "appearance", None) is not None:
+                return mat.appearance
+        except Exception:
+            pass
+    return None
+
+
+def _extract_appearance_rgba(body, occ, appearance_cache):
     default = (0.18, 0.21, 0.24, 1.0)
     try:
-        appearance = getattr(body, "appearance", None)
-        if not appearance:
-            native = _safe_native(body)
-            if native is not body:
-                appearance = getattr(native, "appearance", None)
+        appearance = _resolve_body_appearance(body, occ)
         if not appearance:
             return default, ""
         try:
@@ -352,35 +448,74 @@ def _extract_appearance_rgba(body, appearance_cache):
             return appearance_cache[app_id]
 
         app_name = getattr(appearance, "name", "") or ""
-        rgba = None
+        if is_transparent_appearance(app_name):
+            result = ((0.18, 0.28, 0.32, 0.14), app_name)
+            appearance_cache[app_id] = result
+            return result
+
+        props = appearance.appearanceProperties
+        ordered_props = []
+        seen_prop_ids = set()
+
+        def push_prop(prop):
+            if not prop:
+                return
+            cprop = adsk.core.ColorProperty.cast(prop) if adsk is not None else prop
+            if not cprop or not getattr(cprop, "value", None):
+                return
+            pid = getattr(cprop, "id", None) or getattr(cprop, "name", None) or id(cprop)
+            if pid in seen_prop_ids:
+                return
+            seen_prop_ids.add(pid)
+            ordered_props.append(cprop)
+
+        try:
+            push_prop(props.itemByName("Color"))
+        except Exception:
+            pass
         for prop_id in (
             "opaque_albedo",
-            "metal_f0",
             "surface_albedo",
+            "layered_diffuse",
+            "metal_f0",
+            "prism_opaque",
             "generic_diffuse",
+            "plastic_color",
+            "paint_color",
             "transparent_color",
             "glazing_transmittance",
         ):
-            prop = appearance.appearanceProperties.itemById(prop_id)
-            if prop and isinstance(prop, adsk.core.ColorProperty) and prop.value:
-                c = prop.value
-                rgba = (_srgb_byte_to_linear(c.red), _srgb_byte_to_linear(c.green), _srgb_byte_to_linear(c.blue), 1.0)
+            try:
+                push_prop(props.itemById(prop_id))
+            except Exception:
+                pass
+        try:
+            for prop in props:
+                if adsk is None or isinstance(prop, adsk.core.ColorProperty):
+                    push_prop(prop)
+        except Exception:
+            pass
+
+        rgba = None
+        pure_white_textured = False
+        for cprop in ordered_props:
+            c = cprop.value
+            cand = (_srgb_byte_to_linear(c.red), _srgb_byte_to_linear(c.green), _srgb_byte_to_linear(c.blue), 1.0)
+            has_tex = bool(getattr(cprop, "hasConnectedTexture", False))
+            is_pure_white = c.red >= 252 and c.green >= 252 and c.blue >= 252
+            if not has_tex and not is_pure_white:
+                rgba = cand
                 break
-        if rgba is None:
-            for prop in appearance.appearanceProperties:
-                if isinstance(prop, adsk.core.ColorProperty) and prop.value:
-                    c = prop.value
-                    rgba = (
-                        _srgb_byte_to_linear(c.red),
-                        _srgb_byte_to_linear(c.green),
-                        _srgb_byte_to_linear(c.blue),
-                        1.0,
-                    )
-                    break
+            if rgba is None:
+                rgba = cand
+                pure_white_textured = has_tex or is_pure_white
+
+        if rgba is None or pure_white_textured:
+            inferred = infer_color_from_appearance_name(app_name)
+            if inferred is not None:
+                rgba = inferred
         if rgba is None:
             rgba = default
-        if is_transparent_appearance(app_name):
-            rgba = (0.18, 0.28, 0.32, 0.14)
 
         result = (rgba, app_name)
         appearance_cache[app_id] = result
@@ -390,7 +525,7 @@ def _extract_appearance_rgba(body, appearance_cache):
 
 
 def _collect_target_bodies(design, slot, ui):
-    targets = []  # list of (body, transform_array, leaf_label, full_label)
+    targets = []  # list of (body, occ, transform_array, leaf_label, full_label)
     if slot == "toolhead" and ui.activeSelections.count > 0:
         seen = set()
         for i in range(ui.activeSelections.count):
@@ -414,7 +549,7 @@ def _collect_target_bodies(design, slot, ui):
                             if bkey in seen:
                                 continue
                             seen.add(bkey)
-                            targets.append((b, mat, f"{sub.name} {b.name}", f"{full_path} {b.name}"))
+                            targets.append((b, sub, mat, f"{sub.name} {b.name}", f"{full_path} {b.name}"))
                         except Exception:
                             continue
             elif isinstance(ent, adsk.fusion.BRepBody):
@@ -428,7 +563,7 @@ def _collect_target_bodies(design, slot, ui):
                         continue
                     seen.add(bkey)
                     mat = _safe_transform_array(ctx)
-                    targets.append((ent, mat, ent.name, f"{full_path} {ent.name}".strip()))
+                    targets.append((ent, ctx, mat, ent.name, f"{full_path} {ent.name}".strip()))
                 except Exception:
                     continue
         if targets:
@@ -438,7 +573,7 @@ def _collect_target_bodies(design, slot, ui):
     for b in root.bRepBodies:
         try:
             if b.isVisible:
-                targets.append((b, None, b.name, b.name))
+                targets.append((b, None, None, b.name, b.name))
         except Exception:
             continue
     for occ in root.allOccurrences:
@@ -452,7 +587,7 @@ def _collect_target_bodies(design, slot, ui):
             for b in occ.bRepBodies:
                 try:
                     if b.isVisible:
-                        targets.append((b, mat, f"{occ.name} {b.name}", f"{full_path} {b.name}"))
+                        targets.append((b, occ, mat, f"{occ.name} {b.name}", f"{full_path} {b.name}"))
                 except Exception:
                     continue
         except Exception:
@@ -493,6 +628,18 @@ def _detect_default_up_axis(app):
     except Exception:
         pass
     return "z"
+
+
+def _resolve_optimizer_cmd():
+    hint = os.path.join(_ADDIN_DIR, ".dockyard-optimizer-path")
+    try:
+        if os.path.isfile(hint):
+            p = open(hint, encoding="utf-8").read().strip()
+            if p:
+                return f'"{p}"'
+    except Exception:
+        pass
+    return "./scripts/optimize-dockyard-glb.sh"
 
 
 def _reveal_in_finder(path):
@@ -538,7 +685,7 @@ def _execute_export(app, ui, slot, up_axis, quality_mode, skip_fasteners, out_di
     progress.show(_CMD_NAME, "Verarbeite Körper %v von %m …", 0, len(targets), 0)
 
     try:
-        for idx_body, (body, mat, leaf_label, full_label) in enumerate(targets):
+        for idx_body, (body, occ, mat, leaf_label, full_label) in enumerate(targets):
             if idx_body % 10 == 0:
                 progress.progressValue = idx_body
                 adsk.doEvents()
@@ -550,7 +697,7 @@ def _execute_export(app, ui, slot, up_axis, quality_mode, skip_fasteners, out_di
                 skipped += 1
                 continue
 
-            rgba, app_name = _extract_appearance_rgba(body, appearance_cache)
+            rgba, app_name = _extract_appearance_rgba(body, occ, appearance_cache)
             role = detect_dockyard_role(full_label, app_name)
             color_key = tuple(round(c, 2) for c in rgba)
             group_key = (role, color_key)
@@ -691,7 +838,7 @@ def _execute_export(app, ui, slot, up_axis, quality_mode, skip_fasteners, out_di
     if size_mb > 5.0:
         msg += (
             f"\n\nTipp für noch schnelleres Laden auf dem Raspberry Pi:\n"
-            f'./scripts/optimize-dockyard-glb.sh "{out_path}" --preset {slot}'
+            f'{_resolve_optimizer_cmd()} "{out_path}" --preset {slot}'
         )
     ui.messageBox(msg, _CMD_NAME)
 

@@ -213,6 +213,7 @@ class _BodyWithApp:
         self.appearance = appearance
 
 white_body = _BodyWithApp(_App('a-white', 'ABS (White)', [_Prop('opaque_albedo', 'Color', (255, 255, 255))]))
+none_body = _BodyWithApp(None)
 black_occ = _OccWithApp(
     appearance=_App(
         'a-black',
@@ -220,7 +221,7 @@ black_occ = _OccWithApp(
         [_Prop('opaque_albedo', 'Color', (255, 255, 255), tex=True), _Prop('metal_f0', 'Reflectance', (22, 24, 26))],
     )
 )
-rgba_black, name_black = mod._extract_appearance_rgba(white_body, black_occ, {})
+rgba_black, name_black = mod._extract_appearance_rgba(none_body, black_occ, {})
 assert name_black == 'Aluminum - Anodized Glossy (Black)'
 assert rgba_black[0] < 0.05 and rgba_black[1] < 0.05 and rgba_black[2] < 0.05, rgba_black
 
@@ -228,7 +229,7 @@ assert rgba_black[0] < 0.05 and rgba_black[1] < 0.05 and rgba_black[2] < 0.05, r
 tex_only_occ = _OccWithApp(
     appearance=_App('a-tex-black', 'Carbon Fiber - Plain', [_Prop('opaque_albedo', 'Color', (255, 255, 255), tex=True)])
 )
-rgba_cf, _ = mod._extract_appearance_rgba(white_body, tex_only_occ, {})
+rgba_cf, _ = mod._extract_appearance_rgba(none_body, tex_only_occ, {})
 assert rgba_cf[0] < 0.06 and rgba_cf[1] < 0.06 and rgba_cf[2] < 0.06, rgba_cf
 
 # Verify explicit non-textured solid white does NOT fall through to secondary yellow shader properties
@@ -239,27 +240,30 @@ solid_white_with_emissive = _OccWithApp(
         [_Prop('opaque_albedo', 'Color', (255, 255, 255), tex=False), _Prop('emissive_color', 'Emissive', (255, 255, 0), tex=False)],
     )
 )
-rgba_white, _ = mod._extract_appearance_rgba(white_body, solid_white_with_emissive)
+rgba_white, _ = mod._extract_appearance_rgba(none_body, solid_white_with_emissive)
 assert rgba_white == (1.0, 1.0, 1.0, 1.0), rgba_white
 
-# Verify Fusion 2706 direct Appearance.color AND zero cache collisions when appearance.id is empty
+# Verify Fusion 2706 direct Appearance.color: body appearance wins over stale parent STEP occurrence,
+# empty appearance.id never collides, and opacity=0 on metals stays opaque (alpha=1.0).
 class _DirectColor:
-    def __init__(self, r, g, b, opacity=255):
+    def __init__(self, r, g, b, opacity=0):
         self.red, self.green, self.blue, self.opacity = r, g, b, opacity
 
 class _DirectApp:
     def __init__(self, name, rgba):
-        self.id = ''  # colliding/empty XRef id must never poison subsequent bodies
+        self.id = ''
         self.name = name
         self.color = _DirectColor(*rgba)
         self.hasTexture = False
 
-occ_extrusion = _OccWithApp(appearance=_DirectApp('Anodized Black', (18, 20, 22, 255)))
-occ_skirt = _OccWithApp(appearance=_DirectApp('Acid Lime ABS', (70, 255, 0, 255)))
-rgba_ex, _ = mod._extract_appearance_rgba(white_body, occ_extrusion)
-rgba_sk, _ = mod._extract_appearance_rgba(white_body, occ_skirt)
-assert rgba_ex[0] < 0.02 and rgba_ex[1] < 0.02 and rgba_ex[2] < 0.02, rgba_ex
-assert rgba_sk[1] > 0.9 and rgba_sk[0] < 0.1, rgba_sk
+stale_yellow_parent = _OccWithApp(appearance=_DirectApp('Opaque(255,255,0)', (255, 255, 0, 255)))
+metal_body = _BodyWithApp(_DirectApp('Stainless Steel - Cast', (198, 198, 198, 0)))
+black_body = _BodyWithApp(_DirectApp('Anodized Black', (18, 20, 22, 0)))
+rgba_metal, name_metal = mod._extract_appearance_rgba(metal_body, stale_yellow_parent)
+rgba_ex, _ = mod._extract_appearance_rgba(black_body, stale_yellow_parent)
+assert name_metal == 'Stainless Steel - Cast'
+assert rgba_metal[3] == 1.0, rgba_metal
+assert rgba_ex[0] < 0.02 and rgba_ex[1] < 0.02 and rgba_ex[2] < 0.02 and rgba_ex[3] == 1.0, rgba_ex
 
 glb = mod.build_glb_bytes([
   {

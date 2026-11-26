@@ -370,37 +370,9 @@ def infer_color_from_appearance_name(app_name):
 
 
 def _resolve_body_appearance(body, occ=None):
-    """Resolve Fusion's effective appearance: explicit body override -> occurrence override -> face override -> material default."""
-    body_app = None
-    try:
-        body_app = getattr(body, "appearance", None)
-        body_src = getattr(body, "appearanceSourceType", None)
-        is_body_override = adsk is not None and body_src in (
-            adsk.core.AppearanceSourceTypes.OverrideAppearanceSource,
-            adsk.core.AppearanceSourceTypes.BodyAppearanceSource,
-        )
-        if body_app is not None and is_body_override:
-            return body_app
-    except Exception:
-        body_app = None
-
-    # Walk from innermost occurrence up to root assembly for occurrence-level overrides
-    cur = occ
-    visited = set()
-    while cur is not None and id(cur) not in visited:
-        visited.add(id(cur))
-        try:
-            occ_app = getattr(cur, "appearance", None)
-            if occ_app is not None:
-                return occ_app
-        except Exception:
-            pass
-        try:
-            cur = getattr(cur, "assemblyContext", None)
-        except Exception:
-            cur = None
-
-    # Check first face for face-level appearance override when body/occurrence have no override
+    """Resolve Fusion's effective appearance matching Fusion's viewport priority:
+    explicit face override -> body.appearance (Fusion's C++ resolved appearance) -> occ -> native -> material."""
+    # 1. Explicit face-level override (highest precedence in Fusion viewport)
     try:
         faces = getattr(body, "faces", None)
         if faces and faces.count > 0:
@@ -416,8 +388,22 @@ def _resolve_body_appearance(body, occ=None):
     except Exception:
         pass
 
-    if body_app is not None:
-        return body_app
+    # 2. Body proxy's own current appearance (Fusion resolves body/component/occurrence/material in C++)
+    try:
+        body_app = getattr(body, "appearance", None)
+        if body_app is not None:
+            return body_app
+    except Exception:
+        pass
+
+    # 3. Direct occurrence override only if body.appearance was None
+    if occ is not None:
+        try:
+            occ_app = getattr(occ, "appearance", None)
+            if occ_app is not None:
+                return occ_app
+        except Exception:
+            pass
 
     native = _safe_native(body)
     if native is not body:
@@ -450,17 +436,17 @@ def _extract_appearance_rgba(body, occ=None, _unused_cache=None):
             return (0.18, 0.28, 0.32, 0.14), app_name
 
         # Prefer Fusion's native Appearance.color (handles opaque_albedo, metal_f0, and
-        # transparent_color directly in C++ without property-ID guesswork or cache collisions).
+        # transparent_color directly in C++). Note: in Fusion's adsk.core.Color, opacity == 0
+        # on metals/opaque shaders means "default opaque", NEVER invisible!
         has_tex_app = bool(getattr(appearance, "hasTexture", False))
         try:
             direct_color = getattr(appearance, "color", None)
             if direct_color is not None and hasattr(direct_color, "red"):
-                alpha = round(max(0.0, min(1.0, getattr(direct_color, "opacity", 255) / 255.0)), 3)
                 rgba = (
                     _srgb_byte_to_linear(direct_color.red),
                     _srgb_byte_to_linear(direct_color.green),
                     _srgb_byte_to_linear(direct_color.blue),
-                    alpha if alpha < 0.99 else 1.0,
+                    1.0,
                 )
                 is_pure_white = direct_color.red >= 252 and direct_color.green >= 252 and direct_color.blue >= 252
                 if has_tex_app and is_pure_white:

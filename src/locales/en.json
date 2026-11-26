@@ -1136,5 +1136,18 @@
   "Motoren lösen · Ausrichtung geht verloren (Z-Tilt)": "Disable motors · bed alignment will be lost (Z-Tilt)",
   "Host": "Host",
   "MCU": "MCU",
-  "SKR Pico": "SKR Pico"
+  "SKR Pico": "SKR Pico",
+  "Heizungen": "Heaters",
+  "Extruder-Temperatur": "Extruder temperature",
+  "Extruder übernehmen": "Apply extruder",
+  "Alle Tools T0–T{0}": "All tools T0–T{0}",
+  "Werkzeug T{0}": "Tool T{0}",
+  "Alle {0} ausgewählt": "All {0} selected",
+  "Filament": "Filament",
+  "Druckfläche": "Build surface",
+  "Z-Tilt-Ausrichtung und aktives Höhenprofil des Druckbetts.": "Z-Tilt alignment and active bed heightmap.",
+  "Geometrie und aktives Höhenprofil des Druckbetts.": "Geometry and active bed heightmap.",
+  "Z-Tilt-Toleranz": "Z-Tilt tolerance",
+  "Z-Tilt starten?": "Start Z-Tilt?",
+  "Kein Bed Mesh oder motorisiertes Bett-Leveling konfiguriert.": "No bed mesh or motorized bed leveling configured."
 }

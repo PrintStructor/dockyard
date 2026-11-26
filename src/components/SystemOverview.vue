@@ -187,20 +187,27 @@ function formatState(value) {
   return key.charAt(0).toUpperCase() + key.slice(1)
 }
 
+const isToolchanger = computed(() => Boolean(props.status?.isToolchanger))
 const isPrintActive = computed(() => props.online && ['printing', 'paused'].includes(props.status?.printState))
 const printProgressPercent = computed(() =>
   Number.isFinite(props.status?.progress) ? Math.round(Math.max(0, Math.min(1, props.status.progress)) * 100) : null,
 )
 const detectedLabel = computed(() => (props.status?.detected == null ? 'Keines bestätigt' : `T${props.status.detected}`))
 
-const sensors = computed(() => [
-  ['Druckbett', props.status?.bed?.temperature],
-  ['Bauraum', props.status?.chamber],
-  ['Raspberry Pi', props.status?.raspberryPi],
-  ['Octopus', props.status?.octopus],
-  ['RP2350', props.status?.rp2350],
-  ['Beacon-Spule', props.status?.beacon],
-])
+const sensors = computed(() => {
+  const bedRow = [['Druckbett', props.status?.bed?.temperature]]
+  if (Array.isArray(props.status?.sensors) && props.status.sensors.length > 0) {
+    return [...bedRow, ...props.status.sensors.map(s => [s.label, s.temperature])]
+  }
+  const legacy = [
+    ['Bauraum', props.status?.chamber],
+    ['Raspberry Pi', props.status?.raspberryPi],
+    ['Octopus', props.status?.octopus],
+    ['RP2350', props.status?.rp2350],
+    ['Beacon-Spule', props.status?.beacon],
+  ]
+  return [...bedRow, ...legacy.filter(([, val]) => val != null || isToolchanger.value)]
+})
 
 const hostCaption = computed(() => {
   const h = props.overview?.host
@@ -280,12 +287,18 @@ const hostCaption = computed(() => {
             <dt>{{ t('Druckzeit') }}</dt>
             <dd>{{ formatDuration(status.printDuration) }}</dd>
           </div>
-          <div><dt>Toolchanger</dt><dd>{{ formatState(status?.toolchangerState) }}</dd></div>
-          <div>
-            <dt>{{ t('Aktives Werkzeug') }}</dt>
-            <dd>{{ status?.active == null ? t('Unbekannt') : `T${status.active}` }}</dd>
+          <template v-if="isToolchanger">
+            <div><dt>Toolchanger</dt><dd>{{ formatState(status?.toolchangerState) }}</dd></div>
+            <div>
+              <dt>{{ t('Aktives Werkzeug') }}</dt>
+              <dd>{{ status?.active == null ? t('Unbekannt') : `T${status.active}` }}</dd>
+            </div>
+            <div><dt>{{ t('Erkanntes Werkzeug') }}</dt><dd>{{ t(detectedLabel) }}</dd></div>
+          </template>
+          <div v-if="status?.bedSize">
+            <dt>{{ t('Druckfläche') }}</dt>
+            <dd>{{ Math.round(status.bedSize.width) }} × {{ Math.round(status.bedSize.depth) }} mm</dd>
           </div>
-          <div><dt>{{ t('Erkanntes Werkzeug') }}</dt><dd>{{ t(detectedLabel) }}</dd></div>
           <div>
             <dt>{{ t('Referenzierte Achsen') }}</dt>
             <dd>{{ status?.homedAxes?.toUpperCase() || t('Keine bestätigt') }}</dd>

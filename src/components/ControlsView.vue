@@ -31,14 +31,33 @@ const axisDrafts = ref({})
 const confirmMotors = ref(false)
 let confirmMotorsTimer = null
 
-const heaterName = computed(() => (allTools.value ? 'Alle Tools T0–T5' : `Werkzeug T${props.selected}`))
+const toolCount = computed(() => props.status?.toolCount ?? props.status?.tools?.length ?? 6)
+const isSingleTool = computed(() => !props.status?.isToolchanger && toolCount.value === 1)
+const toolIds = computed(() => Array.from({ length: toolCount.value }, (_, id) => id))
+const activeToolId = computed(() => (isSingleTool.value ? 0 : props.selected))
+const levelingKind = computed(() => {
+  if (props.status?.capabilities?.qgl) return 'qgl'
+  if (props.status?.capabilities?.zTilt) return 'z_tilt'
+  return null
+})
+const levelingApplied = computed(() => Boolean(props.status?.qglApplied || props.status?.zTiltApplied))
+
+watch(isSingleTool, single => {
+  if (single) allTools.value = false
+}, { immediate: true })
+
+const heaterName = computed(() => {
+  if (isSingleTool.value) return t('Extruder')
+  if (allTools.value) return t('Alle Tools T0–T{0}', [toolCount.value - 1])
+  return t('Werkzeug T{0}', [props.selected])
+})
 const heaterMax = computed(() => {
   const limits = props.status?.capabilities?.toolMax
   return allTools.value
-    ? limits?.length === 6 && limits.every(Number.isFinite)
+    ? limits?.length === toolCount.value && limits.every(Number.isFinite)
       ? Math.min(...limits)
       : null
-    : limits?.[props.selected]
+    : limits?.[activeToolId.value]
 })
 
 const presetTarget = preset =>
@@ -46,7 +65,7 @@ const presetTarget = preset =>
     ? preset.tools.every(value => value === preset.tools[0])
       ? preset.tools[0]
       : null
-    : preset.tools[props.selected]
+    : preset.tools?.[activeToolId.value] ?? null
 
 const liveTarget = id => (id === 'bed' ? props.status?.bed?.target : props.status?.tools?.[id]?.target)
 const draftValue = id => drafts.value[id] ?? (liveTarget(id) == null ? '' : String(Math.round(liveTarget(id))))
@@ -98,7 +117,7 @@ async function applyTarget(id) {
   }
 }
 
-const selectedIds = computed(() => (allTools.value ? [0, 1, 2, 3, 4, 5] : [props.selected]))
+const selectedIds = computed(() => (allTools.value ? toolIds.value : [activeToolId.value]))
 
 function stagePreset(target) {
   if (target != null) selectedIds.value.forEach(id => { drafts.value[id] = String(target) })
@@ -113,7 +132,7 @@ const groupReady = computed(
 
 async function heatTools() {
   if (!groupReady.value || !enabled.value || (allTools.value && moving.value)) return
-  if (!allTools.value) return applyTarget(props.selected)
+  if (!allTools.value) return applyTarget(activeToolId.value)
   const target = Number(draftValue(0))
   const ids = [...selectedIds.value]
   const ok = await props.send({ action: 'temperature_all', target })
@@ -145,7 +164,7 @@ function resetMotorsConfirm() {
 
 function releaseMotors() {
   if (!motion.value) return
-  if (props.status?.qglApplied && !confirmMotors.value) {
+  if (levelingApplied.value && !confirmMotors.value) {
     confirmMotors.value = true
     clearTimeout(confirmMotorsTimer)
     confirmMotorsTimer = setTimeout(resetMotorsConfirm, 5000)
@@ -264,7 +283,11 @@ const restriction = computed(() => {
   if (!props.online) return 'Bedienung gesperrt: keine aktuellen Druckerdaten.'
   if (props.status?.klipperState !== 'ready') return 'Klipper ist nicht bereit.'
   if (busy.value) return props.status?.control?.job?.label ?? 'Befehl läuft …'
-  if (confirmMotors.value) return 'Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden.'
+  if (confirmMotors.value) {
+    return props.status?.zTiltApplied && !props.status?.qglApplied
+      ? 'Erneut klicken zum Bestätigen · Z-Tilt muss danach erneut ausgeführt werden.'
+      : 'Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden.'
+  }
   if (props.status?.loadWatchActive) return 'Einlegehilfe ist scharf. Unter Werkzeuge mit Fertig beenden.'
   if (moving.value) return 'Bewegungen sind während eines Drucks, einer Pause oder laufender Befehle gesperrt.'
   if (props.status?.homingCanInitialize) return 'Homen ist bereit. Dein Beacon-Makro initialisiert das erkannte Tool vor dem Z-Homen.'
@@ -348,6 +371,7 @@ watch(motion, allowed => {
             <Home :size="15" /><span>ALL</span>
           </button>
           <button
+            v-if="levelingKind === 'qgl'"
             class="subtle-button"
             :class="{ 'prep-done': status?.qglApplied && online }"
             type="button"
@@ -365,6 +389,25 @@ watch(motion, allowed => {
             <span>QGL</span>
           </button>
           <button
+            v-else-if="levelingKind === 'z_tilt'"
+            class="subtle-button"
+            :class="{ 'prep-done': status?.zTiltApplied && online }"
+            type="button"
+            :disabled="!motion || !allHomed || !status?.capabilities?.zTilt"
+            :title="
+              status?.zTiltApplied ? t('Bereits ausgerichtet · Z-Tilt erneut ausführen') : t('Z-Tilt ausrichten')
+            "
+            :aria-label="
+              status?.zTiltApplied
+                ? t('Bett bereits ausgerichtet. Z-Tilt erneut ausführen')
+                : t('Z-Tilt ausrichten')
+            "
+            @click="emit('command', { action: 'z_tilt' })"
+          >
+            <span>Z-Tilt</span>
+          </button>
+          <button
+            v-if="status?.capabilities?.mesh !== false"
             class="subtle-button"
             type="button"
             :disabled="!motion || !allHomed || !status?.capabilities?.mesh"
@@ -382,10 +425,14 @@ watch(motion, allowed => {
             :aria-label="confirmMotors ? t('Wirklich lösen?') : t('Motoren lösen')"
             :title="
               confirmMotors
-                ? t('Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden')
+                ? status?.zTiltApplied && !status?.qglApplied
+                  ? t('Erneut klicken zum Bestätigen · Z-Tilt muss danach erneut ausgeführt werden')
+                  : t('Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden')
                 : status?.qglApplied
                   ? t('Motoren lösen · Gantry senkt sich ab (QGL geht verloren)')
-                  : t('Motoren lösen')
+                  : status?.zTiltApplied
+                    ? t('Motoren lösen · Ausrichtung geht verloren (Z-Tilt)')
+                    : t('Motoren lösen')
             "
             @click="releaseMotors"
             @blur="resetMotorsConfirm"
@@ -458,8 +505,9 @@ watch(motion, allowed => {
 
       <article class="control-panel heat-panel">
         <div class="heat-toolbar">
-          <h2><Thermometer :size="18" />{{ t('Werkzeuge') }}</h2>
+          <h2><Thermometer :size="18" />{{ isSingleTool ? t('Heizungen') : t('Werkzeuge') }}</h2>
           <button
+            v-if="!isSingleTool"
             type="button"
             class="subtle-button all-tools-control"
             :aria-pressed="allTools"
@@ -484,33 +532,41 @@ watch(motion, allowed => {
         </div>
 
         <p
-          v-if="online && !status?.detectionMismatch && (!status?.hasDetection || status?.detected == null)"
+          v-if="status?.isToolchanger && online && !status?.detectionMismatch && (!status?.hasDetection || status?.detected == null)"
           class="tool-detection-note"
         >
           {{ !status?.hasDetection ? t('Werkzeugerkennung nicht verfügbar.') : t('Kein Werkzeug verbunden.') }}
         </p>
 
-        <div class="temperature-list" :aria-label="t('Werkzeug zum Heizen auswählen')">
+        <div class="temperature-list" :aria-label="isSingleTool ? t('Extruder-Temperatur') : t('Werkzeug zum Heizen auswählen')">
           <div class="temperature-list-label">
-            <span>{{ allTools ? t('Alle sechs ausgewählt') : t('Einzelnes Werkzeug wählen') }}</span>
+            <span>
+              {{
+                isSingleTool
+                  ? t('Extruder')
+                  : allTools
+                    ? t('Alle {0} ausgewählt', [toolCount])
+                    : t('Einzelnes Werkzeug wählen')
+              }}
+            </span>
             <span>{{ t('Ist / Ziel') }}</span>
           </div>
           <form
-            v-for="id in [0, 1, 2, 3, 4, 5]"
+            v-for="id in toolIds"
             :key="id"
             class="temperature-row editable-temperature"
-            :class="{ selected: allTools || selected === id, dirty: dirty(id) }"
+            :class="{ selected: isSingleTool || allTools || selected === id, dirty: dirty(id) }"
             @submit.prevent="applyTarget(id)"
           >
             <button
               type="button"
               class="temperature-tool-name"
-              :aria-pressed="allTools || selected === id"
+              :aria-pressed="isSingleTool || allTools || selected === id"
               @click="selectHeater(id)"
             >
-              {{ t('Werkzeug T') }}{{ id }}
+              {{ isSingleTool ? t('Extruder') : `${t('Werkzeug T')}${id}` }}
               <small
-                v-if="online && status?.hasDetection && !status?.detectionConflict && status?.detected === id"
+                v-if="status?.isToolchanger && online && status?.hasDetection && !status?.detectionConflict && status?.detected === id"
                 class="connected-tool-label"
               >
                 {{ t('Aufgenommen') }}
@@ -518,7 +574,11 @@ watch(motion, allowed => {
             </button>
             <span class="temperature-reading">{{ temperature(status?.tools?.[id]?.temperature) }}<small> / </small></span>
             <input
-              :aria-label="t('Zieltemperatur für Werkzeug T{0} in Grad Celsius', [id])"
+              :aria-label="
+                isSingleTool
+                  ? t('Zieltemperatur für {0} in Grad Celsius', [t('Extruder')])
+                  : t('Zieltemperatur für Werkzeug T{0} in Grad Celsius', [id])
+              "
               :title="t('Aktuelles Ziel: {0} °C · Enter übernimmt, Escape verwirft', [temperature(liveTarget(id))])"
               type="number"
               :value="draftValue(id)"
@@ -537,7 +597,11 @@ watch(motion, allowed => {
               class="apply-temperature"
               type="submit"
               :disabled="!enabled || !valid(id) || !dirty(id)"
-              :aria-label="t('Zieltemperatur für T{0} übernehmen', [id])"
+              :aria-label="
+                isSingleTool
+                  ? t('Zieltemperatur für {0} übernehmen', [t('Extruder')])
+                  : t('Zieltemperatur für T{0} übernehmen', [id])
+              "
               :title="t('Zieltemperatur übernehmen')"
             >
               <Check :size="14" />
@@ -546,8 +610,8 @@ watch(motion, allowed => {
         </div>
 
         <form class="heater-editor" @submit.prevent="heatTools">
-          <p class="preset-selection">{{ t(heaterName) }}</p>
-          <div class="temperature-presets tool-presets" :aria-label="t('{0}-Presets', [t(heaterName)])">
+          <p class="preset-selection">{{ heaterName }}</p>
+          <div class="temperature-presets tool-presets" :aria-label="t('{0}-Presets', [heaterName])">
             <button
               v-for="preset in presets"
               :key="preset.name"
@@ -562,7 +626,7 @@ watch(motion, allowed => {
             </button>
           </div>
           <button class="subtle-button preset-apply" :disabled="!enabled || !groupReady || (allTools && moving)">
-            {{ allTools ? t('Alle übernehmen') : t('T{0} übernehmen', [selected]) }}
+            {{ allTools ? t('Alle übernehmen') : isSingleTool ? t('Extruder übernehmen') : t('T{0} übernehmen', [selected]) }}
           </button>
         </form>
 

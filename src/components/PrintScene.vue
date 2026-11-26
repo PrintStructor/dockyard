@@ -18,13 +18,39 @@ const props = defineProps({
   livePosition: Array,
   activeTool: { type: Number, default: null },
   excludeObjects: { type: Object, default: null },
+  bedSize: { type: Object, default: null }, // { originX, originY, width, depth }
+  printerLabel: { type: String, default: '' },
+  showColorModeToggle: { type: Boolean, default: true },
 })
 
 const emit = defineEmits(['update:colorMode', 'update:showSupport', 'update:showGhost', 'reload'])
 
-const BED_SIZE = 350
-const HALF_BED = BED_SIZE / 2
 const TOOL_PALETTE = ['#c5f76b', '#6ed5e7', '#bca3ff', '#f3c67b', '#ff9a83', '#ed9fc8']
+
+function resolvedBed() {
+  const b = props.bedSize
+  const width = Number.isFinite(b?.width) && b.width >= 50 ? b.width : 350
+  const depth = Number.isFinite(b?.depth) && b.depth >= 50 ? b.depth : 350
+  const originX = Number.isFinite(b?.originX) ? b.originX : 0
+  const originY = Number.isFinite(b?.originY) ? b.originY : 0
+  return {
+    originX,
+    originY,
+    width,
+    depth,
+    centerX: originX + width / 2,
+    centerY: originY + depth / 2,
+    halfW: width / 2,
+    halfD: depth / 2,
+  }
+}
+
+const bedCaption = computed(() => {
+  const b = resolvedBed()
+  const dim = `${Math.round(b.width)} × ${Math.round(b.depth)} mm`
+  const prefix = String(props.printerLabel ?? '').trim()
+  return prefix ? `${prefix} · ${dim}` : dim
+})
 
 const viewport = ref(null)
 const webglError = ref('')
@@ -131,6 +157,7 @@ const VERTEX_SHADER = `
 
   uniform vec3 uToolColors[6];
   uniform vec3 uSupportColor;
+  uniform vec2 uBedCenter;
   uniform float uClipLayer;
   uniform float uMode;
   uniform float uShowSupport;
@@ -168,8 +195,8 @@ const VERTEX_SHADER = `
       return;
     }
 
-    vec2 p1 = vec2(aStartEnd.x - 175.0, -(aStartEnd.y - 175.0));
-    vec2 p2 = vec2(aStartEnd.z - 175.0, -(aStartEnd.w - 175.0));
+    vec2 p1 = vec2(aStartEnd.x - uBedCenter.x, -(aStartEnd.y - uBedCenter.y));
+    vec2 p2 = vec2(aStartEnd.z - uBedCenter.x, -(aStartEnd.w - uBedCenter.y));
     vec2 delta = p2 - p1;
     float segLen = length(delta);
     if (segLen < 0.001) {
@@ -258,63 +285,78 @@ const FRAGMENT_SHADER = `
 `
 
 function buildBedPlate() {
+  const { width, depth } = resolvedBed()
   const group = new THREE.Group()
+  const cw = 1024
+  const ch = Math.max(256, Math.min(1024, Math.round(1024 * (depth / width))))
   const canvas = document.createElement('canvas')
-  canvas.width = 1024
-  canvas.height = 1024
+  canvas.width = cw
+  canvas.height = ch
   const ctx = canvas.getContext('2d')
 
   // Matte dark PEI surface
   ctx.fillStyle = '#141c20'
-  ctx.fillRect(0, 0, 1024, 1024)
+  ctx.fillRect(0, 0, cw, ch)
 
-  const pxPerMm = 1024 / BED_SIZE
+  const pxPerMmX = cw / width
+  const pxPerMmY = ch / depth
   // 10 mm minor grid
   ctx.strokeStyle = '#1d272d'
   ctx.lineWidth = 1
-  for (let mm = 10; mm < BED_SIZE; mm += 10) {
+  for (let mm = 10; mm < width; mm += 10) {
     if (mm % 50 === 0) continue
-    const p = Math.round(mm * pxPerMm) + 0.5
+    const p = Math.round(mm * pxPerMmX) + 0.5
     ctx.beginPath()
     ctx.moveTo(p, 0)
-    ctx.lineTo(p, 1024)
+    ctx.lineTo(p, ch)
+    ctx.stroke()
+  }
+  for (let mm = 10; mm < depth; mm += 10) {
+    if (mm % 50 === 0) continue
+    const p = Math.round(mm * pxPerMmY) + 0.5
+    ctx.beginPath()
     ctx.moveTo(0, p)
-    ctx.lineTo(1024, p)
+    ctx.lineTo(cw, p)
     ctx.stroke()
   }
 
   // 50 mm major grid
   ctx.strokeStyle = '#2c3b43'
   ctx.lineWidth = 1.5
-  for (let mm = 50; mm < BED_SIZE; mm += 50) {
-    const p = Math.round(mm * pxPerMm) + 0.5
+  for (let mm = 50; mm < width; mm += 50) {
+    const p = Math.round(mm * pxPerMmX) + 0.5
     ctx.beginPath()
     ctx.moveTo(p, 0)
-    ctx.lineTo(p, 1024)
+    ctx.lineTo(p, ch)
+    ctx.stroke()
+  }
+  for (let mm = 50; mm < depth; mm += 50) {
+    const p = Math.round(mm * pxPerMmY) + 0.5
+    ctx.beginPath()
     ctx.moveTo(0, p)
-    ctx.lineTo(1024, p)
+    ctx.lineTo(cw, p)
     ctx.stroke()
   }
 
   // Outer perimeter & subtle lime front edge
   ctx.strokeStyle = '#42555f'
   ctx.lineWidth = 4
-  ctx.strokeRect(2, 2, 1020, 1020)
+  ctx.strokeRect(2, 2, cw - 4, ch - 4)
 
   ctx.fillStyle = '#c5f76b'
-  ctx.fillRect(0, 1018, 1024, 6)
+  ctx.fillRect(0, ch - 6, cw, 6)
 
   ctx.fillStyle = '#7b8f97'
   ctx.font = '600 22px Onest, sans-serif'
   ctx.textAlign = 'center'
-  ctx.fillText('VORON 2.4 · 350 × 350 mm', 512, 1002)
+  ctx.fillText(bedCaption.value, cw / 2, ch - 22)
 
   const texture = new THREE.CanvasTexture(canvas)
   texture.colorSpace = THREE.SRGBColorSpace
   texture.anisotropy = 4
 
   const plate = new THREE.Mesh(
-    new THREE.PlaneGeometry(BED_SIZE, BED_SIZE),
+    new THREE.PlaneGeometry(width, depth),
     new THREE.MeshBasicMaterial({ map: texture }),
   )
   plate.rotation.x = -Math.PI / 2
@@ -322,13 +364,22 @@ function buildBedPlate() {
   group.add(plate)
 
   const slab = new THREE.Mesh(
-    new THREE.BoxGeometry(BED_SIZE + 4, 4, BED_SIZE + 4),
+    new THREE.BoxGeometry(width + 4, 4, depth + 4),
     new THREE.MeshBasicMaterial({ color: 0x0e1417 }),
   )
   slab.position.y = -2.25
   group.add(slab)
 
   return group
+}
+
+function disposeBedPlate(group) {
+  if (!group) return
+  group.traverse(o => {
+    o.geometry?.dispose()
+    o.material?.map?.dispose()
+    o.material?.dispose()
+  })
 }
 
 function buildNozzleMarker() {
@@ -355,19 +406,20 @@ function buildNozzleMarker() {
 }
 
 function buildBedCrosshair() {
+  const { halfW, halfD } = resolvedBed()
   const group = new THREE.Group()
   const mat = new THREE.LineBasicMaterial({ color: 0xc5f76b, transparent: true, opacity: 0.32 })
   const xLine = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(-HALF_BED, 0.08, 0),
-      new THREE.Vector3(HALF_BED, 0.08, 0),
+      new THREE.Vector3(-halfW, 0.08, 0),
+      new THREE.Vector3(halfW, 0.08, 0),
     ]),
     mat,
   )
   const yLine = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0.08, -HALF_BED),
-      new THREE.Vector3(0, 0.08, HALF_BED),
+      new THREE.Vector3(0, 0.08, -halfD),
+      new THREE.Vector3(0, 0.08, halfD),
     ]),
     mat,
   )
@@ -375,6 +427,13 @@ function buildBedCrosshair() {
   group.add(xLine, yLine)
   group.visible = false
   return group
+}
+
+function disposeBedCrosshair(group) {
+  if (!group) return
+  group.userData.xLine?.geometry?.dispose()
+  group.userData.yLine?.geometry?.dispose()
+  group.userData.mat?.dispose()
 }
 
 function clearGroup(group) {
@@ -396,13 +455,14 @@ function updateExcludeDatums() {
     invalidate()
     return
   }
+  const { centerX, centerY } = resolvedBed()
   const excludedSet = new Set(ex.excluded ?? [])
   for (const obj of ex.objects) {
     if (!Array.isArray(obj.center) || obj.center.length < 2) continue
     const [cx, cy] = obj.center
     if (!Number.isFinite(cx) || !Number.isFinite(cy)) continue
-    const wx = cx - HALF_BED
-    const wz = -(cy - HALF_BED)
+    const wx = cx - centerX
+    const wz = -(cy - centerY)
     const isExcluded = excludedSet.has(obj.name)
     const isCurrent = ex.current === obj.name
     const color = isExcluded ? 0xb56563 : isCurrent ? 0xc5f76b : 0x8ea2ab
@@ -450,6 +510,7 @@ function resolvedPaletteVectors() {
 
 function updateUniforms() {
   if (!solidMaterial || !ghostMaterial) return
+  const { centerX, centerY } = resolvedBed()
   const palette = resolvedPaletteVectors()
   const maxLayer = props.model?.header?.maxLayer ?? 999999
   const clip = Math.min(props.clipLayer, maxLayer)
@@ -458,11 +519,13 @@ function updateUniforms() {
   const hasFrontier = clip < maxLayer ? 1.0 : 0.0
 
   solidMaterial.uniforms.uToolColors.value = palette
+  solidMaterial.uniforms.uBedCenter.value.set(centerX, centerY)
   solidMaterial.uniforms.uClipLayer.value = clip
   solidMaterial.uniforms.uShowSupport.value = support
   solidMaterial.uniforms.uHasFrontier.value = hasFrontier
 
   ghostMaterial.uniforms.uToolColors.value = palette
+  ghostMaterial.uniforms.uBedCenter.value.set(centerX, centerY)
   ghostMaterial.uniforms.uClipLayer.value = clip
   ghostMaterial.uniforms.uShowSupport.value = support
   ghostMaterial.uniforms.uHasFrontier.value = 0.0
@@ -474,11 +537,12 @@ function updateUniforms() {
 
 function updateNozzle() {
   if (!nozzleMarker) return
+  const { centerX, centerY } = resolvedBed()
   const pos = props.livePosition
   if (props.isLiveJob && Array.isArray(pos) && [pos[0], pos[1], pos[2]].every(Number.isFinite)) {
-    const wx = pos[0] - HALF_BED
+    const wx = pos[0] - centerX
     const wy = Math.max(0, pos[2])
-    const wz = -(pos[1] - HALF_BED)
+    const wz = -(pos[1] - centerY)
     const palette = resolvedPaletteVectors()
     const toolVec =
       Number.isInteger(props.activeTool) && props.activeTool >= 0 && props.activeTool < 6
@@ -506,11 +570,12 @@ function updateNozzle() {
 }
 
 function modelBoundingBox() {
+  const { centerX, centerY, halfW, halfD } = resolvedBed()
   const b = props.model?.header?.bounds
-  if (!b) return new THREE.Box3(new THREE.Vector3(-HALF_BED, 0, -HALF_BED), new THREE.Vector3(HALF_BED, 40, HALF_BED))
+  if (!b) return new THREE.Box3(new THREE.Vector3(-halfW, 0, -halfD), new THREE.Vector3(halfW, 40, halfD))
   return new THREE.Box3(
-    new THREE.Vector3(b.minX - HALF_BED, Math.max(0, b.minZ), -(b.maxY - HALF_BED)),
-    new THREE.Vector3(b.maxX - HALF_BED, Math.max(2, b.maxZ), -(b.minY - HALF_BED)),
+    new THREE.Vector3(b.minX - centerX, Math.max(0, b.minZ), -(b.maxY - centerY)),
+    new THREE.Vector3(b.maxX - centerX, Math.max(2, b.maxZ), -(b.minY - centerY)),
   )
 }
 
@@ -555,9 +620,10 @@ function focusObject(animate = true) {
 
 function focusPreset(preset) {
   cameraPreset.value = preset
+  const { halfW, halfD } = resolvedBed()
   const box = hasModel.value
     ? modelBoundingBox()
-    : new THREE.Box3(new THREE.Vector3(-HALF_BED, 0, -HALF_BED), new THREE.Vector3(HALF_BED, 50, HALF_BED))
+    : new THREE.Box3(new THREE.Vector3(-halfW, 0, -halfD), new THREE.Vector3(halfW, 50, halfD))
   if (preset === 'top') {
     fitBox(box, true, 1.28, new THREE.Vector3(0.0, 1.0, 0.015))
   } else if (preset === 'front') {
@@ -569,8 +635,31 @@ function focusPreset(preset) {
 
 function focusBed(animate = true) {
   cameraPreset.value = 'iso'
-  const box = new THREE.Box3(new THREE.Vector3(-HALF_BED, 0, -HALF_BED), new THREE.Vector3(HALF_BED, 50, HALF_BED))
+  const { halfW, halfD } = resolvedBed()
+  const box = new THREE.Box3(new THREE.Vector3(-halfW, 0, -halfD), new THREE.Vector3(halfW, 50, halfD))
   fitBox(box, animate, 1.25)
+}
+
+function rebuildBedGeometry() {
+  if (!scene) return
+  if (bedGroup) {
+    scene.remove(bedGroup)
+    disposeBedPlate(bedGroup)
+    bedGroup = null
+  }
+  if (bedCrosshair) {
+    scene.remove(bedCrosshair)
+    disposeBedCrosshair(bedCrosshair)
+    bedCrosshair = null
+  }
+  bedGroup = buildBedPlate()
+  scene.add(bedGroup)
+  bedCrosshair = buildBedCrosshair()
+  scene.add(bedCrosshair)
+  updateUniforms()
+  updateExcludeDatums()
+  if (hasModel.value) focusObject(false)
+  else focusBed(false)
 }
 
 function rebuildMesh() {
@@ -663,9 +752,11 @@ onMounted(() => {
     excludeGroup.visible = false
     scene.add(excludeGroup)
 
+    const { centerX, centerY } = resolvedBed()
     const baseUniforms = mode => ({
       uToolColors: { value: resolvedPaletteVectors() },
       uSupportColor: { value: new THREE.Vector3(0.41, 0.49, 0.53) },
+      uBedCenter: { value: new THREE.Vector2(centerX, centerY) },
       uClipLayer: { value: 999999 },
       uMode: { value: mode },
       uShowSupport: { value: 1.0 },
@@ -720,6 +811,10 @@ onMounted(() => {
 watch(language, updateCanvasLabels)
 watch(() => props.model, rebuildMesh)
 watch(
+  () => [props.bedSize?.originX, props.bedSize?.originY, props.bedSize?.width, props.bedSize?.depth, props.printerLabel],
+  rebuildBedGeometry,
+)
+watch(
   () => [props.toolColors, props.colorMode, props.clipLayer, props.showGhost, props.showSupport],
   updateUniforms,
   { deep: true },
@@ -737,24 +832,14 @@ onBeforeUnmount(() => {
   activeGeometry?.dispose()
   solidMaterial?.dispose()
   ghostMaterial?.dispose()
-  if (bedGroup) {
-    bedGroup.traverse(o => {
-      o.geometry?.dispose()
-      o.material?.map?.dispose()
-      o.material?.dispose()
-    })
-  }
+  disposeBedPlate(bedGroup)
   if (nozzleMarker) {
     nozzleMarker.traverse(o => {
       o.geometry?.dispose()
       o.material?.dispose()
     })
   }
-  if (bedCrosshair) {
-    bedCrosshair.userData.xLine?.geometry?.dispose()
-    bedCrosshair.userData.yLine?.geometry?.dispose()
-    bedCrosshair.userData.mat?.dispose()
-  }
+  disposeBedCrosshair(bedCrosshair)
   if (excludeGroup) clearGroup(excludeGroup)
   if (renderer) {
     renderer.domElement.removeEventListener('webglcontextlost', onContextLost)
@@ -767,7 +852,7 @@ onBeforeUnmount(() => {
   <section class="scene-panel print-scene-panel" :aria-label="t('3D-Druckvorschau')">
     <div class="scene-toolbar">
       <div class="scene-toolbar-left">
-        <div class="segmented" :aria-label="t('Farbmodus')">
+        <div v-if="showColorModeToggle" class="segmented" :aria-label="t('Farbmodus')">
           <button
             type="button"
             :aria-pressed="colorMode === 'filament'"
@@ -888,7 +973,7 @@ onBeforeUnmount(() => {
             ])
           }}
         </template>
-        <template v-else>{{ t('VORON 2.4 · 350 × 350 mm') }}</template>
+        <template v-else>{{ bedCaption }}</template>
       </span>
       <span class="orbit-hint">{{ t('Ziehen zum Drehen · Scrollen zum Zoomen') }}</span>
     </div>

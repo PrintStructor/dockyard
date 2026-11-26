@@ -13,6 +13,7 @@ const props = defineProps({
   online: Boolean,
   pending: Boolean,
   send: Function,
+  printerName: { type: String, default: '' },
   requestedFile: String,
 })
 
@@ -119,6 +120,9 @@ const usedToolsList = computed(() => {
   if (combined.length) return combined
   return [...parsedIds].map(id => ({ id, type: null, name: null, color: null, temp: null, weight: null, used: true }))
 })
+
+const isToolchanger = computed(() => Boolean(props.status?.isToolchanger))
+const showMultiToolUi = computed(() => isToolchanger.value || usedToolsList.value.length > 1)
 
 const fileOptions = computed(() =>
   files.value.map(file => ({
@@ -348,7 +352,8 @@ onBeforeUnmount(() => {
         :loading="modelLoading"
         :error="modelError"
         :tool-colors="toolColors"
-        :color-mode="colorMode"
+        :color-mode="showMultiToolUi ? colorMode : 'filament'"
+        :show-color-mode-toggle="showMultiToolUi"
         :clip-layer="activeClipLayer"
         :show-ghost="showGhost"
         :show-support="showSupport"
@@ -356,6 +361,8 @@ onBeforeUnmount(() => {
         :live-position="status?.position"
         :active-tool="status?.active"
         :exclude-objects="status?.excludeObjects"
+        :bed-size="status?.bedSize"
+        :printer-label="printerName"
         @update:color-mode="colorMode = $event"
         @update:show-support="showSupport = $event"
         @update:show-ghost="showGhost = $event"
@@ -370,7 +377,7 @@ onBeforeUnmount(() => {
             <span v-if="currentLayerZ != null" class="layer-scrubber-z">
               · {{ formatNumber(currentLayerZ, 2) }} mm
             </span>
-            <span v-if="layerRibbon.toolChanges > 0" class="layer-tool-changes">
+            <span v-if="showMultiToolUi && layerRibbon.toolChanges > 0" class="layer-tool-changes">
               · {{ t('{0} Werkzeugwechsel', [layerRibbon.toolChanges]) }}
             </span>
           </span>
@@ -395,7 +402,7 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <div
-          v-if="layerRibbon.bands.length"
+          v-if="showMultiToolUi && layerRibbon.bands.length"
           class="layer-tool-ribbon"
           aria-hidden="true"
         >
@@ -594,14 +601,18 @@ onBeforeUnmount(() => {
         </div>
       </dl>
 
-      <section v-if="usedToolsList.length" class="print-tools-section" :aria-label="t('Verwendete Werkzeuge')">
-        <h3>{{ t('Verwendete Werkzeuge') }}</h3>
+      <section
+        v-if="usedToolsList.length"
+        class="print-tools-section"
+        :aria-label="showMultiToolUi ? t('Verwendete Werkzeuge') : t('Filament')"
+      >
+        <h3>{{ showMultiToolUi ? t('Verwendete Werkzeuge') : t('Filament') }}</h3>
         <ul class="print-tool-list">
           <li
             v-for="tool in usedToolsList"
             :key="tool.id"
             class="print-tool-item"
-            :class="{ active: online && status?.detected === tool.id }"
+            :class="{ active: showMultiToolUi && online && status?.detected === tool.id }"
           >
             <span
               class="print-tool-swatch"
@@ -610,9 +621,9 @@ onBeforeUnmount(() => {
             />
             <div class="print-tool-info">
               <strong>
-                T{{ tool.id }}
+                {{ showMultiToolUi ? `T${tool.id}` : t('Extruder') }}
                 <span v-if="tool.type" class="print-tool-type">{{ tool.type }}</span>
-                <span v-if="online && status?.detected === tool.id" class="connected-tool-label">
+                <span v-if="showMultiToolUi && online && status?.detected === tool.id" class="connected-tool-label">
                   {{ t('Aufgenommen') }}
                 </span>
               </strong>

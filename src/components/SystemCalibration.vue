@@ -43,10 +43,33 @@ onBeforeUnmount(() => {
   if (confirmTimer) clearTimeout(confirmTimer)
 })
 
-const toolOptions = Array.from({ length: 6 }, (_, id) => ({
-  value: String(id),
-  label: `T${id}`,
-}))
+const isToolchanger = computed(() =>
+  data.value ? Boolean(data.value.isToolchanger) : Boolean(props.status?.isToolchanger),
+)
+
+const hasBeaconSection = computed(() =>
+  Boolean(
+    isToolchanger.value ||
+      data.value?.beacon?.model ||
+      data.value?.beacon?.coilTemp != null ||
+      data.value?.beacon?.lastFreq != null ||
+      data.value?.capabilities?.gantryTwist ||
+      data.value?.capabilities?.beaconPoke,
+  ),
+)
+
+const geometrySubtitle = computed(() => {
+  if (data.value?.qgl?.configured) return 'Quad Gantry Level und aktives Höhenprofil des Druckbetts.'
+  if (data.value?.zTilt?.configured) return 'Z-Tilt-Ausrichtung und aktives Höhenprofil des Druckbetts.'
+  return 'Geometrie und aktives Höhenprofil des Druckbetts.'
+})
+
+const toolOptions = computed(() =>
+  Array.from({ length: data.value?.toolCount ?? 6 }, (_, id) => ({
+    value: String(id),
+    label: `T${id}`,
+  })),
+)
 
 const shaperAxisOptions = computed(() => [
   { value: 'ALL', label: t('X + Y') },
@@ -261,7 +284,7 @@ onMounted(() => {
       </div>
     </div>
 
-    <section class="cal-section" :aria-label="t('Werkzeug-Offsets')">
+    <section v-if="isToolchanger" class="cal-section" :aria-label="t('Werkzeug-Offsets')">
       <div class="system-panel-head" style="margin-bottom: 0">
         <div>
           <h2>{{ t('Werkzeug-Offsets (T0–T5)') }}</h2>
@@ -555,20 +578,35 @@ onMounted(() => {
       </div>
     </section>
 
-    <div class="cal-two-col">
+    <div class="cal-two-col" :class="{ 'cal-single-col': !hasBeaconSection }">
       <section class="cal-section" :aria-label="t('Geometrie & Bett-Mesh')">
         <div class="system-panel-head" style="margin-bottom: 0">
           <div>
             <h2>{{ t('Geometrie & Bett-Mesh') }}</h2>
-            <p>{{ t('Quad Gantry Level und aktives Höhenprofil des Druckbetts.') }}</p>
+            <p>{{ t(geometrySubtitle) }}</p>
           </div>
-          <span class="status-pill" :class="data?.qgl?.applied ? 'lime' : 'muted'">
-            <Check v-if="data?.qgl?.applied" :size="11" />
-            {{ data?.qgl?.applied ? t('QGL ausgerichtet') : t('QGL offen') }}
-          </span>
+          <div class="cal-header-meta">
+            <span v-if="data?.qgl?.configured" class="status-pill" :class="data?.qgl?.applied ? 'lime' : 'muted'">
+              <Check v-if="data?.qgl?.applied" :size="11" />
+              {{ data?.qgl?.applied ? t('QGL ausgerichtet') : t('QGL offen') }}
+            </span>
+            <span v-else-if="data?.zTilt?.configured" class="status-pill" :class="data?.zTilt?.applied ? 'lime' : 'muted'">
+              <Check v-if="data?.zTilt?.applied" :size="11" />
+              {{ data?.zTilt?.applied ? t('Z-Tilt ausgerichtet') : t('Z-Tilt offen') }}
+            </span>
+            <button
+              v-if="!isToolchanger"
+              type="button"
+              class="subtle-button"
+              :disabled="loading"
+              @click="fetchCalibration"
+            >
+              <RefreshCw :size="13" :class="{ spinning: loading }" />{{ t('Aktualisieren') }}
+            </button>
+          </div>
         </div>
 
-        <dl v-if="data?.bedMesh?.config || data?.qgl?.configured" class="measurements" style="margin-top: 0">
+        <dl v-if="data?.bedMesh?.config || data?.qgl?.configured || data?.zTilt?.configured" class="measurements" style="margin-top: 0">
           <div v-if="data?.bedMesh?.config?.probeCount">
             <dt>{{ t('Messraster') }}</dt>
             <dd>
@@ -596,67 +634,103 @@ onMounted(() => {
               <template v-if="data.qgl.retries != null"> · {{ t('max. {0}×', [data.qgl.retries]) }}</template>
             </dd>
           </div>
+          <div v-if="data?.zTilt?.retryTolerance != null">
+            <dt>{{ t('Z-Tilt-Toleranz') }}</dt>
+            <dd>
+              {{ number(data.zTilt.retryTolerance, 4) }} mm
+              <template v-if="data.zTilt.retries != null"> · {{ t('max. {0}×', [data.zTilt.retries]) }}</template>
+            </dd>
+          </div>
         </dl>
 
-        <div class="cal-action-row">
-          <template v-if="confirmKey === 'qgl'">
-            <button type="button" class="confirm-button" @click="runAction({ action: 'qgl' }, { capKey: 'qgl', requireHomed: true })">
-              {{ t('QGL starten?') }}
-            </button>
-            <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
-          </template>
-          <button
-            v-else
-            type="button"
-            class="subtle-button"
-            :disabled="!!blockReason({ capKey: 'qgl', requireHomed: true })"
-            :title="t(blockReason({ capKey: 'qgl', requireHomed: true }) || 'Quad Gantry Level ausführen')"
-            @click="requestConfirm('qgl', { capKey: 'qgl', requireHomed: true })"
-          >
-            QGL
-          </button>
-
-          <template v-if="confirmKey === 'fine_qgl'">
+        <div v-if="data?.qgl?.configured || data?.zTilt?.configured || data?.capabilities?.fineQgl || data?.capabilities?.mesh || isToolchanger" class="cal-action-row">
+          <template v-if="data?.qgl?.configured || isToolchanger">
+            <template v-if="confirmKey === 'qgl'">
+              <button type="button" class="confirm-button" @click="runAction({ action: 'qgl' }, { capKey: 'qgl', requireHomed: true })">
+                {{ t('QGL starten?') }}
+              </button>
+              <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+            </template>
             <button
+              v-else
               type="button"
-              class="confirm-button"
-              @click="runAction({ action: 'calibrate_fine_qgl' }, { capKey: 'fineQgl', requireHomed: true })"
+              class="subtle-button"
+              :disabled="!!blockReason({ capKey: 'qgl', requireHomed: true })"
+              :title="t(blockReason({ capKey: 'qgl', requireHomed: true }) || 'Quad Gantry Level ausführen')"
+              @click="requestConfirm('qgl', { capKey: 'qgl', requireHomed: true })"
             >
-              {{ t('Fein-QGL starten?') }}
+              QGL
             </button>
-            <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
           </template>
-          <button
-            v-else
-            type="button"
-            class="subtle-button"
-            :disabled="!!blockReason({ capKey: 'fineQgl', requireHomed: true })"
-            :title="t(blockReason({ capKey: 'fineQgl', requireHomed: true }) || 'Fein-QGL auf niedriger Z-Höhe')"
-            @click="requestConfirm('fine_qgl', { capKey: 'fineQgl', requireHomed: true })"
-          >
-            {{ t('Fein-QGL') }}
-          </button>
 
-          <template v-if="confirmKey === 'mesh'">
+          <template v-if="data?.zTilt?.configured">
+            <template v-if="confirmKey === 'z_tilt'">
+              <button
+                type="button"
+                class="confirm-button"
+                @click="runAction({ action: 'z_tilt' }, { capKey: 'zTilt', requireHomed: true })"
+              >
+                {{ t('Z-Tilt starten?') }}
+              </button>
+              <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+            </template>
             <button
+              v-else
               type="button"
-              class="confirm-button"
-              @click="runAction({ action: 'mesh' }, { capKey: 'mesh', requireHomed: true })"
+              class="subtle-button"
+              :disabled="!!blockReason({ capKey: 'zTilt', requireHomed: true })"
+              :title="t(blockReason({ capKey: 'zTilt', requireHomed: true }) || 'Z-Tilt ausrichten')"
+              @click="requestConfirm('z_tilt', { capKey: 'zTilt', requireHomed: true })"
             >
-              {{ t('Bett vermessen starten?') }}
+              Z-Tilt
             </button>
-            <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
           </template>
-          <button
-            v-else
-            type="button"
-            class="subtle-button"
-            :disabled="!!blockReason({ capKey: 'mesh', requireHomed: true })"
-            :title="t(blockReason({ capKey: 'mesh', requireHomed: true }) || 'Bed Mesh neu vermessen')"
-            @click="requestConfirm('mesh', { capKey: 'mesh', requireHomed: true })"
-          >
-            <Grid2x2 :size="13" />{{ t('Bett vermessen') }}
-          </button>
+
+          <template v-if="data?.capabilities?.fineQgl || isToolchanger">
+            <template v-if="confirmKey === 'fine_qgl'">
+              <button
+                type="button"
+                class="confirm-button"
+                @click="runAction({ action: 'calibrate_fine_qgl' }, { capKey: 'fineQgl', requireHomed: true })"
+              >
+                {{ t('Fein-QGL starten?') }}
+              </button>
+              <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+            </template>
+            <button
+              v-else
+              type="button"
+              class="subtle-button"
+              :disabled="!!blockReason({ capKey: 'fineQgl', requireHomed: true })"
+              :title="t(blockReason({ capKey: 'fineQgl', requireHomed: true }) || 'Fein-QGL auf niedriger Z-Höhe')"
+              @click="requestConfirm('fine_qgl', { capKey: 'fineQgl', requireHomed: true })"
+            >
+              {{ t('Fein-QGL') }}
+            </button>
+          </template>
+
+          <template v-if="data?.capabilities?.mesh || isToolchanger">
+            <template v-if="confirmKey === 'mesh'">
+              <button
+                type="button"
+                class="confirm-button"
+                @click="runAction({ action: 'mesh' }, { capKey: 'mesh', requireHomed: true })"
+              >
+                {{ t('Bett vermessen starten?') }}
+              </button>
+              <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+            </template>
+            <button
+              v-else
+              type="button"
+              class="subtle-button"
+              :disabled="!!blockReason({ capKey: 'mesh', requireHomed: true })"
+              :title="t(blockReason({ capKey: 'mesh', requireHomed: true }) || 'Bed Mesh neu vermessen')"
+              @click="requestConfirm('mesh', { capKey: 'mesh', requireHomed: true })"
+            >
+              <Grid2x2 :size="13" />{{ t('Bett vermessen') }}
+            </button>
+          </template>
         </div>
 
         <template v-if="data?.bedMesh?.active && meshCells">
@@ -715,12 +789,15 @@ onMounted(() => {
             </div>
           </div>
         </template>
-        <p v-else class="muted" style="margin-top: 0">
+        <p v-else-if="data?.capabilities?.mesh || isToolchanger" class="muted" style="margin-top: 0">
           {{ t('Aktuell kein Bett-Mesh geladen. Starte „Bett vermessen“, um ein aktuelles Profil zu erzeugen.') }}
+        </p>
+        <p v-else class="muted" style="margin-top: 0">
+          {{ t('Kein Bed Mesh oder motorisiertes Bett-Leveling konfiguriert.') }}
         </p>
       </section>
 
-      <section class="cal-section" :aria-label="t('Beacon-Sensor & Mechanik')">
+      <section v-if="hasBeaconSection" class="cal-section" :aria-label="t('Beacon-Sensor & Mechanik')">
         <div class="system-panel-head" style="margin-bottom: 0">
           <div>
             <h2>{{ t('Beacon & Mechanik') }}</h2>

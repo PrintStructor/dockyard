@@ -1041,3 +1041,4 @@ input::placeholder{color:var(--muted);opacity:1}
 .app-shell.display-mode .single-actions-grid .subtle-button{min-height:44px;font-size:13px}
 .app-shell.display-mode .single-thermal-card .inspector-target input,
 .app-shell.display-mode .single-thermal-card .apply-temperature{min-height:44px}
+.cal-two-col.cal-single-col{grid-template-columns:1fr}

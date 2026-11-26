@@ -79,10 +79,21 @@ function closeThumbnail() {
 
 let activeController = null
 
+const isToolchanger = computed(() => Boolean(props.status?.isToolchanger))
+const toolCount = computed(() => props.status?.toolCount ?? 6)
+
+watch(
+  isToolchanger,
+  tc => {
+    if (!tc) toolFilter.value = 'all'
+  },
+  { immediate: true },
+)
+
 const toolFilterOptions = computed(() => [
   { value: 'all', label: t('Alle Werkzeuge') },
   { value: 'multi', label: t('Multi-Tool (2+)') },
-  ...Array.from({ length: 6 }, (_, id) => ({ value: String(id), label: `T${id}` })),
+  ...Array.from({ length: toolCount.value }, (_, id) => ({ value: String(id), label: `T${id}` })),
 ])
 
 const filteredJobs = computed(() => {
@@ -92,8 +103,10 @@ const filteredJobs = computed(() => {
     if (statusFilter.value === 'completed' && job.status !== 'completed') return false
     if (statusFilter.value === 'cancelled' && job.status !== 'cancelled' && job.status !== 'interrupted') return false
     if (statusFilter.value === 'error' && job.status !== 'error') return false
-    if (toolFilter.value === 'multi' && job.tools.length < 2) return false
-    if (/^[0-5]$/.test(toolFilter.value) && !job.tools.some(tool => tool.id === Number(toolFilter.value))) return false
+    if (isToolchanger.value) {
+      if (toolFilter.value === 'multi' && job.tools.length < 2) return false
+      if (/^[0-7]$/.test(toolFilter.value) && !job.tools.some(tool => tool.id === Number(toolFilter.value))) return false
+    }
     return true
   })
 })
@@ -303,7 +316,7 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <div class="history-tool-filter">
+      <div v-if="isToolchanger" class="history-tool-filter">
         <CockpitSelect
           v-model="toolFilter"
           :options="toolFilterOptions"
@@ -378,7 +391,7 @@ onBeforeUnmount(() => {
                 <strong class="history-row-name">{{ job.name || t('Unbekannte Datei') }}</strong>
                 <span class="history-row-sub">
                   <span>{{ formatTimestamp(job.startTime) }}</span>
-                  <span v-if="job.tools.length" class="history-row-tools">
+                  <span v-if="job.tools.length && (isToolchanger || job.tools.length > 1)" class="history-row-tools">
                     <span v-for="tool in job.tools" :key="tool.id" class="history-tool-chip">
                       <span class="history-tool-dot" :style="{ background: tool.color ?? '#8b9ba2' }" />
                       T{{ tool.id }}
@@ -570,8 +583,12 @@ onBeforeUnmount(() => {
             </div>
           </dl>
 
-          <section v-if="selectedJob.tools.length" class="print-tools-section" :aria-label="t('Verwendete Werkzeuge')">
-            <h3>{{ t('Verwendete Werkzeuge') }}</h3>
+          <section
+            v-if="selectedJob.tools.length"
+            class="print-tools-section"
+            :aria-label="isToolchanger || selectedJob.tools.length > 1 ? t('Verwendete Werkzeuge') : t('Filament')"
+          >
+            <h3>{{ isToolchanger || selectedJob.tools.length > 1 ? t('Verwendete Werkzeuge') : t('Filament') }}</h3>
             <ul class="print-tool-list">
               <li v-for="tool in selectedJob.tools" :key="tool.id" class="print-tool-item">
                 <span
@@ -581,7 +598,7 @@ onBeforeUnmount(() => {
                 />
                 <div class="print-tool-info">
                   <strong>
-                    T{{ tool.id }}
+                    {{ isToolchanger || selectedJob.tools.length > 1 ? `T${tool.id}` : t('Extruder') }}
                     <span v-if="tool.type" class="print-tool-type">{{ tool.type }}</span>
                   </strong>
                   <small v-if="tool.name">{{ tool.name }}</small>

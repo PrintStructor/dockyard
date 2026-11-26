@@ -1,23 +1,60 @@
 const list = value => {
   if (Array.isArray(value)) return value
   if (typeof value !== 'string') return []
+  const trimmed = value.trim()
+  if (!trimmed) return []
   try {
-    const parsed = JSON.parse(value)
-    return Array.isArray(parsed) ? parsed : []
+    const parsed = JSON.parse(trimmed)
+    if (Array.isArray(parsed)) return parsed
   } catch {
-    return []
+    // Fall through to delimiter / single-value parsing.
   }
+  if (trimmed.includes(';')) {
+    return trimmed
+      .split(';')
+      .map(part => part.trim())
+      .filter(Boolean)
+  }
+  return [trimmed]
 }
 
-export function materialsFromMetadata(metadata, filename) {
-  if (metadata.slicer !== 'OrcaSlicer') return Array(6).fill(null)
+const normalizeHexColor = value => {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (/^#[0-9a-f]{6}$/i.test(trimmed)) return trimmed
+  if (/^[0-9a-f]{6}$/i.test(trimmed)) return `#${trimmed}`
+  return null
+}
+
+export function materialsFromMetadata(metadata, filename, toolCount = 6) {
+  const slots = Number.isInteger(toolCount) && toolCount >= 1 ? toolCount : 6
+  if (!metadata || typeof metadata !== 'object') return Array(slots).fill(null)
+
   const types = list(metadata.filament_type)
   const names = list(metadata.filament_name)
   const colors = list(metadata.filament_colors)
 
+  if (slots === 1) {
+    const rawType = typeof types[0] === 'string' ? types[0].trim() : ''
+    const rawColor = normalizeHexColor(colors[0])
+    const rawName = typeof names[0] === 'string' && names[0].trim() ? names[0].trim().slice(0, 160) : null
+    if (!rawType && !rawColor) return [null]
+    return [
+      {
+        type: (rawType || 'Filament').slice(0, 80),
+        name: rawName,
+        color: rawColor,
+        source: typeof metadata.slicer === 'string' && metadata.slicer.trim() ? metadata.slicer.trim().slice(0, 60) : 'Slicer',
+        filename,
+      },
+    ]
+  }
+
+  if (metadata.slicer !== 'OrcaSlicer') return Array(slots).fill(null)
+
   // This printer's Orca profile exports six slots indexed T0–T5. A one-material
   // file does not establish which of six physical tools it belongs to.
-  if (types.length !== 6 || colors.length !== 6) return Array(6).fill(null)
+  if (types.length !== slots || colors.length !== slots) return Array(slots).fill(null)
 
   return types.map((type, id) => ({
     type: String(type).slice(0, 80),
@@ -55,11 +92,13 @@ export function createMaterialsReader(printerOrGetter, fetchImpl = fetch, onUpda
     version++
   }
 
-  const read = raw => {
+  const read = (raw, toolCount = 6) => {
+    const slots = Number.isInteger(toolCount) && toolCount >= 1 ? toolCount : 6
     const filename = ['printing', 'paused'].includes(raw.print_stats?.state) ? raw.print_stats.filename : ''
-    if (filename !== key) {
-      key = filename
-      materials = Array(6).fill(null)
+    const nextKey = filename ? `${slots}:${filename}` : ''
+    if (nextKey !== key) {
+      key = nextKey
+      materials = Array(slots).fill(null)
       signature = JSON.stringify(materials)
       requestedAt = 0
       pending = false
@@ -76,10 +115,10 @@ export function createMaterialsReader(printerOrGetter, fetchImpl = fetch, onUpda
         .then(async response => {
           if (!response.ok) throw new Error('metadata')
           const data = await response.json()
-          if (requestVersion === version) apply(materialsFromMetadata(data.result ?? {}, filename))
+          if (requestVersion === version) apply(materialsFromMetadata(data.result ?? {}, filename, slots))
         })
         .catch(() => {
-          if (requestVersion === version) apply(Array(6).fill(null))
+          if (requestVersion === version) apply(Array(slots).fill(null))
         })
         .finally(() => {
           if (requestVersion === version) pending = false

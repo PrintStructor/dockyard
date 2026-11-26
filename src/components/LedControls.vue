@@ -22,19 +22,41 @@ const extra = ref('')
 const confirmMotors = ref(false)
 let confirmMotorsTimer = null
 
+const isToolchanger = computed(() => Boolean(props.status?.isToolchanger))
+const levelingKind = computed(() => {
+  if (props.status?.capabilities?.qgl) return 'qgl'
+  if (props.status?.capabilities?.zTilt) return 'z_tilt'
+  return null
+})
+const levelingApplied = computed(() => Boolean(props.status?.qglApplied || props.status?.zTiltApplied))
+
 const reason = action => auxActionReason(props.status, action, props.online, props.pending)
 const homeReason = computed(() => quickMotionReason(props.status, 'home', props.online, props.pending))
-const qglReason = computed(() => quickMotionReason(props.status, 'qgl', props.online, props.pending))
+const levelingReason = computed(() =>
+  levelingKind.value ? quickMotionReason(props.status, levelingKind.value, props.online, props.pending) : '',
+)
 const motorsReason = computed(() => quickMotionReason(props.status, 'motors_off', props.online, props.pending))
 const homed = axis => props.status?.homedAxes?.includes(axis) === true
 const allHomed = computed(() => [...'xyz'].every(homed))
 const axisHomeReason = axis => quickHomeAxisReason(props.status, axis, props.online, props.pending)
 const prepNote = computed(() => {
-  if (confirmMotors.value) return 'Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden.'
+  if (confirmMotors.value) {
+    return props.status?.zTiltApplied && !props.status?.qglApplied
+      ? 'Erneut klicken zum Bestätigen · Z-Tilt muss danach erneut ausgeführt werden.'
+      : 'Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden.'
+  }
   if (homeReason.value) return homeReason.value
-  if (!homed('x') || !homed('y')) return 'Für Z und QGL zuerst X/Y oder ALL homen.'
-  if (!homed('z')) return 'Für QGL zuerst Z homen.'
-  return 'Homet bei Bedarf X/Y und fährt zur Bettmitte.'
+  if (!homed('x') || !homed('y')) {
+    if (levelingKind.value === 'qgl') return 'Für Z und QGL zuerst X/Y oder ALL homen.'
+    if (levelingKind.value === 'z_tilt') return 'Für Z und Z-Tilt zuerst X/Y oder ALL homen.'
+    return 'Für Z zuerst X/Y oder ALL homen.'
+  }
+  if (!homed('z')) {
+    if (levelingKind.value === 'qgl') return 'Für QGL zuerst Z homen.'
+    if (levelingKind.value === 'z_tilt') return 'Für Z-Tilt zuerst Z homen.'
+    return 'Z-Achse noch nicht referenziert.'
+  }
+  return isToolchanger.value ? 'Homet bei Bedarf X/Y und fährt zur Bettmitte.' : 'Alle Achsen referenziert.'
 })
 const axisPosition = axis => {
   const index = ['x', 'y', 'z'].indexOf(axis)
@@ -46,6 +68,7 @@ const axisPosition = axis => {
 const available = id => props.status?.capabilities?.ledProfiles?.includes(id)
 const main = computed(() => ledProfiles.slice(0, 5).filter(profile => available(profile.id)))
 const others = computed(() => ledProfiles.slice(5).filter(profile => available(profile.id)))
+const hasLedProfiles = computed(() => main.value.length > 0 || others.value.length > 0)
 const otherOptions = computed(() => others.value.map(profile => ({ value: profile.id, label: profile.label })))
 
 function resetMotorsConfirm() {
@@ -84,13 +107,13 @@ function homeAxis(axis) {
   if (!axisHomeReason(axis)) emit('command', { action: 'home', axis })
 }
 
-function runQgl() {
-  if (!qglReason.value) emit('command', { action: 'qgl' })
+function runLeveling() {
+  if (levelingKind.value && !levelingReason.value) emit('command', { action: levelingKind.value })
 }
 
 function releaseMotors() {
   if (motorsReason.value) return
-  if (props.status?.qglApplied && !confirmMotors.value) {
+  if (levelingApplied.value && !confirmMotors.value) {
     confirmMotors.value = true
     clearTimeout(confirmMotorsTimer)
     confirmMotorsTimer = setTimeout(resetMotorsConfirm, 5000)
@@ -106,7 +129,7 @@ function initialize() {
 </script>
 
 <template>
-  <section class="initialize-control" :aria-label="t('Vorbereitung & Toolchanger')">
+  <section class="initialize-control" :aria-label="isToolchanger ? t('Vorbereitung & Toolchanger') : t('Maschine & Vorbereitung')">
     <div class="machine-deck-head">
       <h3><Wrench :size="14" />{{ t('Maschine & Vorbereitung') }}</h3>
       <p :class="{ 'prep-note-warn': confirmMotors || !!homeReason }" :title="t(prepNote)" role="status">
@@ -114,7 +137,7 @@ function initialize() {
       </p>
     </div>
     <div class="prep-grid-wrap">
-      <div class="prep-actions">
+      <div class="prep-actions" :class="{ 'no-leveling': !levelingKind }">
         <button
           class="subtle-button"
           :class="{ 'prep-done': allHomed && online }"
@@ -133,25 +156,48 @@ function initialize() {
           <Home :size="13" /><span>ALL</span>
         </button>
         <button
+          v-if="levelingKind === 'qgl'"
           class="subtle-button"
           :class="{ 'prep-done': status?.qglApplied && online }"
           type="button"
-          :disabled="!!qglReason"
+          :disabled="!!levelingReason"
           :aria-label="
             status?.qglApplied
               ? t('Gantry bereits ausgerichtet. QGL erneut ausführen')
               : t('Gantry ausrichten · QGL')
           "
           :title="
-            qglReason
-              ? t(qglReason)
+            levelingReason
+              ? t(levelingReason)
               : status?.qglApplied
                 ? t('Bereits ausgerichtet · QGL erneut ausführen')
                 : t('Gantry ausrichten')
           "
-          @click="runQgl"
+          @click="runLeveling"
         >
           <span>QGL</span>
+        </button>
+        <button
+          v-else-if="levelingKind === 'z_tilt'"
+          class="subtle-button"
+          :class="{ 'prep-done': status?.zTiltApplied && online }"
+          type="button"
+          :disabled="!!levelingReason"
+          :aria-label="
+            status?.zTiltApplied
+              ? t('Bett bereits ausgerichtet. Z-Tilt erneut ausführen')
+              : t('Z-Tilt ausrichten')
+          "
+          :title="
+            levelingReason
+              ? t(levelingReason)
+              : status?.zTiltApplied
+                ? t('Bereits ausgerichtet · Z-Tilt erneut ausführen')
+                : t('Z-Tilt ausrichten')
+          "
+          @click="runLeveling"
+        >
+          <span>Z-Tilt</span>
         </button>
         <button
           class="subtle-button prep-motors-btn"
@@ -163,10 +209,14 @@ function initialize() {
             motorsReason
               ? t(motorsReason)
               : confirmMotors
-                ? t('Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden')
+                ? status?.zTiltApplied && !status?.qglApplied
+                  ? t('Erneut klicken zum Bestätigen · Z-Tilt muss danach erneut ausgeführt werden')
+                  : t('Erneut klicken zum Bestätigen · QGL muss danach erneut ausgeführt werden')
                 : status?.qglApplied
                   ? t('Motoren lösen · Gantry senkt sich ab (QGL geht verloren)')
-                  : t('Motoren lösen')
+                  : status?.zTiltApplied
+                    ? t('Motoren lösen · Ausrichtung geht verloren (Z-Tilt)')
+                    : t('Motoren lösen')
           "
           @click="releaseMotors"
           @blur="resetMotorsConfirm"
@@ -214,6 +264,7 @@ function initialize() {
     </div>
 
     <button
+      v-if="isToolchanger && status?.capabilities?.initialize"
       class="subtle-button"
       type="button"
       :disabled="!!reason('initialize')"
@@ -228,7 +279,7 @@ function initialize() {
     </button>
   </section>
 
-  <section class="led-controls" :aria-label="t('LED-Befehle')">
+  <section v-if="hasLedProfiles" class="led-controls" :aria-label="t('LED-Befehle')">
     <div class="machine-deck-head">
       <h3><Lightbulb :size="14" />LED Control</h3>
       <p :title="t('LED-Status für Tools und Drucker.')">{{ t('LED-Status für Tools und Drucker.') }}</p>

@@ -5,6 +5,7 @@ import { thermalDisplay } from '../thermal.mjs'
 
 const props = defineProps({
   id: Number,
+  label: { type: String, default: '' },
   temperature: Number,
   target: Number,
   power: Number,
@@ -23,11 +24,13 @@ const gauge = computed(() => thermalDisplay(props))
     :aria-hidden="decorative ? 'true' : undefined"
     :aria-label="
       !decorative
-        ? t('T{0}: {1}{2}', [
-            id,
-            gauge.label,
-            gauge.scale ? t(', {0} °C, Ziel {1} °C', [Math.round(temperature), target]) : '',
-          ])
+        ? label
+          ? `${label}: ${t(gauge.label)}${gauge.scale ? t(', {0} °C, Ziel {1} °C', [Math.round(temperature), target]) : ''}`
+          : t('T{0}: {1}{2}', [
+              id,
+              gauge.label,
+              gauge.scale ? t(', {0} °C, Ziel {1} °C', [Math.round(temperature), target]) : '',
+            ])
         : undefined
     "
     :aria-valuemin="!decorative && gauge.scale ? 0 : undefined"

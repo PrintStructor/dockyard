@@ -985,3 +985,59 @@ input::placeholder{color:var(--muted);opacity:1}
 .app-shell.display-mode .settings-pane input[type=text]{min-height:44px;font-size:14px}
 .app-shell.display-mode .settings-close-btn,
 .app-shell.display-mode .settings-printer-actions .icon-button{width:44px;height:44px}
+
+/* Single-Tool Overview & Decoupled Multi-Printer Layout (flat graphite/lime, zero box-shadows) */
+.tool-choices{grid-template-columns:repeat(var(--tool-cols,6),minmax(0,1fr))}
+.tool-choices.no-scene{margin-top:0}
+.tools-machine-panel.single-col{grid-template-columns:1fr}
+.tools-machine-panel.single-col .initialize-control{padding-right:0}
+.prep-actions.no-leveling{grid-template-columns:repeat(2,minmax(0,1fr))}
+
+.tools-layout.single-tool-layout{grid-template-columns:minmax(0,1fr) 316px}
+.single-tool-main{display:flex;flex-direction:column;gap:12px;min-width:0}
+.single-tool-main .tools-machine-panel{margin-top:0}
+.single-thermal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;min-width:0}
+.single-thermal-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.single-thermal-card.stale{opacity:.72}
+.single-thermal-head{display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0}
+.single-thermal-title{display:flex;align-items:center;gap:8px;min-width:0}
+.single-thermal-title h2{font-size:15px;font-weight:600;color:var(--text);margin:0}
+.single-icon-accent{color:var(--lime)}
+.single-led-dots{display:inline-flex;align-items:center;gap:4px;margin-left:4px}
+.single-heat-pill{font-size:11px;padding:3px 8px;border-radius:6px;border:1px solid var(--line);background:var(--surface-deep);color:var(--muted);white-space:nowrap}
+.single-heat-pill.heating{color:var(--lime);border-color:var(--lime-line);background:var(--lime-tint)}
+.single-thermal-readout{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.single-big-temp{font-size:clamp(30px,3vw,38px);font-weight:500;letter-spacing:-.04em;line-height:1.05;font-variant-numeric:tabular-nums;color:var(--text)}
+.single-big-temp span{font-size:16px;color:var(--muted);margin-left:4px;font-weight:400}
+.single-power-pill{font-size:11.5px;font-family:var(--font-mono);font-variant-numeric:tabular-nums;padding:3px 8px;border-radius:6px;border:1px solid var(--line-subtle);background:var(--surface-deep);color:var(--muted)}
+.single-thermal-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-top:10px;border-top:1px solid var(--line-subtle)}
+.single-meta-pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;padding:3px 9px;border-radius:6px;border:1px solid var(--line);background:var(--surface-deep);color:var(--muted);font-variant-numeric:tabular-nums}
+.single-meta-pill.present{border-color:var(--lime-line);background:var(--lime-tint);color:var(--lime)}
+.single-meta-pill.empty{border-color:var(--amber-line);background:var(--amber-tint);color:var(--amber)}
+.single-meta-dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+
+.single-metrics-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:10px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:12px 16px;min-width:0}
+.single-metric-cell{display:flex;flex-direction:column;gap:4px;min-width:0;padding:2px 0}
+.single-metric-label{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.single-metric-value{font-size:13.5px;font-weight:500;color:var(--text);display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.single-metric-value em{font-style:normal;color:var(--muted);font-size:11px;margin-right:2px}
+.single-metric-value small{font-size:11px;font-weight:400;color:var(--muted)}
+.single-mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+.single-activity-tag{font-size:10.5px;font-weight:500;padding:2px 7px;border-radius:5px;border:1px solid var(--lime-line);background:var(--lime-tint);color:var(--lime)}
+
+.single-tool-inspector{display:flex;flex-direction:column;gap:12px;min-width:0}
+.single-tool-inspector .fan-panel{margin:0;padding:14px 16px}
+.single-actions-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.single-actions-card h3{font-size:13px;font-weight:500;color:var(--text);margin:0}
+.single-actions-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.single-actions-grid .subtle-button{justify-content:center;min-height:36px;padding:7px 8px;font-size:12px}
+
+@media(max-width:1040px){
+  .tools-layout.single-tool-layout{grid-template-columns:1fr}
+}
+@media(max-width:700px){
+  .single-thermal-grid{grid-template-columns:1fr}
+}
+.app-shell.display-mode .single-actions-grid .subtle-button{min-height:44px;font-size:13px}
+.app-shell.display-mode .single-thermal-card .inspector-target input,
+.app-shell.display-mode .single-thermal-card .apply-temperature{min-height:44px}

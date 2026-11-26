@@ -5,6 +5,8 @@ import { t } from '../i18n.mjs'
 
 const props = defineProps({
   tool: Number,
+  heater: { type: String, default: '' },
+  label: { type: String, default: '' },
   target: Number,
   max: Number,
   online: Boolean,
@@ -15,6 +17,10 @@ const props = defineProps({
 
 const draft = ref(null)
 const submitted = ref(null)
+
+const resolvedHeater = computed(() => props.heater || (props.tool ? `extruder${props.tool}` : 'extruder'))
+const inputId = computed(() => `inspector-target-${props.heater || props.tool}`)
+const targetDisplayName = computed(() => props.label || `T${props.tool}`)
 
 const value = computed(() => draft.value ?? (Number.isFinite(props.target) ? String(Math.round(props.target)) : ''))
 const enabled = computed(() => props.online && props.ready && !props.pending && Number.isFinite(props.max))
@@ -35,7 +41,7 @@ watch(() => props.target, acknowledge)
 async function apply() {
   if (!enabled.value || !valid.value || !dirty.value) return
   const target = Number(value.value)
-  if (await props.send({ action: 'temperature', heater: props.tool ? `extruder${props.tool}` : 'extruder', target })) {
+  if (await props.send({ action: 'temperature', heater: resolvedHeater.value, target })) {
     submitted.value = target
     acknowledge()
   }
@@ -44,9 +50,9 @@ async function apply() {
 
 <template>
   <form class="inspector-target" @submit.prevent="apply">
-    <label :for="`inspector-target-${tool}`">{{ t('Ziel') }}</label>
+    <label :for="inputId">{{ t('Ziel') }}</label>
     <input
-      :id="`inspector-target-${tool}`"
+      :id="inputId"
       :value="value"
       type="number"
       min="0"
@@ -56,7 +62,11 @@ async function apply() {
       inputmode="numeric"
       :disabled="!enabled"
       :class="{ dirty }"
-      :aria-label="t('Zieltemperatur für T{0} in Grad Celsius', [tool])"
+      :aria-label="
+        label
+          ? t('Zieltemperatur für {0} in Grad Celsius', [targetDisplayName])
+          : t('Zieltemperatur für T{0} in Grad Celsius', [tool])
+      "
       :title="t('Enter übernimmt · Escape verwirft')"
       placeholder="—"
       @input="draft = $event.target.value"
@@ -66,7 +76,11 @@ async function apply() {
     <button
       class="apply-temperature"
       :disabled="!enabled || !valid || !dirty"
-      :aria-label="t('Zieltemperatur für T{0} übernehmen', [tool])"
+      :aria-label="
+        label
+          ? t('Zieltemperatur für {0} übernehmen', [targetDisplayName])
+          : t('Zieltemperatur für T{0} übernehmen', [tool])
+      "
       :title="t('Zieltemperatur übernehmen')"
     >
       <Check :size="14" />

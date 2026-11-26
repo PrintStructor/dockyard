@@ -38,13 +38,14 @@ import CameraView from './components/CameraView.vue'
 import CockpitSelect from './components/CockpitSelect.vue'
 import LivePrintTuning from './components/LivePrintTuning.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
+import SingleToolOverview from './components/SingleToolOverview.vue'
 import { useControls } from './useControls.js'
 import { usePrinter } from './usePrinter.js'
 import { useConsole } from './useConsole.js'
 import { useConfigEditor } from './useConfigEditor.js'
 import { useSettings } from './useSettings.js'
 import { useCameras } from './useCameras.js'
-import { auxActionReason } from './aux-action-state.mjs'
+import { auxActionReason, ledProfiles } from './aux-action-state.mjs'
 import { toolActionReason, filamentToolIds, mountedToolId, maintenanceRestriction } from './tool-action-state.mjs'
 import { resolveMainsailUrl } from './printer-ui-url.mjs'
 import { toolState, heatState } from '../server/status.mjs'
@@ -406,8 +407,33 @@ async function handleToolCommand(command) {
   }
 }
 
-const tools = computed(() => status.value?.tools ?? Array.from({ length: 6 }, (_, id) => ({ id })))
-const current = computed(() => tools.value[selected.value])
+const isToolchanger = computed(() => Boolean(status.value?.isToolchanger))
+const toolCount = computed(
+  () =>
+    status.value?.toolCount ??
+    (settingsStore.activePrinter.value?.model?.preset === 'stormtrooper-6tc' ? 6 : 1),
+)
+const isSingleTool = computed(() =>
+  status.value
+    ? !status.value.isToolchanger && status.value.toolCount === 1
+    : settingsStore.activePrinter.value?.model?.preset !== 'stormtrooper-6tc',
+)
+const show3dScene = computed(() => {
+  const preset = settingsStore.activePrinter.value?.model?.preset ?? 'auto'
+  if (preset === 'none') return false
+  if (preset === 'stormtrooper-6tc') return true
+  return Boolean(status.value?.isToolchanger && status.value?.toolCount === 6)
+})
+const hasLedDeck = computed(() => {
+  const installed = status.value?.capabilities?.ledProfiles ?? []
+  return ledProfiles.some(p => installed.includes(p.id))
+})
+
+const tools = computed(() => status.value?.tools ?? Array.from({ length: toolCount.value }, (_, id) => ({ id })))
+watch(tools, list => {
+  if (selected.value >= list.length) selected.value = 0
+})
+const current = computed(() => tools.value[selected.value] ?? tools.value[0] ?? { id: 0 })
 const watchAction = computed(() => (status.value?.loadWatchActive ? 'watch_stop' : 'watch_start'))
 const watchReason = computed(() => auxActionReason(status.value, watchAction.value, online.value, pending.value))
 function toggleLoadWatch() {
@@ -586,7 +612,7 @@ const sensors = computed(() => [
 const pageHeading = computed(
   () =>
     ({
-      tools: 'Deine Werkzeuge. Im Blick.',
+      tools: isSingleTool.value ? 'Dein Drucker. Im Blick.' : 'Deine Werkzeuge. Im Blick.',
       controls: 'Drucker bedienen.',
       print: 'Druck & 3D-Vorschau.',
       history: 'Druckverlauf.',
@@ -599,12 +625,18 @@ const pageHeading = computed(
 const pageSubtitle = computed(() => {
   if (tab.value === 'controls') return controlsSubtitle.value
   return {
-    tools: 'Werkzeug auswählen und seinen aktuellen Zustand prüfen.',
+    tools: isSingleTool.value
+      ? 'Temperaturen, Lüfter, Achsen und Sensoren direkt im Blick.'
+      : 'Werkzeug auswählen und seinen aktuellen Zustand prüfen.',
     print: 'Aktuellen Druck oder G-Code-Dateien als 3D-Modell prüfen.',
-    history: 'Vergangene Druckjobs, Laufzeiten, Filamentverbrauch und Werkzeugnutzung.',
+    history: isToolchanger.value
+      ? 'Vergangene Druckjobs, Laufzeiten, Filamentverbrauch und Werkzeugnutzung.'
+      : 'Vergangene Druckjobs, Laufzeiten und Filamentverbrauch.',
     cameras: 'Aktive Druckerkameras · kontinuierliche Livestreams.',
     console: 'G-Code und Makros senden. Antworten direkt mitlesen.',
-    system: 'Host, Konfiguration, Kalibrierung und Wartung deines Toolchangers.',
+    system: isToolchanger.value
+      ? 'Host, Konfiguration, Kalibrierung und Wartung deines Toolchangers.'
+      : 'Host, Konfiguration, Kalibrierung und Wartung deines Druckers.',
   }[tab.value]
 })
 
@@ -777,7 +809,7 @@ async function acknowledgeUncertain() {
         :aria-current="tab === 'tools' ? 'page' : undefined"
         @click="tab = 'tools'"
       >
-        <Box :size="17" />{{ t('Werkzeuge') }}
+        <Box :size="17" />{{ isSingleTool ? t('Übersicht') : t('Werkzeuge') }}
       </button>
       <button
         type="button"
@@ -850,7 +882,7 @@ async function acknowledgeUncertain() {
             <Printer :size="14" />{{ t(printLabel) }}
           </span>
           <strong class="print-job-file">{{ status.filename || t('Unbekannte Datei') }}</strong>
-          <span v-if="status.active != null" class="print-job-detail">T{{ status.active }}</span>
+          <span v-if="isToolchanger && status.active != null" class="print-job-detail">T{{ status.active }}</span>
           <span v-if="printProgressPercent != null" class="print-job-detail">{{ printProgressPercent }} %</span>
           <span v-if="status.printDuration != null" class="print-job-detail">
             {{ formatDuration(status.printDuration) }}
@@ -1060,80 +1092,108 @@ async function acknowledgeUncertain() {
         </button>
       </div>
 
-      <section v-show="tab === 'tools'" class="tools-layout" :aria-label="t('Werkzeugübersicht')">
-        <div class="scene-column">
-          <ToolScene
-            ref="scene"
-            :tools="tools"
-            :online="online"
-            :selected="selected"
-            :detected="status?.detected"
-            @select="selectTool"
-          />
-          <div class="tool-choices" :aria-label="t('Werkzeug auswählen')">
-            <article v-for="tool in tools" :key="tool.id" class="tool-card" :class="{ selected: selected === tool.id }">
-              <button
-                type="button"
-                :class="['tool-choice', { selected: selected === tool.id, stale: !online }]"
-                :aria-pressed="selected === tool.id"
-                :aria-label="
-                  t('T{0} auswählen · {1} °C · {2} · {3}', [
-                    tool.id,
-                    temperature(tool.temperature),
-                    state(tool),
-                    shortFilament(tool),
-                  ])
-                "
-                @click="selectTool(tool.id)"
-              >
-                <span class="tool-choice-top">
-                  <strong>T{{ tool.id }}</strong>
-                  <span v-if="tool.detected && online" class="detected-dot" role="img" :aria-label="t('Aufgenommen')">
-                    <Check :size="13" />
-                  </span>
-                  <ChevronRight v-else :size="14" class="choice-arrow" />
-                </span>
-                <span class="tool-temperature">{{ temperature(tool.temperature) }}<small>°C</small></span>
-                <ThermalGauge
-                  :id="tool.id"
-                  :temperature="tool.temperature"
-                  :target="tool.target"
-                  :power="tool.power"
-                  :max-temperature="status?.capabilities?.toolMax?.[tool.id]"
-                  :online="online"
-                  decorative
-                />
-                <span class="tool-status">{{ t(state(tool)) }}</span>
-                <span class="tool-filament" :class="filamentClass(tool)" :title="t(filament(tool))">
-                  <span class="filament-mark" :style="{ '--filament-color': tool.material?.color ?? '#bec9cc' }" />
-                  {{ t(shortFilament(tool)) }}
-                </span>
-                <span
-                  class="tool-material"
-                  :title="tool.material?.name ?? t('Noch keine Materialangaben aus einer aktiven Druckdatei')"
+      <section
+        v-show="tab === 'tools'"
+        class="tools-layout"
+        :class="{ 'single-tool-layout': isSingleTool }"
+        :aria-label="isSingleTool ? t('Druckerübersicht') : t('Werkzeugübersicht')"
+      >
+        <SingleToolOverview
+          v-if="isSingleTool"
+          :status="status"
+          :online="online"
+          :pending="pending"
+          :send="send"
+          :time="time"
+          :printer-subtitle="printerSubtitle"
+          @command="send"
+        />
+
+        <template v-else>
+          <div class="scene-column">
+            <ToolScene
+              v-if="show3dScene"
+              ref="scene"
+              :tools="tools"
+              :online="online"
+              :selected="selected"
+              :detected="status?.detected"
+              @select="selectTool"
+            />
+            <div
+              class="tool-choices"
+              :class="{ 'no-scene': !show3dScene }"
+              :style="{ '--tool-cols': Math.min(6, Math.max(2, tools.length)) }"
+              :aria-label="t('Werkzeug auswählen')"
+            >
+              <article v-for="tool in tools" :key="tool.id" class="tool-card" :class="{ selected: selected === tool.id }">
+                <button
+                  type="button"
+                  :class="['tool-choice', { selected: selected === tool.id, stale: !online }]"
+                  :aria-pressed="selected === tool.id"
+                  :aria-label="
+                    t('T{0} auswählen · {1} °C · {2} · {3}', [
+                      tool.id,
+                      temperature(tool.temperature),
+                      state(tool),
+                      shortFilament(tool),
+                    ])
+                  "
+                  @click="selectTool(tool.id)"
                 >
-                  <span v-if="tool.material?.color" class="material-color" :style="{ background: tool.material.color }" />
-                  {{ tool.material?.type ?? t('Material unbekannt') }}
-                </span>
-                <span class="tool-z-offset"><span>ΔZ</span>{{ zOffset(tool) }}</span>
-              </button>
-              <ToolActions
-                mode="mount"
-                :tool="tool.id"
-                :status="status"
-                :online="online"
-                :pending="pending"
-                @command="handleToolCommand"
-              />
-            </article>
+                  <span class="tool-choice-top">
+                    <strong>T{{ tool.id }}</strong>
+                    <span v-if="tool.detected && online" class="detected-dot" role="img" :aria-label="t('Aufgenommen')">
+                      <Check :size="13" />
+                    </span>
+                    <ChevronRight v-else :size="14" class="choice-arrow" />
+                  </span>
+                  <span class="tool-temperature">{{ temperature(tool.temperature) }}<small>°C</small></span>
+                  <ThermalGauge
+                    :id="tool.id"
+                    :temperature="tool.temperature"
+                    :target="tool.target"
+                    :power="tool.power"
+                    :max-temperature="status?.capabilities?.toolMax?.[tool.id]"
+                    :online="online"
+                    decorative
+                  />
+                  <span class="tool-status">{{ t(state(tool)) }}</span>
+                  <span class="tool-filament" :class="filamentClass(tool)" :title="t(filament(tool))">
+                    <span class="filament-mark" :style="{ '--filament-color': tool.material?.color ?? '#bec9cc' }" />
+                    {{ t(shortFilament(tool)) }}
+                  </span>
+                  <span
+                    class="tool-material"
+                    :title="tool.material?.name ?? t('Noch keine Materialangaben aus einer aktiven Druckdatei')"
+                  >
+                    <span v-if="tool.material?.color" class="material-color" :style="{ background: tool.material.color }" />
+                    {{ tool.material?.type ?? t('Material unbekannt') }}
+                  </span>
+                  <span v-if="isToolchanger" class="tool-z-offset"><span>ΔZ</span>{{ zOffset(tool) }}</span>
+                </button>
+                <ToolActions
+                  v-if="isToolchanger"
+                  mode="mount"
+                  :tool="tool.id"
+                  :status="status"
+                  :online="online"
+                  :pending="pending"
+                  @command="handleToolCommand"
+                />
+              </article>
+            </div>
+
+            <section
+              class="tools-machine-panel"
+              :class="{ 'single-col': !hasLedDeck }"
+              :aria-label="t('Maschine & Vorbereitung')"
+            >
+              <LedControls :status="status" :online="online" :pending="pending" @command="send" />
+            </section>
           </div>
 
-          <section class="tools-machine-panel" :aria-label="t('Maschine & Vorbereitung')">
-            <LedControls :status="status" :online="online" :pending="pending" @command="send" />
-          </section>
-        </div>
-
-        <aside class="inspector" :aria-label="t('Details zum ausgewählten Werkzeug')">
+          <aside class="inspector" :aria-label="t('Details zum ausgewählten Werkzeug')">
             <div class="inspector-title">
               <h2>T{{ selected }}</h2>
               <span class="selection-label">{{ t('Ausgewählt') }}</span>
@@ -1219,7 +1279,7 @@ async function acknowledgeUncertain() {
             <details class="calibration">
               <summary>{{ t('Kalibrierung') }}<ChevronRight :size="15" /></summary>
               <dl class="measurements">
-                <div>
+                <div v-if="isToolchanger">
                   <dt>Offset X / Y / Z</dt>
                   <dd class="offsets">
                     {{ number(current.offsets?.x, 3) }} / {{ number(current.offsets?.y, 3) }} / {{ number(current.offsets?.z, 3) }} mm
@@ -1232,7 +1292,7 @@ async function acknowledgeUncertain() {
               </dl>
             </details>
 
-            <details class="inspector-filament">
+            <details v-if="isToolchanger" class="inspector-filament">
               <summary>
                 <span>{{ t('Filamentaktionen') }}</span>
                 <span v-if="online && status?.loadWatchActive" class="text-lime">{{ t('Einlegehilfe scharf') }}</span>
@@ -1254,7 +1314,7 @@ async function acknowledgeUncertain() {
               <div class="tool-operations-bar">
                 <div class="tool-bulk-actions">
                   <span>
-                    {{ online ? t('{0}/6 mit Filament', [filamentCount]) : t('Filamentstatus unbekannt') }}
+                    {{ online ? t('{0}/{1} mit Filament', [filamentCount, tools.length]) : t('Filamentstatus unbekannt') }}
                   </span>
                   <button
                     class="subtle-button"
@@ -1324,6 +1384,7 @@ async function acknowledgeUncertain() {
               </div>
             </details>
           </aside>
+        </template>
 
         <ConsoleView
           v-if="tab === 'tools'"
@@ -1360,6 +1421,7 @@ async function acknowledgeUncertain() {
         :online="online"
         :pending="pending"
         :send="send"
+        :printer-name="printerName"
         :requested-file="requestedPrintFile"
       />
 
@@ -1441,7 +1503,9 @@ async function acknowledgeUncertain() {
         </span>
         <span>
           Moonraker · {{ online ? t('verbunden') : t(connectionLabel).toLowerCase() }}
-          <span class="footer-divider" aria-hidden="true">/</span> {{ t('CAD-Referenz') }}
+          <template v-if="show3dScene">
+            <span class="footer-divider" aria-hidden="true">/</span> {{ t('CAD-Referenz') }}
+          </template>
         </span>
       </footer>
     </main>

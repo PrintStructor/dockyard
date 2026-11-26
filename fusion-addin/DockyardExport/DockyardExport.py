@@ -111,7 +111,7 @@ def _pad4(data, pad_byte=b"\x00"):
     return data if rem == 0 else data + pad_byte * (4 - rem)
 
 
-def build_glb_bytes(mesh_groups, source_name=""):
+def build_glb_bytes(mesh_groups, source_name="", extra_meta=None):
     """Pack mesh groups into a self-contained glTF 2.0 Binary (.glb) payload."""
     valid_groups = [g for g in mesh_groups if g.get("positions") and g.get("indices")]
     if not valid_groups:
@@ -248,11 +248,14 @@ def build_glb_bytes(mesh_groups, source_name=""):
         nodes.append(node)
 
     bin_blob = b"".join(bin_parts)
+    asset_extras = {"sourceDocument": source_name}
+    if extra_meta and isinstance(extra_meta, dict):
+        asset_extras.update(extra_meta)
     gltf = {
         "asset": {
             "version": "2.0",
             "generator": "DOCKYARD Fusion 360 Add-In",
-            "extras": {"sourceDocument": source_name},
+            "extras": asset_extras,
         },
         "scene": 0,
         "scenes": [{"name": source_name or "DOCKYARD", "nodes": list(range(len(nodes)))}],
@@ -367,7 +370,20 @@ def infer_color_from_appearance_name(app_name):
 
 
 def _resolve_body_appearance(body, occ=None):
-    """Resolve Fusion's effective appearance: occurrence overrides -> body -> native -> component material."""
+    """Resolve Fusion's effective appearance: explicit body override -> occurrence override -> face override -> material default."""
+    body_app = None
+    try:
+        body_app = getattr(body, "appearance", None)
+        body_src = getattr(body, "appearanceSourceType", None)
+        is_body_override = adsk is not None and body_src in (
+            adsk.core.AppearanceSourceTypes.OverrideAppearanceSource,
+            adsk.core.AppearanceSourceTypes.BodyAppearanceSource,
+        )
+        if body_app is not None and is_body_override:
+            return body_app
+    except Exception:
+        body_app = None
+
     # Walk from innermost occurrence up to root assembly for occurrence-level overrides
     cur = occ
     visited = set()
@@ -384,19 +400,7 @@ def _resolve_body_appearance(body, occ=None):
         except Exception:
             cur = None
 
-    try:
-        body_app = getattr(body, "appearance", None)
-        body_src = getattr(body, "appearanceSourceType", None)
-        is_body_override = adsk is not None and body_src in (
-            adsk.core.AppearanceSourceTypes.OverrideAppearanceSource,
-            adsk.core.AppearanceSourceTypes.BodyAppearanceSource,
-        )
-        if body_app is not None and is_body_override:
-            return body_app
-    except Exception:
-        body_app = None
-
-    # Check first face for face-level appearance override when body itself has no override
+    # Check first face for face-level appearance override when body/occurrence have no override
     try:
         faces = getattr(body, "faces", None)
         if faces and faces.count > 0:
@@ -434,26 +438,40 @@ def _resolve_body_appearance(body, occ=None):
     return None
 
 
-def _extract_appearance_rgba(body, occ, appearance_cache):
+def _extract_appearance_rgba(body, occ=None, _unused_cache=None):
     default = (0.18, 0.21, 0.24, 1.0)
     try:
         appearance = _resolve_body_appearance(body, occ)
         if not appearance:
             return default, ""
-        try:
-            app_id = appearance.id
-        except Exception:
-            app_id = getattr(appearance, "name", "") or str(id(appearance))
-        if app_id in appearance_cache:
-            return appearance_cache[app_id]
 
         app_name = getattr(appearance, "name", "") or ""
         if is_transparent_appearance(app_name):
-            result = ((0.18, 0.28, 0.32, 0.14), app_name)
-            appearance_cache[app_id] = result
-            return result
+            return (0.18, 0.28, 0.32, 0.14), app_name
 
-        props = appearance.appearanceProperties
+        # Prefer Fusion's native Appearance.color (handles opaque_albedo, metal_f0, and
+        # transparent_color directly in C++ without property-ID guesswork or cache collisions).
+        has_tex_app = bool(getattr(appearance, "hasTexture", False))
+        try:
+            direct_color = getattr(appearance, "color", None)
+            if direct_color is not None and hasattr(direct_color, "red"):
+                alpha = round(max(0.0, min(1.0, getattr(direct_color, "opacity", 255) / 255.0)), 3)
+                rgba = (
+                    _srgb_byte_to_linear(direct_color.red),
+                    _srgb_byte_to_linear(direct_color.green),
+                    _srgb_byte_to_linear(direct_color.blue),
+                    alpha if alpha < 0.99 else 1.0,
+                )
+                is_pure_white = direct_color.red >= 252 and direct_color.green >= 252 and direct_color.blue >= 252
+                if has_tex_app and is_pure_white:
+                    inferred = infer_color_from_appearance_name(app_name)
+                    if inferred is not None:
+                        return inferred, app_name
+                return rgba, app_name
+        except Exception:
+            pass
+
+        props = getattr(appearance, "appearanceProperties", None)
         primary_props = []
         fallback_props = []
         seen_prop_ids = set()
@@ -470,29 +488,30 @@ def _extract_appearance_rgba(body, occ, appearance_cache):
             seen_prop_ids.add(pid)
             target_list.append(cprop)
 
-        for prop_id in (
-            "opaque_albedo",
-            "metal_f0",
-            "surface_albedo",
-            "layered_diffuse",
-            "prism_opaque",
-            "generic_diffuse",
-            "plastic_color",
-            "paint_color",
-            "transparent_color",
-            "glazing_transmittance",
-        ):
-            try:
-                push_prop(primary_props, props.itemById(prop_id))
-            except Exception:
-                pass
-        if not primary_props:
-            try:
-                for prop in props:
-                    if adsk is None or isinstance(prop, adsk.core.ColorProperty):
-                        push_prop(fallback_props, prop)
-            except Exception:
-                pass
+        if props is not None:
+            for prop_id in (
+                "opaque_albedo",
+                "metal_f0",
+                "surface_albedo",
+                "layered_diffuse",
+                "prism_opaque",
+                "generic_diffuse",
+                "plastic_color",
+                "paint_color",
+                "transparent_color",
+                "glazing_transmittance",
+            ):
+                try:
+                    push_prop(primary_props, props.itemById(prop_id))
+                except Exception:
+                    pass
+            if not primary_props:
+                try:
+                    for prop in props:
+                        if adsk is None or isinstance(prop, adsk.core.ColorProperty):
+                            push_prop(fallback_props, prop)
+                except Exception:
+                    pass
 
         candidates = primary_props or fallback_props
         rgba = None
@@ -509,8 +528,6 @@ def _extract_appearance_rgba(body, occ, appearance_cache):
                 rgba = cand
                 from_texture_only = True
 
-        # Only apply appearance-name tint fallback when color came from a texture-backed
-        # property or no primary color property existed (never override explicit solid white!).
         if rgba is None or from_texture_only:
             inferred = infer_color_from_appearance_name(app_name)
             if inferred is not None:
@@ -518,9 +535,7 @@ def _extract_appearance_rgba(body, occ, appearance_cache):
         if rgba is None:
             rgba = default
 
-        result = (rgba, app_name)
-        appearance_cache[app_id] = result
-        return result
+        return rgba, app_name
     except Exception:
         return default, ""
 
@@ -674,7 +689,7 @@ def _execute_export(app, ui, slot, up_axis, quality_mode, skip_fasteners, out_di
 
     grouped = {}
     mesh_cache = {}
-    appearance_cache = {}
+    seen_appearances = {}
     skipped = 0
     total_tris = 0
     min_x = min_y = min_z = float("inf")
@@ -698,7 +713,9 @@ def _execute_export(app, ui, slot, up_axis, quality_mode, skip_fasteners, out_di
                 skipped += 1
                 continue
 
-            rgba, app_name = _extract_appearance_rgba(body, occ, appearance_cache)
+            rgba, app_name = _extract_appearance_rgba(body, occ)
+            if app_name and len(seen_appearances) < 50 and app_name not in seen_appearances:
+                seen_appearances[app_name] = [round(c, 3) for c in rgba]
             role = detect_dockyard_role(full_label, app_name)
             color_key = tuple(round(c, 2) for c in rgba)
             group_key = (role, color_key)
@@ -822,7 +839,11 @@ def _execute_export(app, ui, slot, up_axis, quality_mode, skip_fasteners, out_di
     os.makedirs(out_dir, exist_ok=True)
     slug = slugify_filename(doc.name, "printer")
     out_path = os.path.join(out_dir, f"{slug}-{slot}.glb")
-    glb_bytes = build_glb_bytes(mesh_groups, source_name=doc.name)
+    glb_bytes = build_glb_bytes(
+        mesh_groups,
+        source_name=doc.name,
+        extra_meta={"appearances": seen_appearances} if seen_appearances else None,
+    )
     with open(out_path, "wb") as fh:
         fh.write(glb_bytes)
 

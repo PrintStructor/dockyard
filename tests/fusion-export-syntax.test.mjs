@@ -239,8 +239,27 @@ solid_white_with_emissive = _OccWithApp(
         [_Prop('opaque_albedo', 'Color', (255, 255, 255), tex=False), _Prop('emissive_color', 'Emissive', (255, 255, 0), tex=False)],
     )
 )
-rgba_white, _ = mod._extract_appearance_rgba(white_body, solid_white_with_emissive, {})
+rgba_white, _ = mod._extract_appearance_rgba(white_body, solid_white_with_emissive)
 assert rgba_white == (1.0, 1.0, 1.0, 1.0), rgba_white
+
+# Verify Fusion 2706 direct Appearance.color AND zero cache collisions when appearance.id is empty
+class _DirectColor:
+    def __init__(self, r, g, b, opacity=255):
+        self.red, self.green, self.blue, self.opacity = r, g, b, opacity
+
+class _DirectApp:
+    def __init__(self, name, rgba):
+        self.id = ''  # colliding/empty XRef id must never poison subsequent bodies
+        self.name = name
+        self.color = _DirectColor(*rgba)
+        self.hasTexture = False
+
+occ_extrusion = _OccWithApp(appearance=_DirectApp('Anodized Black', (18, 20, 22, 255)))
+occ_skirt = _OccWithApp(appearance=_DirectApp('Acid Lime ABS', (70, 255, 0, 255)))
+rgba_ex, _ = mod._extract_appearance_rgba(white_body, occ_extrusion)
+rgba_sk, _ = mod._extract_appearance_rgba(white_body, occ_skirt)
+assert rgba_ex[0] < 0.02 and rgba_ex[1] < 0.02 and rgba_ex[2] < 0.02, rgba_ex
+assert rgba_sk[1] > 0.9 and rgba_sk[0] < 0.1, rgba_sk
 
 glb = mod.build_glb_bytes([
   {

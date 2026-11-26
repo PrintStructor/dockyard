@@ -30,6 +30,7 @@ function extractSpoolColor(filament) {
 }
 
 function roundWeight(value) {
+  if (value == null || (typeof value === 'string' && value.trim() === '')) return null
   const num = Number(value)
   if (!Number.isFinite(num) || num < 0) return null
   return Math.round(num * 10) / 10

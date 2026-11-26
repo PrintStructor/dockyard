@@ -13,6 +13,7 @@ import {
   classifyModelNodes,
   detectNozzleTip,
   disposeObjectTree,
+  createModelLoadGuard,
 } from '../src/scene-utils.mjs'
 
 test('klipperRgbwToColor boosts RGB by W channel and clamps to [0, 1]', () => {
@@ -143,4 +144,52 @@ test('createStudioLights builds 4-light rig and disposeObjectTree disposes share
   disposeObjectTree(root)
   assert.equal(geoDisposes, 1)
   assert.equal(matDisposes, 2)
+})
+
+test('classifyModelNodes prioritizes dockyardRole and node name over deduplicated material name', () => {
+  const root = new THREE.Group()
+  const sharedMat = new THREE.MeshStandardMaterial({ name: 'LED_LOGO_MAT' })
+
+  const nozzleL = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.01), sharedMat)
+  nozzleL.name = 'LED_NOZZLE_L'
+
+  const nozzleR = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.01), sharedMat)
+  nozzleR.name = 'SomeMesh'
+  nozzleR.userData = { dockyardRole: 'led-nozzle-r' }
+
+  const logo = new THREE.Mesh(new THREE.BoxGeometry(0.01, 0.01, 0.01), sharedMat)
+  logo.name = 'LED_LOGO'
+
+  root.add(logo, nozzleL, nozzleR)
+  const classified = classifyModelNodes(root)
+  assert.deepEqual(
+    classified.ledMeshes.map(m => m.userData.ledRole),
+    ['number', 'left', 'right'],
+  )
+})
+
+test('createModelLoadGuard cancels in-flight loads when switching back to already-loaded URL or tearing down', () => {
+  const guard = createModelLoadGuard()
+  const reqA = guard.begin('/a.glb', { hasLoadedModel: false })
+  assert.equal(reqA.skip, false)
+  guard.markLoaded(reqA.gen, '/a.glb')
+  assert.equal(guard.isLoading(), false)
+
+  // Start loading B while A is still mounted
+  const reqB = guard.begin('/b.glb', { hasLoadedModel: true })
+  assert.equal(reqB.skip, false)
+  assert.equal(guard.isLoading(), true)
+
+  // Rapidly switch back to A before B resolves -> must invalidate B and clear loading
+  const backToA = guard.begin('/a.glb', { hasLoadedModel: true })
+  assert.equal(backToA.skip, true)
+  assert.equal(guard.isCurrent(reqB.gen), false)
+  assert.equal(guard.isLoading(), false)
+
+  // Start loading C, then teardown before C resolves -> must invalidate C and clear loading
+  const reqC = guard.begin('/c.glb', { hasLoadedModel: true })
+  assert.equal(guard.isLoading(), true)
+  guard.reset()
+  assert.equal(guard.isCurrent(reqC.gen), false)
+  assert.equal(guard.isLoading(), false)
 })

@@ -33,6 +33,7 @@ import {
   buildPrintersExport,
   parsePrintersImport,
   mergePrinterProfiles,
+  createNewPrinterDraft,
 } from '../useSettings.js'
 import {
   MODEL_PRESETS,
@@ -354,26 +355,7 @@ function addPrinter() {
   const num = draft.value.printers.length + 1
   const name = `VORON-${num}`
   const id = uniquePrinterId(name)
-  draft.value.printers.push({
-    id,
-    name,
-    subtitle: 'VORON',
-    url: 'http://192.168.1.100',
-    mainsailUrl: 'auto',
-    model: { preset: 'auto' },
-    cameras: [
-      {
-        id: 'webcam',
-        name: 'Webcam',
-        description: '',
-        service: 'camera-streamer',
-        url: '/webcam',
-        snapshotUrl: '',
-        preferredMode: 'webrtc',
-        enabled: true,
-      },
-    ],
-  })
+  draft.value.printers.push(createNewPrinterDraft(id, name))
   selectedPrinterId.value = id
   testState.value = { testing: false, result: null, forPrinterId: id }
   saveFeedback.value = null

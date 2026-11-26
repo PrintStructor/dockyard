@@ -271,8 +271,8 @@ def build_stealthburner(sources_dir, out_path, preview_path):
     mat_accent = make_material("VORON_ACCENT", (0.72, 0.07, 0.07, 1.0), roughness=0.46, metallic=0.06)
     mat_metal = make_material("VORON_METAL", (0.45, 0.49, 0.53, 1.0), roughness=0.35, metallic=0.45)
     mat_led_logo = make_material("LED_LOGO_MAT", (0.12, 0.14, 0.16, 1.0), roughness=0.35, metallic=0.0)
-    mat_led_l = make_material("LED_NOZZLE_L_MAT", (0.12, 0.14, 0.16, 1.0), roughness=0.35, metallic=0.0)
-    mat_led_r = make_material("LED_NOZZLE_R_MAT", (0.12, 0.14, 0.16, 1.0), roughness=0.35, metallic=0.0)
+    mat_led_l = make_material("LED_NOZZLE_L_MAT", (0.125, 0.14, 0.16, 1.0), roughness=0.35, metallic=0.0)
+    mat_led_r = make_material("LED_NOZZLE_R_MAT", (0.13, 0.14, 0.16, 1.0), roughness=0.35, metallic=0.0)
 
     body_obj = join_objects([bpy.data.objects[n] for n in keep_body_names if n in bpy.data.objects], "SB_BODY", mat_body, decimate_ratio=0.18)
     accent_obj = join_objects([bpy.data.objects[n] for n in keep_accent_names if n in bpy.data.objects], "VORON_ACCENT", mat_accent, decimate_ratio=0.22)
@@ -366,8 +366,8 @@ def build_mini_stealthburner(sources_dir, out_path, preview_path):
     mat_accent = make_material("VORON_ACCENT", (0.72, 0.07, 0.07, 1.0), roughness=0.46, metallic=0.06)
     mat_metal = make_material("VORON_METAL", (0.45, 0.49, 0.53, 1.0), roughness=0.35, metallic=0.45)
     mat_led_logo = make_material("LED_LOGO_MAT", (0.12, 0.14, 0.16, 1.0), roughness=0.35, metallic=0.0)
-    mat_led_l = make_material("LED_NOZZLE_L_MAT", (0.12, 0.14, 0.16, 1.0), roughness=0.35, metallic=0.0)
-    mat_led_r = make_material("LED_NOZZLE_R_MAT", (0.12, 0.14, 0.16, 1.0), roughness=0.35, metallic=0.0)
+    mat_led_l = make_material("LED_NOZZLE_L_MAT", (0.125, 0.14, 0.16, 1.0), roughness=0.35, metallic=0.0)
+    mat_led_r = make_material("LED_NOZZLE_R_MAT", (0.13, 0.14, 0.16, 1.0), roughness=0.35, metallic=0.0)
 
     body_obj = join_objects([bpy.data.objects[n] for n in keep_body_names if n in bpy.data.objects], "MINISB_BODY", mat_body, decimate_ratio=0.35)
     accent_obj = join_objects([bpy.data.objects[n] for n in keep_accent_names if n in bpy.data.objects], "VORON_ACCENT", mat_accent, decimate_ratio=0.45)

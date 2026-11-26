@@ -268,6 +268,15 @@ def _extract_appearance_rgba(body):
     return default, app_name
 
 
+def iter_visible_occurrences(occ):
+    """Yield an occurrence and all visible descendant occurrences recursively."""
+    if not occ or not getattr(occ, "isVisible", False):
+        return
+    yield occ
+    for child in getattr(occ, "childOccurrences", None) or ():
+        yield from iter_visible_occurrences(child)
+
+
 def _collect_target_bodies(design, slot, ui):
     targets = []  # list of (body, transform_array, label_name)
     if slot == "toolhead" and ui.activeSelections.count > 0:
@@ -275,9 +284,7 @@ def _collect_target_bodies(design, slot, ui):
         for i in range(ui.activeSelections.count):
             ent = ui.activeSelections.item(i).entity
             if isinstance(ent, adsk.fusion.Occurrence):
-                for sub in [ent] + list(ent.childOccurrences):
-                    if not sub.isVisible:
-                        continue
+                for sub in iter_visible_occurrences(ent):
                     mat = sub.transform2.asArray()
                     for b in sub.bRepBodies:
                         if b.isVisible and b.entityToken not in seen:

@@ -130,3 +130,42 @@ test('all static t(...) strings in src/ have English translations and no double-
   assert.deepEqual(doubleWrapped, [], `Double-wrapped t(t(...)) calls found: ${doubleWrapped.join(', ')}`)
   assert.deepEqual(missing, [], `Missing en.json keys:\n${missing.join('\n')}`)
 })
+
+test('dynamic Paket 2 model, settings, and Spoolman error messages translate to English', () => {
+  const dynamicMessages = [
+    'Ungültige Drucker-ID für das 3D-Modell.',
+    'Ungültiger Modell-Slot (nur toolhead oder printer erlaubt).',
+    'Ungültige GLB-Daten.',
+    'Die hochgeladene GLB-Datei ist leer.',
+    'Die GLB-Datei überschreitet das Limit von 25 MB. Bitte zuerst mit scripts/optimize-dockyard-glb.sh komprimieren.',
+    'Ungültige GLB-Datei (Header zu kurz).',
+    'Ungültiges Dateiformat: Es werden nur binäre glTF-2.0-Dateien (.glb) unterstützt.',
+    'Nicht unterstützte GLB-Version (1). Erforderlich ist glTF Version 2.',
+    'Die GLB-Datei ist beschädigt oder unvollständig (Längenangabe weicht ab).',
+    'Ungültige GLB-Struktur: Erster Block muss JSON sein.',
+    'Ungültige GLB-Struktur: JSON-Block überschreitet Dateigröße.',
+    'Ungültige GLB-Datei: JSON-Header ist beschädigt.',
+    'Ungültige GLB-Datei: glTF 2.x asset.version fehlt.',
+    'Ungültiger Modellpfad.',
+    'Ungültige Akzentfarbe (erwartet wird ein Hex-Farbwert wie #d62828).',
+    'Druckerprofil nicht gefunden. Bitte Profil zuerst speichern.',
+    'Spoolman ist auf diesem Drucker in Moonraker nicht konfiguriert.',
+    'Spoolman-Status konnte nicht geladen werden (HTTP 502).',
+    'Spoolman-Server ist derzeit nicht mit Moonraker verbunden.',
+    'Spoolman-Spulenliste konnte nicht geladen werden (HTTP 502).',
+    'Ungültige Spulen-ID (positive Ganzzahl oder null erwartet).',
+    'Aktive Spule konnte nicht gesetzt werden (HTTP 502).',
+    'Upload fehlgeschlagen (HTTP 413).',
+    'Verbindungsfehler beim Hochladen.',
+    'Löschen fehlgeschlagen (HTTP 500).',
+    'Verbindungsfehler beim Löschen.',
+  ]
+  const untranslated = dynamicMessages.filter(msg => translate(msg, 'en') === msg)
+  assert.deepEqual(untranslated, [], `Untranslated dynamic error messages:\n${untranslated.join('\n')}`)
+})
+
+test('display-mode touch targets for SpoolmanPicker meet 44px minimum', async () => {
+  const css = await readFile(fileURLToPath(new URL('../src/style.css', import.meta.url)), 'utf8')
+  assert.match(css, /\.app-shell\.display-mode\s+\.spoolman-pill\{[^}]*min-height:44px/)
+  assert.match(css, /\.app-shell\.display-mode\s+\.spoolman-clear-btn\{[^}]*min-height:44px/)
+})

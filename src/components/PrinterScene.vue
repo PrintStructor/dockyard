@@ -23,6 +23,7 @@ import {
   classifyModelNodes,
   detectNozzleTip,
   disposeObjectTree,
+  createModelLoadGuard,
 } from '../scene-utils.mjs'
 
 const props = defineProps({
@@ -95,8 +96,7 @@ let visible = true
 let running = false
 let frame = 0
 let animation = null
-let loadGeneration = 0
-let loadedUrl = ''
+const loadGuard = createModelLoadGuard()
 let lastVisualKey = ''
 let lastLedFrameAt = 0
 let ledIntervalMs = 250
@@ -420,26 +420,25 @@ function disposeCurrentModel() {
   ledMeshes = []
   nozzleTip = null
   filamentInlet = null
-  loadedUrl = ''
+  loadGuard.clearLoaded()
   clearStageExtras()
 }
 
 async function loadActiveModel(forceReload = false) {
   const src = activeSource.value
   if (!src || !renderer || !world) return
-  if (!forceReload && src.url === loadedUrl && currentModel) {
+  const { gen, skip } = loadGuard.begin(src.url, { hasLoadedModel: Boolean(currentModel), forceReload })
+  loading.value = loadGuard.isLoading()
+  failure.value = ''
+  if (skip) {
     applyAccentColor()
     syncVisuals(false)
     return
   }
 
-  const gen = ++loadGeneration
-  loading.value = true
-  failure.value = ''
-
   try {
     const gltf = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(src.url)
-    if (disposed || gen !== loadGeneration) {
+    if (disposed || !world || !loadGuard.isCurrent(gen)) {
       disposeObjectTree(gltf.scene)
       return
     }
@@ -472,7 +471,7 @@ async function loadActiveModel(forceReload = false) {
     }
 
     currentModel = root
-    loadedUrl = src.url
+    loadGuard.markLoaded(gen, src.url)
     world.add(currentModel)
     currentModel.updateMatrixWorld(true)
     currentBox = new THREE.Box3().setFromObject(currentModel)
@@ -483,12 +482,12 @@ async function loadActiveModel(forceReload = false) {
     fitCamera(currentBox, { animate: false, underside: false })
     syncVisuals(true)
   } catch {
-    if (!disposed && gen === loadGeneration) {
+    if (!disposed && loadGuard.isCurrent(gen)) {
       failure.value = 'Das 3D-Modell konnte nicht geladen werden.'
     }
   } finally {
-    if (!disposed && gen === loadGeneration) {
-      loading.value = false
+    if (!disposed && loadGuard.finish(gen)) {
+      loading.value = loadGuard.isLoading()
     }
   }
 }
@@ -572,6 +571,9 @@ function initWebGL() {
 }
 
 function teardownWebGL() {
+  loadGuard.reset()
+  loading.value = false
+  failure.value = ''
   cancelAnimationFrame(frame)
   running = false
   resize?.disconnect()
@@ -644,7 +646,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   disposed = true
-  loadGeneration++
   teardownWebGL()
 })
 </script>

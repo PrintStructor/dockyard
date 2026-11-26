@@ -82,6 +82,16 @@ test('normalizeSpool and spoolToToolMaterial handle raw hex, multi-color fallbac
   assert.equal(s19.color, '#ff00aa')
   assert.equal(s19.vendor, null)
 
+  // Null / empty weights must stay null, never coerce to 0 g
+  const sNullWeight = normalizeSpool({
+    id: 21,
+    remaining_weight: null,
+    initial_weight: '',
+    filament: { name: 'Unweighed ABS', material: 'ABS' },
+  })
+  assert.equal(sNullWeight.remainingWeight, null)
+  assert.equal(sNullWeight.initialWeight, null)
+
   const mat = spoolToToolMaterial(s7)
   assert.equal(mat.source, 'Spoolman')
   assert.equal(mat.type, 'ABS')

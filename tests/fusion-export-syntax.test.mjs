@@ -33,6 +33,20 @@ assert mod.detect_dockyard_role('LED_NOZZLE_L', '') == 'led-nozzle-l'
 assert mod.detect_dockyard_role('LED_NOZZLE_R', '') == 'led-nozzle-r'
 assert mod.detect_dockyard_role('Frame Extrusion', 'Black Anodized') is None
 
+# Verify recursive visible occurrence traversal for nested Toolhead subassemblies (depth >= 2)
+class _MockOcc:
+    def __init__(self, name, visible=True, children=None):
+        self.name = name
+        self.isVisible = visible
+        self.childOccurrences = children or []
+
+nested = _MockOcc('Toolhead', True, [
+    _MockOcc('CW2', True, [_MockOcc('Stepper', True, [_MockOcc('Rotor', True)])]),
+    _MockOcc('HiddenSub', False, [_MockOcc('HiddenChild', True)]),
+])
+visited = [o.name for o in mod.iter_visible_occurrences(nested)]
+assert visited == ['Toolhead', 'CW2', 'Stepper', 'Rotor'], visited
+
 glb = mod.build_glb_bytes([
   {
     'name': 'VORON_ACCENT',

@@ -89,6 +89,29 @@ function clonePrinterProfile(profile, idx = 0) {
   }
 }
 
+export function createNewPrinterDraft(id, name) {
+  return {
+    id,
+    name,
+    subtitle: 'VORON',
+    url: 'http://192.168.1.100',
+    mainsailUrl: 'auto',
+    model: { preset: 'auto', accentColor: DEFAULT_ACCENT_COLOR },
+    cameras: [
+      {
+        id: 'webcam',
+        name: 'Webcam',
+        description: '',
+        service: 'camera-streamer',
+        url: '/webcam',
+        snapshotUrl: '',
+        preferredMode: 'webrtc',
+        enabled: true,
+      },
+    ],
+  }
+}
+
 export function buildPrintersExport(currentSettings) {
   const list = Array.isArray(currentSettings?.printers) ? currentSettings.printers : []
   const cloned = list.map((p, i) => clonePrinterProfile(p, i))

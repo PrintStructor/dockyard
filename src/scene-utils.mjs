@@ -164,29 +164,82 @@ export function buildStudioFloorVeil({ width = 0.86, depth = 0.42, tickXs = [] }
 
 function resolveRole(object) {
   const extraRole = String(object.userData?.dockyardRole ?? '').trim().toLowerCase()
+  if (
+    extraRole === 'led-logo' ||
+    extraRole === 'led-nozzle-l' ||
+    extraRole === 'led-nozzle-r' ||
+    extraRole === 'accent' ||
+    extraRole === 'nozzle-tip' ||
+    extraRole === 'filament-inlet'
+  ) {
+    return extraRole
+  }
+
   const name = String(object.name ?? '').toUpperCase()
+  if (name.includes('LED_NOZZLE_L')) return 'led-nozzle-l'
+  if (name.includes('LED_NOZZLE_R')) return 'led-nozzle-r'
+  if (name.includes('LED_LOGO')) return 'led-logo'
+  if (name.includes('VORON_ACCENT')) return 'accent'
+  if (name.includes('NOZZLE_TIP')) return 'nozzle-tip'
+  if (name.includes('FILAMENT_INLET')) return 'filament-inlet'
+
   const mats = Array.isArray(object.material) ? object.material : object.material ? [object.material] : []
   const matNames = mats.map(m => String(m?.name ?? '').toUpperCase())
+  if (matNames.some(m => m.includes('LED_NOZZLE_L'))) return 'led-nozzle-l'
+  if (matNames.some(m => m.includes('LED_NOZZLE_R'))) return 'led-nozzle-r'
+  if (matNames.some(m => m.includes('LED_LOGO'))) return 'led-logo'
+  if (matNames.some(m => m.includes('VORON_ACCENT'))) return 'accent'
 
-  if (extraRole === 'led-logo' || name.includes('LED_LOGO') || matNames.some(m => m.includes('LED_LOGO'))) {
-    return 'led-logo'
-  }
-  if (extraRole === 'led-nozzle-l' || name.includes('LED_NOZZLE_L') || matNames.some(m => m.includes('LED_NOZZLE_L'))) {
-    return 'led-nozzle-l'
-  }
-  if (extraRole === 'led-nozzle-r' || name.includes('LED_NOZZLE_R') || matNames.some(m => m.includes('LED_NOZZLE_R'))) {
-    return 'led-nozzle-r'
-  }
-  if (extraRole === 'accent' || name.includes('VORON_ACCENT') || matNames.some(m => m.includes('VORON_ACCENT'))) {
-    return 'accent'
-  }
-  if (extraRole === 'nozzle-tip' || name.includes('NOZZLE_TIP')) {
-    return 'nozzle-tip'
-  }
-  if (extraRole === 'filament-inlet' || name.includes('FILAMENT_INLET')) {
-    return 'filament-inlet'
-  }
   return null
+}
+
+export function createModelLoadGuard() {
+  let generation = 0
+  let loadedUrl = ''
+  let loading = false
+
+  function begin(url, { hasLoadedModel = false, forceReload = false } = {}) {
+    const gen = ++generation
+    if (!forceReload && url && url === loadedUrl && hasLoadedModel) {
+      loading = false
+      return { gen, skip: true }
+    }
+    loading = true
+    return { gen, skip: false }
+  }
+
+  function markLoaded(gen, url) {
+    if (gen !== generation) return false
+    loadedUrl = url || ''
+    loading = false
+    return true
+  }
+
+  function finish(gen) {
+    if (gen !== generation) return false
+    loading = false
+    return true
+  }
+
+  function isCurrent(gen) {
+    return gen === generation
+  }
+
+  function isLoading() {
+    return loading
+  }
+
+  function clearLoaded() {
+    loadedUrl = ''
+  }
+
+  function reset() {
+    generation++
+    loadedUrl = ''
+    loading = false
+  }
+
+  return { begin, markLoaded, finish, isCurrent, isLoading, clearLoaded, reset }
 }
 
 export function classifyModelNodes(root) {

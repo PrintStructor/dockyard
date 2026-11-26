@@ -1113,8 +1113,8 @@ input::placeholder{color:var(--muted);opacity:1}
 .app-shell.display-mode .printer-scene-panel .scene-viewport.printer-scene-viewport{height:210px;min-height:190px}
 .app-shell.display-mode .printer-scene-panel .icon-button{width:44px;height:44px}
 .app-shell.display-mode .printer-scene-panel .segmented button{min-height:44px;padding:0 12px}
-.app-shell.display-mode .spoolman-pill{min-height:40px;padding:6px 12px;font-size:12.5px}
+.app-shell.display-mode .spoolman-pill{min-height:44px;padding:6px 12px;font-size:12.5px}
 .app-shell.display-mode .spoolman-row{min-height:44px;padding:8px 10px}
-.app-shell.display-mode .spoolman-clear-btn{min-height:36px;padding:6px 10px}
+.app-shell.display-mode .spoolman-clear-btn{min-height:44px;padding:6px 10px}
 .app-shell.display-mode .settings-swatch{width:44px;height:44px}
 .app-shell.display-mode .settings-color-custom{min-height:44px}

@@ -2,7 +2,9 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
+import * as THREE from 'three'
 import { validateGlbBuffer } from '../server/models.mjs'
+import { classifyModelNodes } from '../src/scene-utils.mjs'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 
@@ -87,6 +89,34 @@ for (const tpl of TEMPLATES) {
     assert.ok(
       bounds.minY >= -0.01 && bounds.minY <= 0.01,
       `${tpl.name}.glb bottom should be grounded near y=0 (got ${bounds.minY.toFixed(4)} m)`,
+    )
+
+    // Reconstruct scene graph from GLB JSON and verify classifyModelNodes maps all 3 distinct LED roles
+    const root = new THREE.Group()
+    const materials = (gltf.materials ?? []).map(m => new THREE.MeshStandardMaterial({ name: m.name ?? '' }))
+    for (const node of gltf.nodes ?? []) {
+      let obj
+      if (Number.isInteger(node.mesh)) {
+        const meshDef = gltf.meshes?.[node.mesh]
+        const matIdx = meshDef?.primitives?.[0]?.material
+        const mat = Number.isInteger(matIdx) ? materials[matIdx] : new THREE.MeshStandardMaterial()
+        obj = new THREE.Mesh(new THREE.BufferGeometry(), mat)
+      } else {
+        obj = new THREE.Object3D()
+      }
+      obj.name = node.name ?? ''
+      if (node.extras && typeof node.extras === 'object') obj.userData = { ...node.extras }
+      root.add(obj)
+    }
+    const classified = classifyModelNodes(root)
+    assert.ok(classified.accentMeshes.length >= 1, `${tpl.name}.glb must classify at least 1 accent mesh`)
+    assert.ok(classified.nozzleTipNode, `${tpl.name}.glb must classify NOZZLE_TIP`)
+    assert.ok(classified.filamentInletNode, `${tpl.name}.glb must classify FILAMENT_INLET`)
+    const ledRoles = classified.ledMeshes.map(m => m.userData.ledRole).sort()
+    assert.deepEqual(
+      ledRoles,
+      ['left', 'number', 'right'],
+      `${tpl.name}.glb LED roles misclassified: ${ledRoles.join(', ')}`,
     )
   })
 }

@@ -280,19 +280,78 @@ def _srgb_byte_to_linear(value):
     return round(s / 12.92 if s <= 0.04045 else ((s + 0.055) / 1.055) ** 2.4, 4)
 
 
+def _safe_body_key(body, fallback=""):
+    """Return a stable cache/dedup key even for externally linked XRef bodies."""
+    try:
+        token = body.entityToken
+        if token:
+            return ("tok", token)
+    except Exception:
+        pass
+    try:
+        parent = getattr(body, "parentComponent", None)
+        comp_id = getattr(parent, "id", "") or ""
+        vol = round(float(getattr(body, "volume", 0.0) or 0.0), 6)
+        area = round(float(getattr(body, "area", 0.0) or 0.0), 6)
+        name = getattr(body, "name", "") or ""
+        if comp_id and vol > 0.0:
+            return ("xref", comp_id, name, vol, area)
+    except Exception:
+        pass
+    return ("obj", fallback, id(body))
+
+
+def _safe_native(body):
+    try:
+        native = getattr(body, "nativeObject", None)
+        if native is not None:
+            return native
+    except Exception:
+        pass
+    return body
+
+
+def _safe_full_path(occ):
+    try:
+        full = getattr(occ, "fullPathName", None)
+        if full:
+            return full
+    except Exception:
+        pass
+    return getattr(occ, "name", "") or ""
+
+
+def _safe_transform_array(occ):
+    if occ is None:
+        return None
+    for attr in ("transform2", "transform"):
+        try:
+            tr = getattr(occ, attr, None)
+            if tr is not None:
+                return tr.asArray()
+        except Exception:
+            pass
+    return None
+
+
 def _extract_appearance_rgba(body, appearance_cache):
     default = (0.18, 0.21, 0.24, 1.0)
     try:
-        appearance = body.appearance
-        if not appearance and getattr(body, "nativeObject", None):
-            appearance = body.nativeObject.appearance
+        appearance = getattr(body, "appearance", None)
+        if not appearance:
+            native = _safe_native(body)
+            if native is not body:
+                appearance = getattr(native, "appearance", None)
         if not appearance:
             return default, ""
-        app_id = appearance.id
+        try:
+            app_id = appearance.id
+        except Exception:
+            app_id = getattr(appearance, "name", "") or str(id(appearance))
         if app_id in appearance_cache:
             return appearance_cache[app_id]
 
-        app_name = appearance.name or ""
+        app_name = getattr(appearance, "name", "") or ""
         rgba = None
         for prop_id in (
             "opaque_albedo",
@@ -331,39 +390,73 @@ def _extract_appearance_rgba(body, appearance_cache):
 
 
 def _collect_target_bodies(design, slot, ui):
-    targets = []  # list of (body, transform_array, label_name)
+    targets = []  # list of (body, transform_array, leaf_label, full_label)
     if slot == "toolhead" and ui.activeSelections.count > 0:
         seen = set()
         for i in range(ui.activeSelections.count):
-            ent = ui.activeSelections.item(i).entity
+            try:
+                ent = ui.activeSelections.item(i).entity
+            except Exception:
+                continue
             if isinstance(ent, adsk.fusion.Occurrence):
                 for sub in iter_visible_occurrences(ent):
-                    mat = sub.transform2.asArray()
-                    for b in sub.bRepBodies:
-                        if b.isVisible and b.entityToken not in seen:
-                            seen.add(b.entityToken)
-                            targets.append((b, mat, f"{sub.name} {b.name}"))
+                    mat = _safe_transform_array(sub)
+                    full_path = _safe_full_path(sub)
+                    try:
+                        bodies = sub.bRepBodies
+                    except Exception:
+                        continue
+                    for b in bodies:
+                        try:
+                            if not b.isVisible:
+                                continue
+                            bkey = (_safe_body_key(b), full_path)
+                            if bkey in seen:
+                                continue
+                            seen.add(bkey)
+                            targets.append((b, mat, f"{sub.name} {b.name}", f"{full_path} {b.name}"))
+                        except Exception:
+                            continue
             elif isinstance(ent, adsk.fusion.BRepBody):
-                if ent.isVisible and ent.entityToken not in seen:
-                    seen.add(ent.entityToken)
-                    mat = ent.assemblyContext.transform2.asArray() if ent.assemblyContext else None
-                    targets.append((ent, mat, ent.name))
+                try:
+                    if not ent.isVisible:
+                        continue
+                    ctx = getattr(ent, "assemblyContext", None)
+                    full_path = _safe_full_path(ctx) if ctx else ""
+                    bkey = (_safe_body_key(ent), full_path)
+                    if bkey in seen:
+                        continue
+                    seen.add(bkey)
+                    mat = _safe_transform_array(ctx)
+                    targets.append((ent, mat, ent.name, f"{full_path} {ent.name}".strip()))
+                except Exception:
+                    continue
         if targets:
             return targets
 
     root = design.rootComponent
     for b in root.bRepBodies:
-        if b.isVisible:
-            targets.append((b, None, b.name))
-    for occ in root.allOccurrences:
-        if not occ.isVisible:
-            continue
-        if not occ.component.bRepBodies.count:
-            continue
-        mat = occ.transform2.asArray()
-        for b in occ.bRepBodies:
+        try:
             if b.isVisible:
-                targets.append((b, mat, f"{occ.name} {b.name}"))
+                targets.append((b, None, b.name, b.name))
+        except Exception:
+            continue
+    for occ in root.allOccurrences:
+        try:
+            if not occ.isVisible:
+                continue
+            if not occ.component.bRepBodies.count:
+                continue
+            mat = _safe_transform_array(occ)
+            full_path = _safe_full_path(occ)
+            for b in occ.bRepBodies:
+                try:
+                    if b.isVisible:
+                        targets.append((b, mat, f"{occ.name} {b.name}", f"{full_path} {b.name}"))
+                except Exception:
+                    continue
+        except Exception:
+            continue
     return targets
 
 
@@ -445,7 +538,7 @@ def _execute_export(app, ui, slot, up_axis, quality_mode, skip_fasteners, out_di
     progress.show(_CMD_NAME, "Verarbeite Körper %v von %m …", 0, len(targets), 0)
 
     try:
-        for idx_body, (body, mat, label) in enumerate(targets):
+        for idx_body, (body, mat, leaf_label, full_label) in enumerate(targets):
             if idx_body % 10 == 0:
                 progress.progressValue = idx_body
                 adsk.doEvents()
@@ -453,19 +546,22 @@ def _execute_export(app, ui, slot, up_axis, quality_mode, skip_fasteners, out_di
                     cancelled = True
                     break
 
-            if skip_fasteners and should_skip_fastener(label):
+            if skip_fasteners and should_skip_fastener(leaf_label):
                 skipped += 1
                 continue
 
             rgba, app_name = _extract_appearance_rgba(body, appearance_cache)
-            role = detect_dockyard_role(label, app_name)
+            role = detect_dockyard_role(full_label, app_name)
             color_key = tuple(round(c, 2) for c in rgba)
             group_key = (role, color_key)
 
             # Use nativeObject + mesh_cache so component meshes stay in local space
             # and repeated parts (rails, extrusions, idlers) only tessellate once.
-            native = (getattr(body, "nativeObject", None) or body) if mat is not None else body
-            cache_key = native.entityToken
+            # If an externally linked XRef body rejects native meshing, fall back
+            # to meshing the proxy body directly in root world coordinates.
+            native = _safe_native(body) if mat is not None else body
+            use_mat = mat
+            cache_key = _safe_body_key(native, full_label)
             cached = mesh_cache.get(cache_key)
             if cached is None:
                 try:
@@ -484,9 +580,28 @@ def _execute_export(app, ui, slot, up_axis, quality_mode, skip_fasteners, out_di
                     )
                     mesh_cache[cache_key] = cached
                 except Exception:
-                    mesh_cache[cache_key] = False
-                    skipped += 1
-                    continue
+                    if native is not body:
+                        try:
+                            calc = body.meshManager.createMeshCalculator()
+                            calc.setQuality(quality_opt)
+                            calc.surfaceTolerance = surface_tol
+                            tmesh = calc.calculate()
+                            if not tmesh:
+                                skipped += 1
+                                continue
+                            cached = (
+                                list(tmesh.nodeCoordinatesAsFloat),
+                                list(tmesh.normalVectorsAsFloat),
+                                list(tmesh.nodeIndices),
+                            )
+                            use_mat = None
+                        except Exception:
+                            skipped += 1
+                            continue
+                    else:
+                        mesh_cache[cache_key] = False
+                        skipped += 1
+                        continue
             if cached is False:
                 skipped += 1
                 continue
@@ -507,7 +622,7 @@ def _execute_export(app, ui, slot, up_axis, quality_mode, skip_fasteners, out_di
             )
             base_vert = len(grp["positions"]) // 3
             for i in range(0, len(coords), 3):
-                wx, wy, wz = _transform_point(mat, coords[i], coords[i + 1], coords[i + 2])
+                wx, wy, wz = _transform_point(use_mat, coords[i], coords[i + 1], coords[i + 2])
                 gx, gy, gz = fusion_cm_to_gltf_m(wx, wy, wz, up_axis=up_axis)
                 min_x = min(min_x, gx)
                 max_x = max(max_x, gx)
@@ -516,7 +631,7 @@ def _execute_export(app, ui, slot, up_axis, quality_mode, skip_fasteners, out_di
                 min_z = min(min_z, gz)
                 max_z = max(max_z, gz)
                 grp["positions"].extend((gx, gy, gz))
-                nx, ny, nz = _transform_normal(mat, normals[i], normals[i + 1], normals[i + 2], up_axis=up_axis)
+                nx, ny, nz = _transform_normal(use_mat, normals[i], normals[i + 1], normals[i + 2], up_axis=up_axis)
                 grp["normals"].extend((nx, ny, nz))
 
             for v_idx in indices:

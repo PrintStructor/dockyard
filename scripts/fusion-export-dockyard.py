@@ -277,6 +277,26 @@ def iter_visible_occurrences(occ):
         yield from iter_visible_occurrences(child)
 
 
+def _safe_body_key(body, fallback=""):
+    try:
+        token = body.entityToken
+        if token:
+            return ("tok", token)
+    except Exception:
+        pass
+    try:
+        parent = getattr(body, "parentComponent", None)
+        comp_id = getattr(parent, "id", "") or ""
+        vol = round(float(getattr(body, "volume", 0.0) or 0.0), 6)
+        area = round(float(getattr(body, "area", 0.0) or 0.0), 6)
+        name = getattr(body, "name", "") or ""
+        if comp_id and vol > 0.0:
+            return ("xref", comp_id, name, vol, area)
+    except Exception:
+        pass
+    return ("obj", fallback, id(body))
+
+
 def _collect_target_bodies(design, slot, ui):
     targets = []  # list of (body, transform_array, label_name)
     if slot == "toolhead" and ui.activeSelections.count > 0:
@@ -287,12 +307,14 @@ def _collect_target_bodies(design, slot, ui):
                 for sub in iter_visible_occurrences(ent):
                     mat = sub.transform2.asArray()
                     for b in sub.bRepBodies:
-                        if b.isVisible and b.entityToken not in seen:
-                            seen.add(b.entityToken)
+                        bkey = _safe_body_key(b)
+                        if b.isVisible and bkey not in seen:
+                            seen.add(bkey)
                             targets.append((b, mat, f"{sub.name} {b.name}"))
             elif isinstance(ent, adsk.fusion.BRepBody):
-                if ent.isVisible and ent.entityToken not in seen:
-                    seen.add(ent.entityToken)
+                bkey = _safe_body_key(ent)
+                if ent.isVisible and bkey not in seen:
+                    seen.add(bkey)
                     mat = ent.assemblyContext.transform2.asArray() if ent.assemblyContext else None
                     targets.append((ent, mat, ent.name))
         if targets:
@@ -370,7 +392,7 @@ def _execute_export(app, ui, slot, quality_mode, skip_fasteners, out_dir):
         group_key = (role, color_key)
 
         native = (getattr(body, "nativeObject", None) or body) if mat is not None else body
-        cache_key = native.entityToken
+        cache_key = _safe_body_key(native, label)
         cached = mesh_cache.get(cache_key)
         if cached is None:
             try:

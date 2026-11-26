@@ -157,6 +157,23 @@ assert mod.fusion_cm_to_gltf_m(10.0, 20.0, 30.0, up_axis='z') == (0.1, 0.3, -0.2
 assert mod.fusion_cm_to_gltf_m(10.0, 20.0, 30.0, up_axis='y') == (0.1, 0.2, 0.3)
 assert mod.is_transparent_appearance('Polycarbonate Clear') is True
 assert mod.is_transparent_appearance('Black Anodized Aluminum') is False
+assert mod.detect_dockyard_role('LED_LOGO_Assembly v2:1+Diffuser:1 Body1', '') == 'led-logo'
+assert mod.detect_dockyard_role('NOZZLE_MOUNT:1+LED_NOZZLE_L:1 Body1', '') == 'led-nozzle-l'
+
+class _MockComp:
+    id = 'comp-xref-42'
+
+class _MockXrefBody:
+    name = 'Body1'
+    volume = 1.25
+    area = 6.5
+    parentComponent = _MockComp()
+    @property
+    def entityToken(self):
+        raise RuntimeError('2 : InternalValidationError : Xl::Util::referenceKey(this, referenceKey)')
+
+key = mod._safe_body_key(_MockXrefBody(), 'fallback')
+assert key == ('xref', 'comp-xref-42', 'Body1', 1.25, 6.5), key
 
 glb = mod.build_glb_bytes([
   {

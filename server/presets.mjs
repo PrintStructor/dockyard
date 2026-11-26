@@ -18,7 +18,7 @@ function readMainsailValue(values, key) {
   return parseTemp(entry.value)
 }
 
-function findMainsailPreset(presetsMap, material) {
+function findMainsailPreset(presetsMap, material, toolCount) {
   if (!presetsMap || typeof presetsMap !== 'object') return null
   const entries = Object.values(presetsMap).filter(item => item && typeof item.name === 'string')
   const upper = material.toUpperCase()
@@ -27,39 +27,40 @@ function findMainsailPreset(presetsMap, material) {
   if (!prefixed?.values) return null
   const bed = readMainsailValue(prefixed.values, 'heater_bed')
   const fallbackTool = readMainsailValue(prefixed.values, 'extruder')
-  const tools = Array.from({ length: 6 }, (_, id) =>
+  const tools = Array.from({ length: toolCount }, (_, id) =>
     readMainsailValue(prefixed.values, id ? `extruder${id}` : 'extruder') ?? fallbackTool,
   )
   if (bed == null && tools.every(t => t == null)) return null
   return { name: upper, bed, tools }
 }
 
-function findLegacyPreset(legacyList, material) {
+function findLegacyPreset(legacyList, material, toolCount) {
   if (!Array.isArray(legacyList)) return null
   const upper = material.toUpperCase()
   const preset = legacyList.find(entry => entry?.name?.trim?.().toUpperCase() === upper)
   if (!preset?.temps) return null
   const bed = parseTemp(preset.temps.heater_bed)
   const fallbackTool = parseTemp(preset.temps.extruder)
-  const tools = Array.from({ length: 6 }, (_, id) =>
+  const tools = Array.from({ length: toolCount }, (_, id) =>
     parseTemp(preset.temps[id ? `extruder${id}` : 'extruder']) ?? fallbackTool,
   )
   if (bed == null && tools.every(t => t == null)) return null
   return { name: upper, bed, tools }
 }
 
-export function normalizePresets({ mainsail = null, legacy = null } = {}) {
+export function normalizePresets({ mainsail = null, legacy = null, toolCount = 6 } = {}) {
+  const count = Number.isInteger(toolCount) && toolCount >= 1 && toolCount <= 8 ? toolCount : 6
   const mainsailMap = mainsail?.presets ?? mainsail
   return PRESET_NAMES.map(name => {
-    const fromMainsail = findMainsailPreset(mainsailMap, name)
+    const fromMainsail = findMainsailPreset(mainsailMap, name, count)
     if (fromMainsail) return fromMainsail
-    const fromLegacy = findLegacyPreset(legacy, name)
+    const fromLegacy = findLegacyPreset(legacy, name, count)
     if (fromLegacy) return fromLegacy
     const fallback = DEFAULT_PRESETS[name]
     return {
       name,
       bed: fallback.bed,
-      tools: Array.from({ length: 6 }, () => fallback.tool),
+      tools: Array.from({ length: count }, () => fallback.tool),
     }
   })
 }

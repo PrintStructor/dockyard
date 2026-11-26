@@ -317,7 +317,8 @@ export function normalizeCalibrationData({ rawStatus = {}, configFiles = [] } = 
   const settings = rawStatus?.configfile?.settings ?? rawStatus?.configfile?.config ?? {}
   const shaper = settings.input_shaper ?? {}
 
-  const tools = Array.from({ length: 6 }, (_, id) => {
+  const toolCount = status.toolCount ?? 6
+  const tools = Array.from({ length: toolCount }, (_, id) => {
     const t = status.tools[id] ?? {}
     return {
       id,
@@ -378,6 +379,8 @@ export function normalizeCalibrationData({ rawStatus = {}, configFiles = [] } = 
     .sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0))
 
   return {
+    isToolchanger: status.isToolchanger,
+    toolCount,
     initialTool: status.initialTool,
     zReferenceTool: Number.isInteger(vars.z_offset_reference_tool) ? vars.z_offset_reference_tool : null,
     tools,
@@ -392,6 +395,13 @@ export function normalizeCalibrationData({ rawStatus = {}, configFiles = [] } = 
       retries: parseNum(settings.quad_gantry_level?.retries),
       retryTolerance: parseNum(settings.quad_gantry_level?.retry_tolerance),
       horizontalMoveZ: parseNum(settings.quad_gantry_level?.horizontal_move_z),
+    },
+    zTilt: {
+      configured: !!settings.z_tilt,
+      applied: rawStatus?.z_tilt?.applied === true,
+      retries: parseNum(settings.z_tilt?.retries),
+      retryTolerance: parseNum(settings.z_tilt?.retry_tolerance),
+      horizontalMoveZ: parseNum(settings.z_tilt?.horizontal_move_z),
     },
     beacon: {
       model: typeof rawStatus?.beacon?.model === 'string' ? rawStatus.beacon.model : null,
@@ -413,6 +423,7 @@ export function normalizeCalibrationData({ rawStatus = {}, configFiles = [] } = 
     },
     capabilities: {
       qgl: !!settings.quad_gantry_level,
+      zTilt: !!settings.z_tilt,
       mesh: !!settings.bed_mesh,
       ...calibrationCapabilities(settings),
     },

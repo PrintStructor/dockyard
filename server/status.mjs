@@ -1,4 +1,33 @@
+const MAX_TOOLS = 8
+const SINGLE_TOOL_NEOPIXEL_PRIORITY = [
+  'neopixel sb_leds',
+  'neopixel stealthburner_leds',
+  'neopixel head_leds',
+  'neopixel toolhead_leds',
+  'neopixel nozzle_leds',
+  'neopixel rgb',
+]
+const SENSOR_LABELS = {
+  chamber: 'Bauraum',
+  raspberry_pi: 'Raspberry Pi',
+  host: 'Host',
+  octopus: 'Octopus',
+  rp2350: 'RP2350',
+  beacon_coil: 'Beacon-Spule',
+  mcu: 'MCU',
+  mcu_temp: 'MCU',
+  skr_pico: 'SKR Pico',
+}
+
 const finite = value => (typeof value === 'number' && Number.isFinite(value) ? value : null)
+const numeric = value => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
 const flag = value => (typeof value === 'boolean' ? value : null)
 
 const color = value =>
@@ -6,11 +35,98 @@ const color = value =>
     ? [0, 1, 2, 3].map(i => Math.min(1, Math.max(0, value[i] ?? 0)))
     : null
 
+function formatSensorLabel(rawName) {
+  const lower = String(rawName ?? '').trim().toLowerCase()
+  if (Object.hasOwn(SENSOR_LABELS, lower)) return SENSOR_LABELS[lower]
+  return String(rawName ?? '')
+    .trim()
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, ch => ch.toUpperCase())
+}
+
+export function detectToolCount(raw = {}, config = {}) {
+  const cfg = config ?? raw.configfile?.settings ?? raw.configfile?.config ?? {}
+  const isToolchanger = Boolean(raw.toolchanger || cfg.toolchanger)
+  let maxConfigIdx = -1
+  let maxRawIdx = -1
+
+  for (const key of Object.keys(cfg)) {
+    const lower = key.toLowerCase()
+    if (lower === 'extruder') maxConfigIdx = Math.max(maxConfigIdx, 0)
+    else {
+      const m = /^(?:extruder|tool t)([0-7])$/.exec(lower)
+      if (m) maxConfigIdx = Math.max(maxConfigIdx, Number(m[1]))
+    }
+  }
+
+  for (const key of Object.keys(raw)) {
+    if (key === 'extruder') maxRawIdx = Math.max(maxRawIdx, 0)
+    else {
+      const m = /^(?:extruder([1-7])|tool T([0-7])|neopixel et([0-7])_leds)$/.exec(key)
+      if (m) {
+        const idx = Number(m[1] ?? m[2] ?? m[3])
+        maxRawIdx = Math.max(maxRawIdx, idx)
+      }
+    }
+  }
+
+  if (isToolchanger) {
+    if (maxConfigIdx >= 0) return Math.min(MAX_TOOLS, Math.max(2, maxConfigIdx + 1))
+    return Math.min(MAX_TOOLS, Math.max(6, maxRawIdx + 1))
+  }
+  const maxFound = Math.max(maxConfigIdx, maxRawIdx)
+  return maxFound >= 1 ? Math.min(MAX_TOOLS, maxFound + 1) : 1
+}
+
+export function extractBedSize(raw = {}, config = {}) {
+  const cfg = config ?? raw.configfile?.settings ?? raw.configfile?.config ?? {}
+  const minX = numeric(cfg.stepper_x?.position_min) ?? finite(raw.toolhead?.axis_minimum?.[0])
+  const maxX = numeric(cfg.stepper_x?.position_max) ?? finite(raw.toolhead?.axis_maximum?.[0])
+  const minY = numeric(cfg.stepper_y?.position_min) ?? finite(raw.toolhead?.axis_minimum?.[1])
+  const maxY = numeric(cfg.stepper_y?.position_max) ?? finite(raw.toolhead?.axis_maximum?.[1])
+  if (maxX == null || maxY == null) return null
+
+  const originX = minX != null && minX > 0 ? Math.round(minX * 10) / 10 : 0
+  const originY = minY != null && minY > 0 ? Math.round(minY * 10) / 10 : 0
+  const width = Math.round((maxX - originX) * 10) / 10
+  const depth = Math.round((maxY - originY) * 10) / 10
+  if (width < 50 || width > 1000 || depth < 50 || depth > 1000) return null
+  return { originX, originY, width, depth }
+}
+
+function resolveSingleToolNeopixelKey(status) {
+  if (status['neopixel et0_leds']) return 'neopixel et0_leds'
+  const keys = Object.keys(status).filter(key => key.startsWith('neopixel '))
+  const byLower = new Map(keys.map(key => [key.toLowerCase(), key]))
+  for (const preferred of SINGLE_TOOL_NEOPIXEL_PRIORITY) {
+    if (byLower.has(preferred)) return byLower.get(preferred)
+  }
+  for (const key of keys.sort()) {
+    const data = status[key]?.color_data
+    if (Array.isArray(data) && data.length >= 1 && data.length <= 8) return key
+  }
+  return null
+}
+
+function resolveSingleToolFilamentSensor(status) {
+  const tcKey = 'filament_switch_sensor T0_filament_sensor'
+  if (status[tcKey]) return { name: 'T0_filament_sensor', data: status[tcKey] }
+  const candidates = Object.keys(status)
+    .filter(key => key.startsWith('filament_switch_sensor ') || key.startsWith('filament_motion_sensor '))
+    .sort()
+  if (!candidates.length) return { name: null, data: {} }
+  const first = candidates[0]
+  const name = first.replace(/^filament_(?:switch|motion)_sensor\s+/, '')
+  return { name, data: status[first] ?? {} }
+}
+
 export function canHomeBeforeInitialization(status) {
   const tc = status.toolchanger
-  const present = Array.from({ length: 6 }, (_, id) => id).filter(id => status[`tool T${id}`]?.detect_state === 1)
+  if (!tc) return false
+  const count = detectToolCount(status)
+  const present = Array.from({ length: count }, (_, id) => id).filter(id => status[`tool T${id}`]?.detect_state === 1)
   return (
-    tc?.status === 'uninitialized' &&
+    tc.status === 'uninitialized' &&
     tc.tool_number === -1 &&
     tc.has_detection === true &&
     present.length === 1 &&
@@ -27,31 +143,58 @@ export function heatState(tool) {
 }
 
 export function normalizeStatus(status, at = new Date().toISOString()) {
+  const config = status.configfile?.settings ?? status.configfile?.config ?? {}
+  const isToolchanger = Boolean(status.toolchanger || config.toolchanger)
+  const toolCount = detectToolCount(status, config)
   const tc = status.toolchanger ?? {}
-  const active = Number.isInteger(tc.tool_number) && tc.tool_number >= 0 ? tc.tool_number : null
+
+  const singleToolActive = !isToolchanger && toolCount === 1 && Boolean(status.extruder || config.extruder)
+  const active = isToolchanger
+    ? Number.isInteger(tc.tool_number) && tc.tool_number >= 0
+      ? tc.tool_number
+      : null
+    : singleToolActive
+      ? 0
+      : null
   const initial =
-    Number.isInteger(tc.initial_tool_number) && tc.initial_tool_number >= 0 && tc.initial_tool_number < 6
+    isToolchanger &&
+    Number.isInteger(tc.initial_tool_number) &&
+    tc.initial_tool_number >= 0 &&
+    tc.initial_tool_number < toolCount
       ? tc.initial_tool_number
       : null
   const referenceOffsets = initial == null ? null : status[`tool T${initial}`]?.z_offsets
-  const detected =
-    tc.has_detection && Number.isInteger(tc.detected_tool_number) && tc.detected_tool_number >= 0
+  const detected = isToolchanger
+    ? tc.has_detection && Number.isInteger(tc.detected_tool_number) && tc.detected_tool_number >= 0
       ? tc.detected_tool_number
       : null
+    : singleToolActive
+      ? 0
+      : null
   const detectionConflict =
-    Array.from({ length: 6 }, (_, id) => status[`tool T${id}`]?.detect_state === 1).filter(Boolean).length > 1
+    isToolchanger &&
+    Array.from({ length: toolCount }, (_, id) => status[`tool T${id}`]?.detect_state === 1).filter(Boolean).length > 1
 
   const sensor = name => finite(status[`temperature_sensor ${name}`]?.temperature)
-  const config = status.configfile?.settings ?? status.configfile?.config ?? {}
   const effects = Object.entries(status)
     .filter(([name, data]) => name.startsWith('led_effect ') && data.enabled === true)
     .map(([name]) => ({ name: name.slice(11), leds: config[name]?.leds ?? '' }))
 
-  const tools = Array.from({ length: 6 }, (_, id) => {
+  const singleToolNeoKey = !isToolchanger && toolCount === 1 ? resolveSingleToolNeopixelKey(status) : null
+  const singleToolFil = !isToolchanger && toolCount === 1 ? resolveSingleToolFilamentSensor(status) : null
+
+  const tools = Array.from({ length: toolCount }, (_, id) => {
     const extruder = status[id ? `extruder${id}` : 'extruder'] ?? {}
     const tool = status[`tool T${id}`] ?? {}
-    const filament = status[`filament_switch_sensor T${id}_filament_sensor`] ?? {}
-    const led = status[`neopixel et${id}_leds`]?.color_data
+    const filamentEntry =
+      !isToolchanger && toolCount === 1 && id === 0
+        ? singleToolFil
+        : { name: `T${id}_filament_sensor`, data: status[`filament_switch_sensor T${id}_filament_sensor`] ?? {} }
+    const filament = filamentEntry.data
+    const neoKey =
+      !isToolchanger && toolCount === 1 && id === 0 ? singleToolNeoKey : `neopixel et${id}_leds`
+    const neoShort = neoKey ? neoKey.slice(9) : null
+    const led = neoKey ? status[neoKey]?.color_data : null
 
     return {
       id,
@@ -61,9 +204,11 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
         left: color(led?.[1]),
         right: color(led?.[2]),
       },
-      effects: effects
-        .filter(effect => new RegExp(`neopixel:et${id}_leds(?:\\s|$)`).test(effect.leds))
-        .map(effect => effect.name),
+      effects: neoShort
+        ? effects
+            .filter(effect => new RegExp(`neopixel:${neoShort.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`, 'i').test(effect.leds))
+            .map(effect => effect.name)
+        : [],
       temperature: finite(extruder.temperature),
       target: finite(extruder.target),
       power: finite(extruder.power),
@@ -73,6 +218,7 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
       detectState: finite(tool.detect_state),
       filamentDetected: flag(filament.filament_detected),
       filamentEnabled: flag(filament.enabled),
+      filamentSensorName: filamentEntry.name,
       offsets: {
         x: finite(tool.gcode_x_offset),
         y: finite(tool.gcode_y_offset),
@@ -83,7 +229,7 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
     }
   })
 
-  const fans = Object.keys(status)
+  const genericFans = Object.keys(status)
     .filter(name => /^fan_generic [A-Za-z0-9_]+$/.test(name))
     .map(object => {
       const settings = config[object.toLowerCase()] ?? {}
@@ -97,6 +243,38 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
             : Math.round(Math.max(0, Math.min(1, speed / max)) * 100),
       }
     })
+
+  const fans = [
+    ...(status.fan
+      ? [
+          {
+            name: '__part_fan__',
+            label: 'Bauteillüfter',
+            kind: 'part_fan',
+            percent:
+              finite(status.fan.speed) == null
+                ? null
+                : Math.round(Math.max(0, Math.min(1, status.fan.speed)) * 100),
+          },
+        ]
+      : []),
+    ...genericFans,
+  ]
+
+  const sensors = Object.entries(status)
+    .filter(([key]) => (key.startsWith('temperature_sensor ') || key.startsWith('temperature_fan ')) && !/^temperature_sensor T[0-7]$/.test(key))
+    .map(([key, value]) => {
+      const isFan = key.startsWith('temperature_fan ')
+      const name = key.slice(isFan ? 16 : 19)
+      return {
+        id: key,
+        name,
+        label: formatSensorLabel(name),
+        temperature: finite(value?.temperature),
+        target: isFan ? finite(value?.target) : null,
+      }
+    })
+    .sort((a, b) => a.label.localeCompare(b.label))
 
   const gcodeMove = status.gcode_move ?? {}
   const speedFactor = finite(gcodeMove.speed_factor)
@@ -125,17 +303,22 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
       }
     : { available: false, objects: [], excluded: [], current: null }
 
+  const qglApplied = status.quad_gantry_level?.applied === true
+  const zTiltApplied = status.z_tilt?.applied === true
+
   return {
     at,
+    isToolchanger,
+    toolCount,
     active,
     detected,
     initialTool: initial,
     initialToolAvailable: Object.hasOwn(tc, 'initial_tool_number'),
-    hasDetection: tc.has_detection === true,
-    toolchangerState: tc.status ?? null,
+    hasDetection: isToolchanger && tc.has_detection === true,
+    toolchangerState: isToolchanger ? (tc.status ?? null) : null,
     detectionConflict,
-    homingCanInitialize: canHomeBeforeInitialization(status),
-    detectionMismatch: tc.has_detection === true && (active !== detected || detectionConflict),
+    homingCanInitialize: isToolchanger && canHomeBeforeInitialization(status),
+    detectionMismatch: isToolchanger && tc.has_detection === true && (active !== detected || detectionConflict),
     klipperState: status.webhooks?.state ?? null,
     klipperMessage: status.webhooks?.state_message ?? '',
     printState: status.print_stats?.state ?? null,
@@ -151,6 +334,7 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
     flowPercent: extrudeFactor != null ? Math.round(extrudeFactor * 100) : null,
     zOffset,
     excludeObjects,
+    bedSize: extractBedSize(status, config),
     bed: {
       temperature: finite(status.heater_bed?.temperature),
       target: finite(status.heater_bed?.target),
@@ -160,11 +344,14 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
     octopus: sensor('Octopus'),
     rp2350: sensor('rp2350'),
     beacon: sensor('beacon_coil'),
+    sensors,
     homedAxes: status.toolhead?.homed_axes ?? null,
     position: status.toolhead?.position ?? null,
     axisMinimum: status.toolhead?.axis_minimum ?? null,
     axisMaximum: status.toolhead?.axis_maximum ?? null,
-    qglApplied: status.quad_gantry_level?.applied === true,
+    qglApplied,
+    zTiltApplied,
+    levelingApplied: qglApplied || zTiltApplied,
     activity: Object.fromEntries(
       ['homing', 'probing', 'qgling', 'heating_nozzle', 'heating_bed', 'printing', 'paused'].map(key => [
         key,

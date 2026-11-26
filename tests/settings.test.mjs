@@ -281,13 +281,29 @@ test('createSettingsStore serializes concurrent commits cleanly without tmp race
   }
 })
 
-test('normalizeModelSetting and validateSettingsPayload default missing model to auto and reject invalid presets', () => {
-  assert.deepEqual(MODEL_PRESETS, ['auto', 'stormtrooper-6tc', 'none'])
-  assert.deepEqual(normalizeModelSetting(undefined), { preset: 'auto' })
-  assert.deepEqual(normalizeModelSetting({}), { preset: 'auto' })
-  assert.deepEqual(normalizeModelSetting({ preset: 'stormtrooper-6tc' }), { preset: 'stormtrooper-6tc' })
-  assert.deepEqual(normalizeModelSetting({ preset: 'none' }), { preset: 'none' })
+test('normalizeModelSetting and validateSettingsPayload support expanded presets, accentColor, and reject invalid values', () => {
+  assert.deepEqual(MODEL_PRESETS, ['auto', 'stormtrooper-6tc', 'stealthburner', 'mini-stealthburner', 'custom', 'none'])
+  assert.deepEqual(normalizeModelSetting(undefined), { preset: 'auto', accentColor: '#c5f76b' })
+  assert.deepEqual(normalizeModelSetting({}), { preset: 'auto', accentColor: '#c5f76b' })
+  assert.deepEqual(normalizeModelSetting({ preset: 'stormtrooper-6tc' }), {
+    preset: 'stormtrooper-6tc',
+    accentColor: '#c5f76b',
+  })
+  assert.deepEqual(normalizeModelSetting({ preset: 'stealthburner', accentColor: '#D62828' }), {
+    preset: 'stealthburner',
+    accentColor: '#d62828',
+  })
+  assert.deepEqual(normalizeModelSetting({ preset: 'mini-stealthburner', accentColor: '' }), {
+    preset: 'mini-stealthburner',
+    accentColor: '#c5f76b',
+  })
+  assert.deepEqual(normalizeModelSetting({ preset: 'custom', accentColor: '#3b82f6' }), {
+    preset: 'custom',
+    accentColor: '#3b82f6',
+  })
+  assert.deepEqual(normalizeModelSetting({ preset: 'none' }), { preset: 'none', accentColor: '#c5f76b' })
   assert.throws(() => normalizeModelSetting({ preset: 'bogus' }), /Modell|Preset/i)
+  assert.throws(() => normalizeModelSetting({ preset: 'stealthburner', accentColor: 'red' }), /Akzentfarbe|Farb/i)
   assert.throws(() => normalizeModelSetting('invalid'), /Modell/i)
 
   const validated = validateSettingsPayload({
@@ -295,13 +311,19 @@ test('normalizeModelSetting and validateSettingsPayload default missing model to
     printers: [
       { id: 'v01', name: 'V0.1', url: 'http://192.168.1.60', cameras: [] },
       { id: 'st', name: 'ST', url: 'http://192.168.1.50', model: { preset: 'stormtrooper-6tc' }, cameras: [] },
-      { id: 'trident', name: 'Trident', url: 'http://192.168.1.61', model: { preset: 'none' }, cameras: [] },
+      {
+        id: 'trident',
+        name: 'Trident',
+        url: 'http://192.168.1.61',
+        model: { preset: 'stealthburner', accentColor: '#D62828' },
+        cameras: [],
+      },
     ],
     network: { allowedOrigins: [], allowLanOrigins: false },
   })
-  assert.deepEqual(validated.printers[0].model, { preset: 'auto' })
-  assert.deepEqual(validated.printers[1].model, { preset: 'stormtrooper-6tc' })
-  assert.deepEqual(validated.printers[2].model, { preset: 'none' })
+  assert.deepEqual(validated.printers[0].model, { preset: 'auto', accentColor: '#c5f76b' })
+  assert.deepEqual(validated.printers[1].model, { preset: 'stormtrooper-6tc', accentColor: '#c5f76b' })
+  assert.deepEqual(validated.printers[2].model, { preset: 'stealthburner', accentColor: '#d62828' })
 
   assert.throws(
     () =>

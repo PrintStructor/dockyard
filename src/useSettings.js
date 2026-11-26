@@ -1,8 +1,8 @@
 import { computed, ref } from 'vue'
+import { MODEL_PRESETS, DEFAULT_ACCENT_COLOR, normalizeAccentColor } from './model-config.mjs'
 
 const MAX_PRINTERS = 20
 const ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/
-const MODEL_PRESETS = ['auto', 'stormtrooper-6tc', 'none']
 
 const settings = ref(null)
 const loaded = ref(false)
@@ -69,7 +69,10 @@ function cloneCamera(cam, idx) {
 
 function cloneModel(model) {
   const presetRaw = String(model?.preset ?? 'auto').trim().toLowerCase()
-  return { preset: MODEL_PRESETS.includes(presetRaw) ? presetRaw : 'auto' }
+  return {
+    preset: MODEL_PRESETS.includes(presetRaw) ? presetRaw : 'auto',
+    accentColor: normalizeAccentColor(model?.accentColor, DEFAULT_ACCENT_COLOR),
+  }
 }
 
 function clonePrinterProfile(profile, idx = 0) {
@@ -314,6 +317,50 @@ async function testConnection(url) {
   }
 }
 
+async function uploadModel(printerId, slot, file) {
+  try {
+    const filename = file?.name || `${slot}.glb`
+    const response = await fetch(`/api/models/${encodeURIComponent(printerId)}/${encodeURIComponent(slot)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'model/gltf-binary',
+        'X-Cockpit-Request': '1',
+        'X-Model-Filename': encodeURIComponent(filename),
+      },
+      body: file,
+      signal: AbortSignal.timeout(60_000),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      return { ok: false, status: response.status, error: data.error || `Upload fehlgeschlagen (HTTP ${response.status}).` }
+    }
+    if (data.settings) applyRemoteSettings(data.settings)
+    return { ok: true, meta: data.meta ?? null, settings: data.settings ?? null }
+  } catch (cause) {
+    return { ok: false, status: 0, error: cause.message || 'Verbindungsfehler beim Hochladen.' }
+  }
+}
+
+async function deleteModel(printerId, slot) {
+  try {
+    const response = await fetch(`/api/models/${encodeURIComponent(printerId)}/${encodeURIComponent(slot)}`, {
+      method: 'DELETE',
+      headers: {
+        'X-Cockpit-Request': '1',
+      },
+      signal: AbortSignal.timeout(10_000),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      return { ok: false, status: response.status, error: data.error || `Löschen fehlgeschlagen (HTTP ${response.status}).` }
+    }
+    if (data.settings) applyRemoteSettings(data.settings)
+    return { ok: true, settings: data.settings ?? null }
+  } catch (cause) {
+    return { ok: false, status: 0, error: cause.message || 'Verbindungsfehler beim Löschen.' }
+  }
+}
+
 export function useSettings() {
   return {
     settings,
@@ -329,6 +376,8 @@ export function useSettings() {
     saveSettings,
     switchPrinter,
     testConnection,
+    uploadModel,
+    deleteModel,
     applyRemoteSettings,
   }
 }

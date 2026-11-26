@@ -18,7 +18,9 @@ const MAX_PRINTERS = 20
 const MAX_CAMERAS = 6
 const MAX_ALLOWED_ORIGINS = 24
 const ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,31}$/
-export const MODEL_PRESETS = ['auto', 'stormtrooper-6tc', 'none']
+export const MODEL_PRESETS = ['auto', 'stormtrooper-6tc', 'stealthburner', 'mini-stealthburner', 'custom', 'none']
+export const DEFAULT_ACCENT_COLOR = '#c5f76b'
+const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i
 
 const DEFAULT_SUBTITLE = 'VORON 2.4 / 6-Toolchanger'
 const BLOCKED_HOSTS = new Set([
@@ -276,7 +278,7 @@ export function normalizeCamera(raw, index = 0) {
 }
 
 export function normalizeModelSetting(raw) {
-  if (raw == null) return { preset: 'auto' }
+  if (raw == null) return { preset: 'auto', accentColor: DEFAULT_ACCENT_COLOR }
   if (typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error('Ungültige 3D-Modell-Konfiguration.')
   }
@@ -284,7 +286,15 @@ export function normalizeModelSetting(raw) {
   if (!MODEL_PRESETS.includes(presetRaw)) {
     throw new Error('Ungültiges 3D-Modell-Preset.')
   }
-  return { preset: presetRaw }
+  let accentColor = DEFAULT_ACCENT_COLOR
+  if (raw.accentColor != null && String(raw.accentColor).trim() !== '') {
+    const colorRaw = String(raw.accentColor).trim().toLowerCase()
+    if (!HEX_COLOR_PATTERN.test(colorRaw)) {
+      throw new Error('Ungültige Akzentfarbe (erwartet wird ein Hex-Farbwert wie #d62828).')
+    }
+    accentColor = colorRaw
+  }
+  return { preset: presetRaw, accentColor }
 }
 
 function normalizePrinterProfile(raw, index, usedIds) {
@@ -391,7 +401,7 @@ function bootstrapFromEnv(env) {
         subtitle: DEFAULT_SUBTITLE,
         url,
         mainsailUrl,
-        model: { preset: 'auto' },
+        model: { preset: 'auto', accentColor: DEFAULT_ACCENT_COLOR },
         cameras: createDefaultCameras(),
       },
     ],

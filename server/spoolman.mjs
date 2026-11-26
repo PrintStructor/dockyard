@@ -123,6 +123,21 @@ export function createSpoolmanReader(printerOrGetter, fetchImpl = fetch, onUpdat
     detailFetchedAt = 0
   }
 
+  function setActive({ spoolId = null, activeSpool = null } = {}) {
+    version++
+    pending = false
+    const now = Date.now()
+    detailSpoolId = spoolId
+    detailFetchedAt = spoolId != null ? now : 0
+    nextPollAt = now + STATUS_TTL_MS
+    apply({
+      available: true,
+      connected: true,
+      spoolId,
+      activeSpool,
+    })
+  }
+
   async function poll(requestVersion) {
     const base = resolvePrinter()
     const now = Date.now()
@@ -194,7 +209,7 @@ export function createSpoolmanReader(printerOrGetter, fetchImpl = fetch, onUpdat
     return state
   }
 
-  return { read, invalidate, reset }
+  return { read, invalidate, setActive, reset }
 }
 
 export async function fetchSpoolmanList(printerUrl, fetchImpl = fetch) {

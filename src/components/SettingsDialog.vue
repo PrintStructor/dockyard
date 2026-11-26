@@ -710,11 +710,13 @@ watch(
     if (isOpen) {
       activeSection.value = props.initialSection || 'printers'
       saveFeedback.value = null
+      modelFeedback.value = null
       importPreview.value = null
       importError.value = ''
       await settingsStore.loadSettings()
       if (!props.open) return
       cloneDraftFromStore()
+      selectedPrinterId.value = draft.value.activePrinterId
       await nextTick()
       if (props.open && dialogEl.value && !dialogEl.value.open) {
         dialogEl.value.showModal()

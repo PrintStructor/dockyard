@@ -1201,7 +1201,7 @@ function printerMiddleware(req, res, next) {
         // POST /api/spoolman/active
         const payload = await readJson(req, 2048)
         const result = await setActiveSpoolmanSpool(printer, payload?.spoolId ?? null, fetchUpstream)
-        readSpoolman.invalidate()
+        readSpoolman.setActive(result)
         live.notify()
         return json(200, { ok: true, ...result })
       }

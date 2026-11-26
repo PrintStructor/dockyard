@@ -257,7 +257,7 @@ test('HTTP /api/spoolman/spools, /api/spoolman/active and /api/status precedence
     assert.equal(statusWithSpool.tools[0].material.source, 'Spoolman')
     assert.equal(statusWithSpool.tools[0].material.color, '#d62828')
 
-    // Switch active spool to 12
+    // Switch active spool to 12 and verify immediate /api/status reflects it synchronously (0ms delay)
     const switchRes = await fetch(`${base}/api/spoolman/active`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Origin: base, 'X-Cockpit-Request': '1' },
@@ -268,6 +268,10 @@ test('HTTP /api/spoolman/spools, /api/spoolman/active and /api/status precedence
     assert.equal(switched.spoolId, 12)
     assert.equal(switched.activeSpool.name, 'Jet Black')
     assert.deepEqual(postedSpoolIds, [12])
+
+    const immediateStatus = await (await fetch(`${base}/api/status`)).json()
+    assert.equal(immediateStatus.spoolman.activeSpool.id, 12)
+    assert.equal(immediateStatus.tools[0].material.color, '#111618')
 
     // Clear active spool (null) -> falls back to 1-slot slicer metadata on printing single-tool
     const clearRes = await fetch(`${base}/api/spoolman/active`, {

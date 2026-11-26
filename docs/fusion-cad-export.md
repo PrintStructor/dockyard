@@ -30,11 +30,13 @@ Das Skript installiert das Add-In `fusion-addin/DockyardExport` direkt in `~/Lib
    - **Ausgabeordner:** standardmäßig `~/Desktop/dockyard-exports`.
 4. Das Add-In richtet das Modell automatisch im glTF-Koordinatensystem aus (**Y-up**, Meter, X/Z zentriert, Boden bei `y = 0`), erkennt transparente Acryl-/Glas-Scheiben und schreibt `<dokument>-<slot>.glb`.
 
-### 3. Große Baugruppen komprimieren (empfohlen ab ~5 MB)
+### 3. Direkt in DOCKYARD hochladen (automatische Browser-Kompression!)
+Große Fusion-Exporte (bis **150 MB** Rohgröße, z. B. 57 MB Gesamtdrucker) kannst du **direkt per Drag & Drop in den DOCKYARD-Einstellungen hochladen** — DOCKYARD komprimiert sie automatisch im Browser per **Meshopt + Simplify** (z. B. 57 MB → 5 MB, `-91 %`), bevor die Datei an den Raspberry Pi gesendet wird.
+
+Optional für Batch-Läufe im Terminal:
 ```bash
 ./scripts/optimize-dockyard-glb.sh ~/Desktop/dockyard-exports/voron24-printer.glb --preset printer
 ```
-Typische Fusion-Exporte schrumpfen per **Meshopt + Simplify** um **75–90 %** (z. B. 25 MB → 3 MB) — ideal für Raspberry Pi und 7"-Kiosk-Display.
 
 ### 4. Optionale Live-Tags in Fusion 360
 Wenn du in Fusion 360 bestimmten Körpern, Komponenten oder Darstellungen (Appearances) diese Namen gibst, animiert DOCKYARD sie live:

@@ -231,6 +231,17 @@ tex_only_occ = _OccWithApp(
 rgba_cf, _ = mod._extract_appearance_rgba(white_body, tex_only_occ, {})
 assert rgba_cf[0] < 0.06 and rgba_cf[1] < 0.06 and rgba_cf[2] < 0.06, rgba_cf
 
+# Verify explicit non-textured solid white does NOT fall through to secondary yellow shader properties
+solid_white_with_emissive = _OccWithApp(
+    appearance=_App(
+        'a-white-emissive',
+        'ABS (White)',
+        [_Prop('opaque_albedo', 'Color', (255, 255, 255), tex=False), _Prop('emissive_color', 'Emissive', (255, 255, 0), tex=False)],
+    )
+)
+rgba_white, _ = mod._extract_appearance_rgba(white_body, solid_white_with_emissive, {})
+assert rgba_white == (1.0, 1.0, 1.0, 1.0), rgba_white
+
 glb = mod.build_glb_bytes([
   {
     'name': 'AcrylPanel',

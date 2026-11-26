@@ -135,7 +135,9 @@ function cloneModelDraft(model) {
 }
 
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-const modelUploadBusy = ref({ toolhead: false, printer: false })
+const MAX_RAW_UPLOAD_BYTES = 150 * 1024 * 1024
+const AUTO_OPTIMIZE_THRESHOLD_BYTES = Math.round(1.5 * 1024 * 1024)
+const modelUploadState = ref({ toolhead: '', printer: '' })
 const modelDragOver = ref({ toolhead: false, printer: false })
 const modelFeedback = ref(null)
 const modelFileInputs = ref({})
@@ -189,29 +191,69 @@ function triggerModelFilePicker(slot) {
 
 async function handleModelUpload(slot, file) {
   const printerId = selectedPrinter.value?.id
-  if (!printerId || !file || !canWrite.value || modelUploadBusy.value[slot]) return
+  if (!printerId || !file || !canWrite.value || modelUploadState.value[slot]) return
   modelFeedback.value = null
   if (!file.name.toLowerCase().endsWith('.glb')) {
     modelFeedback.value = { ok: false, message: 'Bitte eine binäre glTF-2.0-Datei (.glb) auswählen.' }
     return
   }
-  if (file.size > MAX_UPLOAD_BYTES) {
+  if (file.size > MAX_RAW_UPLOAD_BYTES) {
     modelFeedback.value = {
       ok: false,
-      message: 'Datei ist größer als 25 MB. Bitte zuerst mit scripts/optimize-dockyard-glb.sh komprimieren.',
+      message: 'Datei ist größer als 150 MB. Bitte in Fusion 360 mit „Kompakt“ und „Kleinteile ausblenden“ exportieren.',
     }
     return
   }
-  modelUploadBusy.value[slot] = true
+
+  let uploadFile = file
+  let optimizedSummary = null
   try {
-    const res = await settingsStore.uploadModel(printerId, slot, file)
+    if (file.size > AUTO_OPTIMIZE_THRESHOLD_BYTES) {
+      modelUploadState.value[slot] = 'optimizing'
+      modelFeedback.value = {
+        ok: true,
+        message: `Optimiere 3D-Modell im Browser (${formatBytes(file.size)}) …`,
+      }
+      await new Promise(resolve => setTimeout(resolve, 30))
+      try {
+        const { inspectGlbHeader, shouldOptimizeGlb, optimizeGlbBuffer } = await import('../glb-optimizer.mjs')
+        const rawBuf = await file.arrayBuffer()
+        const header = inspectGlbHeader(rawBuf)
+        if (shouldOptimizeGlb(header)) {
+          const opt = await optimizeGlbBuffer(rawBuf, { slot })
+          if (opt.optimized) {
+            uploadFile = new File([opt.bytes], file.name, { type: 'model/gltf-binary' })
+            optimizedSummary = { from: opt.originalBytes, to: opt.optimizedBytes }
+          }
+        }
+      } catch {
+        // If browser optimization cannot parse a non-standard file and the raw file fits,
+        // let the server validate and report a clean error if malformed.
+      }
+    }
+
+    if (uploadFile.size > MAX_UPLOAD_BYTES) {
+      modelFeedback.value = {
+        ok: false,
+        message: 'Das 3D-Modell überschreitet selbst nach automatischer Komprimierung das 25-MB-Limit. Bitte in Fusion 360 mit „Kompakt“ exportieren.',
+      }
+      return
+    }
+
+    modelUploadState.value[slot] = 'uploading'
+    const res = await settingsStore.uploadModel(printerId, slot, uploadFile)
     if (!res.ok) {
       modelFeedback.value = { ok: false, message: res.error || 'Upload fehlgeschlagen.' }
+    } else if (optimizedSummary) {
+      modelFeedback.value = {
+        ok: true,
+        message: `3D-Modell automatisch optimiert (${formatBytes(optimizedSummary.from)} → ${formatBytes(optimizedSummary.to)}) und live aktiviert.`,
+      }
     } else {
       modelFeedback.value = { ok: true, message: '3D-Modell gespeichert und live aktiviert.' }
     }
   } finally {
-    modelUploadBusy.value[slot] = false
+    modelUploadState.value[slot] = ''
   }
 }
 
@@ -229,9 +271,9 @@ function onModelDrop(slot, event) {
 
 async function handleModelDelete(slot) {
   const printerId = selectedPrinter.value?.id
-  if (!printerId || !canWrite.value || modelUploadBusy.value[slot]) return
+  if (!printerId || !canWrite.value || modelUploadState.value[slot]) return
   modelFeedback.value = null
-  modelUploadBusy.value[slot] = true
+  modelUploadState.value[slot] = 'deleting'
   try {
     const res = await settingsStore.deleteModel(printerId, slot)
     if (!res.ok) {
@@ -240,7 +282,7 @@ async function handleModelDelete(slot) {
       modelFeedback.value = { ok: true, message: 'Eigenes 3D-Modell entfernt.' }
     }
   } finally {
-    modelUploadBusy.value[slot] = false
+    modelUploadState.value[slot] = ''
   }
 }
 
@@ -1030,23 +1072,25 @@ watch(
                           <button
                             type="button"
                             class="subtle-button"
-                            :disabled="!canWrite || modelUploadBusy[slot.id]"
+                            :disabled="!canWrite || Boolean(modelUploadState[slot.id])"
                             @click="triggerModelFilePicker(slot.id)"
                           >
                             <Upload :size="13" />
                             {{
-                              modelUploadBusy[slot.id]
-                                ? t('Lade hoch …')
-                                : customSlotMeta(slot.id)
-                                  ? t('Ersetzen')
-                                  : t('.glb hochladen')
+                              modelUploadState[slot.id] === 'optimizing'
+                                ? t('Optimiere …')
+                                : modelUploadState[slot.id] === 'uploading'
+                                  ? t('Lade hoch …')
+                                  : customSlotMeta(slot.id)
+                                    ? t('Ersetzen')
+                                    : t('.glb hochladen')
                             }}
                           </button>
                           <button
                             v-if="customSlotMeta(slot.id)"
                             type="button"
                             class="icon-button"
-                            :disabled="!canWrite || modelUploadBusy[slot.id]"
+                            :disabled="!canWrite || Boolean(modelUploadState[slot.id])"
                             :title="t('Modell entfernen')"
                             :aria-label="t('Modell entfernen')"
                             @click="handleModelDelete(slot.id)"
@@ -1060,7 +1104,7 @@ watch(
                         <span>{{ formatBytes(customSlotMeta(slot.id).bytes) }}</span>
                       </div>
                       <div v-else class="settings-model-empty">
-                        {{ t('Datei hier ablegen oder .glb auswählen (max. 25 MB).') }}
+                        {{ t('Datei hier ablegen oder .glb auswählen (große Exporte werden automatisch komprimiert).') }}
                       </div>
                     </div>
                   </div>
@@ -1077,7 +1121,7 @@ watch(
                     <p>
                       {{
                         t(
-                          'In Fusion 360 Desktop: scripts/fusion-export-dockyard.py ausführen, große Baugruppen optional mit scripts/optimize-dockyard-glb.sh komprimieren und hier hochladen. Fertige Drucker aus Psych0h3ad/3d-print-rig lassen sich per scripts/import-3d-print-rig.sh abrufen.',
+                          'In Fusion 360 Desktop mit dem DOCKYARD-Add-In exportieren und die .glb-Datei einfach direkt hier ablegen — große Baugruppen werden automatisch im Browser per Meshopt komprimiert, bevor sie an den Drucker gesendet werden. Fertige Drucker aus Psych0h3ad/3d-print-rig lassen sich per scripts/import-3d-print-rig.sh abrufen.',
                         )
                       }}
                     </p>

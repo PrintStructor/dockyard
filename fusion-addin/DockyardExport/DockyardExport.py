@@ -454,10 +454,11 @@ def _extract_appearance_rgba(body, occ, appearance_cache):
             return result
 
         props = appearance.appearanceProperties
-        ordered_props = []
+        primary_props = []
+        fallback_props = []
         seen_prop_ids = set()
 
-        def push_prop(prop):
+        def push_prop(target_list, prop):
             if not prop:
                 return
             cprop = adsk.core.ColorProperty.cast(prop) if adsk is not None else prop
@@ -467,10 +468,10 @@ def _extract_appearance_rgba(body, occ, appearance_cache):
             if pid in seen_prop_ids:
                 return
             seen_prop_ids.add(pid)
-            ordered_props.append(cprop)
+            target_list.append(cprop)
 
         try:
-            push_prop(props.itemByName("Color"))
+            push_prop(primary_props, props.itemByName("Color"))
         except Exception:
             pass
         for prop_id in (
@@ -486,31 +487,35 @@ def _extract_appearance_rgba(body, occ, appearance_cache):
             "glazing_transmittance",
         ):
             try:
-                push_prop(props.itemById(prop_id))
+                push_prop(primary_props, props.itemById(prop_id))
             except Exception:
                 pass
-        try:
-            for prop in props:
-                if adsk is None or isinstance(prop, adsk.core.ColorProperty):
-                    push_prop(prop)
-        except Exception:
-            pass
+        if not primary_props:
+            try:
+                for prop in props:
+                    if adsk is None or isinstance(prop, adsk.core.ColorProperty):
+                        push_prop(fallback_props, prop)
+            except Exception:
+                pass
 
+        candidates = primary_props or fallback_props
         rgba = None
-        pure_white_textured = False
-        for cprop in ordered_props:
+        from_texture_only = False
+        for cprop in candidates:
             c = cprop.value
             cand = (_srgb_byte_to_linear(c.red), _srgb_byte_to_linear(c.green), _srgb_byte_to_linear(c.blue), 1.0)
             has_tex = bool(getattr(cprop, "hasConnectedTexture", False))
-            is_pure_white = c.red >= 252 and c.green >= 252 and c.blue >= 252
-            if not has_tex and not is_pure_white:
+            if not has_tex:
                 rgba = cand
+                from_texture_only = False
                 break
             if rgba is None:
                 rgba = cand
-                pure_white_textured = has_tex or is_pure_white
+                from_texture_only = True
 
-        if rgba is None or pure_white_textured:
+        # Only apply appearance-name tint fallback when color came from a texture-backed
+        # property or no primary color property existed (never override explicit solid white!).
+        if rgba is None or from_texture_only:
             inferred = infer_color_from_appearance_name(app_name)
             if inferred is not None:
                 rgba = inferred

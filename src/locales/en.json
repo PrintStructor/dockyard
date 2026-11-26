@@ -1153,5 +1153,17 @@
   "Kein Bed Mesh konfiguriert.": "No bed mesh configured.",
   "Werkzeug-Offsets (T0–T{0})": "Tool offsets (T0–T{0})",
   "{0}×{0}-Kalibrierungsmatrix (Nudge XY / Beacon Z)": "{0}×{0} calibration matrix (Nudge XY / Beacon Z)",
-  "Ungültiges Werkzeug (erlaubt: T0 bis T{0}).": "Invalid tool (allowed: T0 to T{0})."
+  "Ungültiges Werkzeug (erlaubt: T0 bis T{0}).": "Invalid tool (allowed: T0 to T{0}).",
+  "Eigenes CAD · noch nicht hochgeladen": "Custom CAD · not uploaded yet",
+  "{0} · Vorlage": "{0} · Template",
+  "Eigenes CAD": "Custom CAD",
+  "Interaktive 3D-Ansicht des Druckers.": "Interactive 3D view of the printer.",
+  "Eigenes 3D-CAD noch nicht hochgeladen": "Custom 3D CAD not uploaded yet",
+  "Lade in den Einstellungen eine .glb-Datei aus Fusion 360 oder 3D Print Rig für dieses Druckerprofil hoch.": "Upload a .glb file from Fusion 360 or 3D Print Rig for this printer profile in Settings.",
+  "CAD in Einstellungen hochladen": "Upload CAD in Settings",
+  "Toolhead": "Toolhead",
+  "Toolhead von unten ansehen": "View toolhead from below",
+  "3D-Modell wird geladen …": "Loading 3D model …",
+  "Das 3D-Modell konnte nicht geladen werden.": "Could not load the 3D model.",
+  "3D ist in diesem Browser nicht verfügbar.": "3D is not available in this browser."
 }

@@ -13,6 +13,16 @@ import { Reflector } from 'three/addons/objects/Reflector.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { t, language } from '../i18n.mjs'
 import { nozzleThermalGlow } from '../thermal.mjs'
+import {
+  LED_DISCRETE_LERP_MS,
+  LED_OFF_COLOR,
+  LED_ZERO_COLOR,
+  colorNear,
+  stepLedMeshes,
+  createStudioLights,
+  buildThermalGlowTexture,
+  disposeObjectTree,
+} from '../scene-utils.mjs'
 
 const props = defineProps({
   selected: Number,
@@ -63,18 +73,11 @@ const boxes = {}
 const nozzleTips = {}
 const pickables = []
 const ledMeshes = []
-const LED_DISCRETE_LERP_MS = 140
-const LED_OFF_COLOR = new THREE.Color('#697479')
-const LED_ZERO_COLOR = new THREE.Color(0)
 let lastLedFrameAt = 0
 let ledIntervalMs = 250
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)')
 const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
-
-function colorNear(a, b) {
-  return Math.abs(a.r - b.r) < 1e-4 && Math.abs(a.g - b.g) < 1e-4 && Math.abs(a.b - b.b) < 1e-4
-}
 
 function invalidate() {
   if (!running && !disposed && visible && !document.hidden && renderer) {
@@ -95,20 +98,7 @@ function render(now) {
     moving = progress < 1
     if (!moving) animation = null
   }
-  let ledAnimating = false
-  for (const object of ledMeshes) {
-    const anim = object.userData.ledAnim
-    if (!anim) continue
-    const progress = Math.min(1, (now - anim.start) / anim.duration)
-    object.material.color.lerpColors(anim.fromColor, anim.toColor, progress)
-    object.material.emissive.lerpColors(anim.fromEmissive, anim.toEmissive, progress)
-    object.material.emissiveIntensity = anim.fromIntensity + (anim.toIntensity - anim.fromIntensity) * progress
-    if (progress < 1) {
-      ledAnimating = true
-    } else {
-      object.userData.ledAnim = null
-    }
-  }
+  const ledAnimating = stepLedMeshes(ledMeshes, now)
   const changed = controls.update()
   composer.render()
 
@@ -628,24 +618,6 @@ function buildFloorVeil() {
   return veil
 }
 
-function buildThermalGlowTexture() {
-  const canvas = document.createElement('canvas')
-  canvas.width = 256
-  canvas.height = 256
-  const ctx = canvas.getContext('2d')
-  const grad = ctx.createRadialGradient(128, 128, 4, 128, 128, 126)
-  grad.addColorStop(0, 'rgba(255, 255, 255, 0.95)')
-  grad.addColorStop(0.28, 'rgba(255, 255, 255, 0.55)')
-  grad.addColorStop(0.62, 'rgba(255, 255, 255, 0.16)')
-  grad.addColorStop(0.88, 'rgba(255, 255, 255, 0.03)')
-  grad.addColorStop(1, 'rgba(255, 255, 255, 0)')
-  ctx.fillStyle = grad
-  ctx.fillRect(0, 0, 256, 256)
-  const tex = new THREE.CanvasTexture(canvas)
-  tex.colorSpace = THREE.SRGBColorSpace
-  return tex
-}
-
 function buildThermalGroup() {
   thermalTexture = buildThermalGlowTexture()
   const group = new THREE.Group()
@@ -706,16 +678,7 @@ function syncThermalPositions() {
   }
 }
 
-function disposeModel(root) {
-  const geometries = new Set()
-  const materials = new Set()
-  root.traverse(object => {
-    if (object.geometry) geometries.add(object.geometry)
-    if (object.material) materials.add(object.material)
-  })
-  geometries.forEach(geometry => geometry.dispose())
-  materials.forEach(material => material.dispose())
-}
+const disposeModel = disposeObjectTree
 
 onMounted(() => {
   try {
@@ -749,16 +712,7 @@ onMounted(() => {
     composer.addPass(bloom)
     composer.addPass(new OutputPass())
 
-    world.add(new THREE.HemisphereLight(0xe3edff, 0x65716a, 2.25))
-    const key = new THREE.DirectionalLight(0xfff6e9, 3.9)
-    key.position.set(3, 5, 5)
-    world.add(key)
-    const fill = new THREE.DirectionalLight(0xc5d4ef, 1.8)
-    fill.position.set(-4, 2, -3)
-    world.add(fill)
-    const rim = new THREE.DirectionalLight(0xd4ecff, 2.2)
-    rim.position.set(0, 1.9, -4.5)
-    world.add(rim)
+    createStudioLights().forEach(light => world.add(light))
 
     floor = new Reflector(new THREE.PlaneGeometry(0.76, 0.3), {
       textureWidth: 1024,

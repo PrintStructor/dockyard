@@ -67,5 +67,27 @@
   "inletLineupMeters": {
     "height": 0.11885,
     "z": 0.00931
+  },
+  "templates": {
+    "buildScript": "scripts/build-voron-templates.py",
+    "optimizer": "scripts/optimize-dockyard-glb.sh (@gltf-transform/cli 4.5.1, EXT_meshopt_compression)",
+    "stealthburner": {
+      "file": "public/models/templates/stealthburner.glb",
+      "upstream": "VoronDesign/Voron-Stealthburner (GPL-3.0) via Psych0h3ad/3d-print-rig (modules/sb_revo_voron.glb.gz + modules/head_sb_cw2.glb.gz)",
+      "license": "GPL-3.0",
+      "bytes": 460956,
+      "meshes": 6,
+      "triangles": 26384,
+      "tags": ["VORON_ACCENT", "LED_LOGO", "LED_NOZZLE_L", "LED_NOZZLE_R", "NOZZLE_TIP", "FILAMENT_INLET"]
+    },
+    "mini-stealthburner": {
+      "file": "public/models/templates/mini-stealthburner.glb",
+      "upstream": "VoronDesign/Voron-0 Voron0.2r1 Mini_Stealthburner (GPL-3.0) via Psych0h3ad/3d-print-rig (modules/head_tap_minisb_rods.glb.gz, TapChanger carriage/rods removed)",
+      "license": "GPL-3.0",
+      "bytes": 347104,
+      "meshes": 6,
+      "triangles": 21840,
+      "tags": ["VORON_ACCENT", "LED_LOGO", "LED_NOZZLE_L", "LED_NOZZLE_R", "NOZZLE_TIP", "FILAMENT_INLET"]
+    }
   }
 }

@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // Private machine settings stay outside Git. Deployment may use environment vars.
@@ -56,3 +57,6 @@ export const allowLanOriginsEnv = resolveAllowLanOrigins()
 export const settingsFilePath =
   (process.env.DOCKYARD_SETTINGS_PATH || '').trim() ||
   fileURLToPath(new URL('../.dockyard-settings.json', import.meta.url))
+export const modelsDir =
+  (process.env.DOCKYARD_MODELS_DIR || '').trim() ||
+  path.join(path.dirname(settingsFilePath), '.dockyard-models')

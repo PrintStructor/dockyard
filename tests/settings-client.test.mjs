@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { resolveMainsailUrl } from '../src/printer-ui-url.mjs'
 import { resolveDefaultTab, setDefaultTab, DEFAULT_TAB_KEY } from '../src/display-mode.mjs'
-import { buildPrintersExport, parsePrintersImport, mergePrinterProfiles } from '../src/useSettings.js'
+import { buildPrintersExport, parsePrintersImport, mergePrinterProfiles, createNewPrinterDraft } from '../src/useSettings.js'
 import { useConfigEditor } from '../src/useConfigEditor.js'
 
 function memoryStorage(initial = {}) {
@@ -243,7 +243,7 @@ test('ConfigEditor locks dirty buffer non-destructively on printer switch and re
   }
 })
 
-test('printer export/import and merge preserve model.preset and default legacy profiles to auto', () => {
+test('printer export/import and merge preserve model preset & accentColor, strip customModels, and default legacy profiles', () => {
   const exported = buildPrintersExport({
     activePrinterId: 'st',
     printers: [
@@ -252,13 +252,14 @@ test('printer export/import and merge preserve model.preset and default legacy p
         name: 'STORMTROOPER',
         url: 'http://192.168.1.10',
         model: { preset: 'stormtrooper-6tc' },
+        customModels: { printer: { filename: 'x.glb', bytes: 123 } },
         cameras: [],
       },
       {
         id: 'v01',
         name: 'V0.1',
         url: 'http://192.168.1.11',
-        model: { preset: 'none' },
+        model: { preset: 'mini-stealthburner', accentColor: '#D62828' },
         cameras: [],
       },
       {
@@ -269,16 +270,24 @@ test('printer export/import and merge preserve model.preset and default legacy p
       },
     ],
   })
-  assert.deepEqual(exported.printers[0].model, { preset: 'stormtrooper-6tc' })
-  assert.deepEqual(exported.printers[1].model, { preset: 'none' })
-  assert.deepEqual(exported.printers[2].model, { preset: 'auto' })
+  assert.deepEqual(exported.printers[0].model, { preset: 'stormtrooper-6tc', accentColor: '#c5f76b' })
+  assert.equal('customModels' in exported.printers[0], false)
+  assert.deepEqual(exported.printers[1].model, { preset: 'mini-stealthburner', accentColor: '#d62828' })
+  assert.deepEqual(exported.printers[2].model, { preset: 'auto', accentColor: '#c5f76b' })
 
   const parsed = parsePrintersImport(JSON.stringify(exported))
-  assert.deepEqual(parsed.printers[0].model, { preset: 'stormtrooper-6tc' })
-  assert.deepEqual(parsed.printers[1].model, { preset: 'none' })
-  assert.deepEqual(parsed.printers[2].model, { preset: 'auto' })
+  assert.deepEqual(parsed.printers[0].model, { preset: 'stormtrooper-6tc', accentColor: '#c5f76b' })
+  assert.deepEqual(parsed.printers[1].model, { preset: 'mini-stealthburner', accentColor: '#d62828' })
+  assert.deepEqual(parsed.printers[2].model, { preset: 'auto', accentColor: '#c5f76b' })
 
   const merged = mergePrinterProfiles([exported.printers[0]], [parsed.printers[1]], 'merge', 'st')
-  assert.deepEqual(merged.printers.find(p => p.id === 'st').model, { preset: 'stormtrooper-6tc' })
-  assert.deepEqual(merged.printers.find(p => p.id === 'v01').model, { preset: 'none' })
+  assert.deepEqual(merged.printers.find(p => p.id === 'st').model, { preset: 'stormtrooper-6tc', accentColor: '#c5f76b' })
+  assert.deepEqual(merged.printers.find(p => p.id === 'v01').model, { preset: 'mini-stealthburner', accentColor: '#d62828' })
+})
+
+test('createNewPrinterDraft initializes model.accentColor to default Acid-Lime', () => {
+  const draft = createNewPrinterDraft('voron-2', 'VORON-2')
+  assert.deepEqual(draft.model, { preset: 'auto', accentColor: '#c5f76b' })
+  assert.equal(draft.id, 'voron-2')
+  assert.equal(draft.name, 'VORON-2')
 })

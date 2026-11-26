@@ -44,6 +44,13 @@ import {
   normalizePrinterOrigin,
   validateSettingsPayload,
 } from './settings.mjs'
+import { defaultModelStore, MAX_MODEL_BYTES } from './models.mjs'
+import {
+  createSpoolmanReader,
+  spoolToToolMaterial,
+  fetchSpoolmanList,
+  setActiveSpoolmanSpool,
+} from './spoolman.mjs'
 
 const objects = [
   'toolchanger',
@@ -105,13 +112,33 @@ function requestStream(url, onResponse) {
   return client.get(parsed, onResponse)
 }
 
-function fetchUpstream(url, init = {}) {
+function defaultFetchUpstream(url, init = {}) {
   return fetch(url, { redirect: 'error', ...init })
 }
 
-export function createPrinterRuntime({ store = defaultSettingsStore } = {}) {
+export function createPrinterRuntime({
+  store = defaultSettingsStore,
+  modelStore = defaultModelStore,
+  fetchImpl = defaultFetchUpstream,
+} = {}) {
+  const fetchUpstream = fetchImpl
   const getActive = () => store.getActivePrinter()
   const activeUrl = () => getActive().url
+
+  function enrichPublicSettings(publicSettings) {
+    if (!publicSettings || typeof publicSettings !== 'object') return publicSettings
+    const printers = (publicSettings.printers ?? []).map(p => ({
+      ...p,
+      customModels: modelStore.describePrinter(p.id),
+    }))
+    const activePrinter = publicSettings.activePrinter
+      ? {
+          ...publicSettings.activePrinter,
+          customModels: modelStore.describePrinter(publicSettings.activePrinter.id),
+        }
+      : null
+    return { ...publicSettings, printers, activePrinter }
+  }
 
   let configCache = null
   let effectObjects = []
@@ -188,7 +215,7 @@ export function createPrinterRuntime({ store = defaultSettingsStore } = {}) {
   }
 
   function applyRuntimeSettingsChange({ activePrinterChanged, printerUrlChanged }) {
-    const publicSettings = store.getPublicSettings()
+    const publicSettings = enrichPublicSettings(store.getPublicSettings())
     if (activePrinterChanged || printerUrlChanged) {
       runtimeEpoch += 1
       configCache = null
@@ -203,6 +230,7 @@ export function createPrinterRuntime({ store = defaultSettingsStore } = {}) {
       lastResult = null
       if (activeUpdateJob && !activeUpdateJob.running) activeUpdateJob = null
       readMaterials.reset()
+      readSpoolman.reset()
       live.emitSettings({ ...publicSettings, activePrinterChanged, printerUrlChanged })
       live.reconnect()
     } else {
@@ -419,6 +447,7 @@ function cachedCapabilities(raw) {
 
 let live = null
 const readMaterials = createMaterialsReader(activeUrl, fetchUpstream, () => live?.notify())
+const readSpoolman = createSpoolmanReader(activeUrl, fetchUpstream, () => live?.notify())
 
 function normalized(raw) {
   const active = getActive()
@@ -426,9 +455,12 @@ function normalized(raw) {
   data.printerName = active.name
   data.printerSubtitle = active.subtitle
   data.activePrinterId = active.id
-  const materials = readMaterials(raw)
+  const materials = readMaterials(raw, data.toolCount)
+  const spoolman = readSpoolman.read()
+  data.spoolman = spoolman
+  const spoolMaterial = data.toolCount === 1 ? spoolToToolMaterial(spoolman.activeSpool) : null
   data.tools.forEach((tool, id) => {
-    tool.material = materials[id]
+    tool.material = id === 0 && spoolMaterial ? spoolMaterial : (materials[id] ?? null)
   })
   return data
 }
@@ -445,6 +477,31 @@ live = createLiveFeed({
 })
 
 const closeLiveFeed = () => live.close()
+
+async function readRawBody(req, max = MAX_MODEL_BYTES) {
+  const declared = Number(req.headers['content-length'])
+  if (Number.isFinite(declared) && declared > max) {
+    req.resume()
+    throw new ControlError(
+      'Die GLB-Datei überschreitet das Limit von 25 MB. Bitte zuerst mit scripts/optimize-dockyard-glb.sh komprimieren.',
+      413,
+    )
+  }
+  const chunks = []
+  let total = 0
+  for await (const chunk of req) {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    total += buf.length
+    if (total > max) {
+      throw new ControlError(
+        'Die GLB-Datei überschreitet das Limit von 25 MB. Bitte zuerst mit scripts/optimize-dockyard-glb.sh komprimieren.',
+        413,
+      )
+    }
+    chunks.push(buf)
+  }
+  return Buffer.concat(chunks)
+}
 
 async function readJson(req, max = 64_000) {
   const chunks = []
@@ -929,6 +986,8 @@ function printerMiddleware(req, res, next) {
   const camera = path.match(/^\/api\/camera\/([a-z0-9][a-z0-9_-]{0,31})(?:\/(stream|webrtc))?$/)
   const printRoute = path.match(/^\/api\/print\/(files|metadata|thumbnail|model)$/)
   const settingsRoute = path.match(/^\/api\/settings(?:\/(switch|test))?$/)
+  const modelRoute = path.match(/^\/api\/models\/([a-z0-9][a-z0-9_-]{0,31})\/(toolhead|printer)$/)
+  const spoolmanRoute = path.match(/^\/api\/spoolman\/(spools|active)$/)
   const systemRoute = path.match(
     /^\/api\/system\/(overview|calibration|calibration\/shaketune-image|config\/list|config\/file|config\/save|service\/restart|updates|updates\/refresh|updates\/notes|updates\/upgrade|updates\/recover|logs\/list|logs\/tail|logs\/download)$/,
   )
@@ -943,6 +1002,8 @@ function printerMiddleware(req, res, next) {
     !camera &&
     !printRoute &&
     !settingsRoute &&
+    !modelRoute &&
+    !spoolmanRoute &&
     !systemRoute
   ) {
     return json(404, { error: 'Unbekannter Endpunkt' })
@@ -950,25 +1011,51 @@ function printerMiddleware(req, res, next) {
 
   const systemSub = systemRoute?.[1]
   const settingsSub = settingsRoute?.[1]
+  const spoolmanSub = spoolmanRoute?.[1]
   const isSettingsGet = path === '/api/settings' && req.method === 'GET'
+  const isModelGet = Boolean(modelRoute) && req.method === 'GET'
+  const isModelWrite = Boolean(modelRoute) && (req.method === 'POST' || req.method === 'DELETE')
   const write =
     !isSettingsGet &&
+    !isModelGet &&
     (path === '/api/control' ||
       path === '/api/settings' ||
       settingsSub === 'switch' ||
       settingsSub === 'test' ||
+      isModelWrite ||
+      spoolmanSub === 'active' ||
       camera?.[2] === 'webrtc' ||
       systemSub === 'config/save' ||
       systemSub === 'service/restart' ||
       systemSub === 'updates/refresh' ||
       systemSub === 'updates/upgrade' ||
       systemSub === 'updates/recover')
-  if (!isSettingsGet && req.method !== (write ? 'POST' : 'GET')) {
+  if (modelRoute) {
+    if (!['GET', 'POST', 'DELETE'].includes(req.method)) {
+      return json(405, { error: 'Methode nicht erlaubt.' })
+    }
+  } else if (!isSettingsGet && req.method !== (write ? 'POST' : 'GET')) {
     return json(405, { error: 'Methode nicht erlaubt.' })
+  }
+  const modelWriteAllowed = () => {
+    if (
+      !isOriginWriteAllowed(req, store.getEffectiveAllowedOrigins(), { allowLanOrigins: store.isLanOriginAllowed() }) ||
+      req.headers['x-cockpit-request'] !== '1'
+    ) {
+      return false
+    }
+    if (req.method === 'DELETE') return true
+    const ct = String(req.headers['content-type'] ?? '')
+      .split(';')[0]
+      .trim()
+      .toLowerCase()
+    return !ct || ct === 'model/gltf-binary' || ct === 'application/octet-stream'
   }
   if (
     write &&
-    !sameOriginRequest(req, store.getEffectiveAllowedOrigins(), { allowLanOrigins: store.isLanOriginAllowed() })
+    !(isModelWrite
+      ? modelWriteAllowed()
+      : sameOriginRequest(req, store.getEffectiveAllowedOrigins(), { allowLanOrigins: store.isLanOriginAllowed() }))
   ) {
     return json(403, { error: 'Befehle sind nur aus dieser lokalen Oberfläche erlaubt.' })
   }
@@ -982,9 +1069,58 @@ function printerMiddleware(req, res, next) {
 
   ;(async () => {
     try {
+      if (modelRoute) {
+        const [, printerId, slot] = modelRoute
+        if (req.method === 'GET') {
+          const item = await modelStore.readModel(printerId, slot)
+          if (!item) return json(404, { error: 'Kein 3D-Modell für diesen Slot vorhanden.' })
+          res.setHeader('Cache-Control', 'private, no-cache')
+          res.setHeader('ETag', item.meta.etag)
+          res.setHeader('X-Content-Type-Options', 'nosniff')
+          if (req.headers['if-none-match'] && req.headers['if-none-match'] === item.meta.etag) {
+            res.statusCode = 304
+            res.end()
+            return
+          }
+          res.statusCode = 200
+          res.setHeader('Content-Type', 'model/gltf-binary')
+          res.setHeader('Content-Length', String(item.buffer.byteLength))
+          res.end(item.buffer)
+          return
+        }
+        if (req.method === 'DELETE') {
+          await modelStore.deleteModel(printerId, slot)
+          const enriched = enrichPublicSettings(store.getPublicSettings(buildRuntimeMeta(req)))
+          live.emitSettings({ ...enrichPublicSettings(store.getPublicSettings()), activePrinterChanged: false, printerUrlChanged: false })
+          return json(200, { ok: true, printerId, slot, settings: enriched })
+        }
+        // POST /api/models/:printerId/:slot
+        const exists = store.getSettings().printers.some(p => p.id === printerId)
+        if (!exists) {
+          throw new ControlError('Druckerprofil nicht gefunden. Bitte Profil zuerst speichern.', 404)
+        }
+        const buffer = await readRawBody(req, MAX_MODEL_BYTES)
+        const rawFilenameHeader = String(req.headers['x-model-filename'] ?? parsedUrl.searchParams.get('filename') ?? '')
+        let decodedFilename = rawFilenameHeader
+        try {
+          decodedFilename = decodeURIComponent(rawFilenameHeader)
+        } catch {
+          // Keep raw filename when not percent-encoded.
+        }
+        let meta
+        try {
+          meta = await modelStore.saveModel(printerId, slot, buffer, decodedFilename)
+        } catch (err) {
+          throw new ControlError(err.message || 'Ungültige GLB-Datei.', 400)
+        }
+        const enriched = enrichPublicSettings(store.getPublicSettings(buildRuntimeMeta(req)))
+        live.emitSettings({ ...enrichPublicSettings(store.getPublicSettings()), activePrinterChanged: false, printerUrlChanged: false })
+        return json(200, { ok: true, printerId, slot, meta, settings: enriched })
+      }
+
       if (settingsRoute) {
         if (isSettingsGet) {
-          return json(200, store.getPublicSettings(buildRuntimeMeta(req)))
+          return json(200, enrichPublicSettings(store.getPublicSettings(buildRuntimeMeta(req))))
         }
         if (settingsSub === 'test') {
           const payload = await readJson(req, 4096)
@@ -1003,7 +1139,7 @@ function printerMiddleware(req, res, next) {
           const change = await store.switchPrinter(nextId)
           applyRuntimeSettingsChange(change)
           return json(200, {
-            ...store.getPublicSettings(buildRuntimeMeta(req)),
+            ...enrichPublicSettings(store.getPublicSettings(buildRuntimeMeta(req))),
             activePrinterChanged: change.activePrinterChanged,
             printerUrlChanged: change.printerUrlChanged,
           })
@@ -1034,6 +1170,10 @@ function printerMiddleware(req, res, next) {
           }
         }
 
+        const previousIds = store.getSettings().printers.map(p => p.id)
+        const nextIds = new Set(validated.printers.map(p => p.id))
+        const removedIds = previousIds.filter(id => !nextIds.has(id))
+
         const currentActive = getActive()
         const nextActive = validated.printers.find(p => p.id === validated.activePrinterId) ?? validated.printers[0]
         if (nextActive.id !== currentActive.id || nextActive.url !== currentActive.url) {
@@ -1041,15 +1181,30 @@ function printerMiddleware(req, res, next) {
         }
 
         const change = await store.saveSettings(validated)
+        for (const removedId of removedIds) {
+          await modelStore.removePrinter(removedId).catch(() => {})
+        }
         applyRuntimeSettingsChange(change)
         return json(200, {
-          ...store.getPublicSettings(buildRuntimeMeta(req)),
+          ...enrichPublicSettings(store.getPublicSettings(buildRuntimeMeta(req))),
           activePrinterChanged: change.activePrinterChanged,
           printerUrlChanged: change.printerUrlChanged,
         })
       }
 
       const printer = activeUrl()
+      if (spoolmanRoute) {
+        if (spoolmanSub === 'spools') {
+          const result = await fetchSpoolmanList(printer, fetchUpstream)
+          return json(200, result)
+        }
+        // POST /api/spoolman/active
+        const payload = await readJson(req, 2048)
+        const result = await setActiveSpoolmanSpool(printer, payload?.spoolId ?? null, fetchUpstream)
+        readSpoolman.setActive(result)
+        live.notify()
+        return json(200, { ok: true, ...result })
+      }
       if (systemRoute) {
         if (systemSub === 'overview') {
           const [procRes, sysRes, infoRes] = await Promise.all([

@@ -282,7 +282,7 @@ function triggerQuickAction(id) {
         </strong>
       </div>
 
-      <div v-for="sensor in sensors" :key="sensor.key" class="single-metric-cell">
+      <div v-for="sensor in sensors" :key="sensor.id" class="single-metric-cell">
         <span class="single-metric-label">{{ t(sensor.label) }}</span>
         <strong class="single-metric-value single-mono">
           {{ number(sensor.temperature, 1) }} °C

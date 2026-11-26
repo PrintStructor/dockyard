@@ -352,6 +352,7 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
     bed: {
       temperature: finite(status.heater_bed?.temperature),
       target: finite(status.heater_bed?.target),
+      power: finite(status.heater_bed?.power),
     },
     chamber: sensor('Chamber'),
     raspberryPi: sensor('raspberry_pi'),

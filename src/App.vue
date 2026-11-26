@@ -221,24 +221,7 @@ const activeCameras = computed(() => {
   if (settingsStore.loaded.value && settingsStore.activePrinter.value) {
     return (settingsStore.activePrinter.value.cameras ?? []).filter(c => c.enabled !== false)
   }
-  return [
-    {
-      id: 'tophat',
-      name: 'Tophat',
-      description: 'Blick auf den Bauraum',
-      service: 'camera-streamer',
-      preferredMode: 'webrtc',
-      enabled: true,
-    },
-    {
-      id: 'heatbed',
-      name: 'Druckbett',
-      description: 'Blick auf die Druckfläche',
-      service: 'camera-streamer',
-      preferredMode: 'webrtc',
-      enabled: true,
-    },
-  ]
+  return []
 })
 watch(
   [language, printerName],

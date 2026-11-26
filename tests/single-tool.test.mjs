@@ -19,7 +19,7 @@ test('normalizeStatus handles single-tool VORON 2.4 with sb_leds, QGL, part fan,
     webhooks: { state: 'ready' },
     print_stats: { state: 'standby' },
     extruder: { temperature: 210.5, target: 215, power: 0.4, pressure_advance: 0.04, can_extrude: true },
-    heater_bed: { temperature: 105, target: 110 },
+    heater_bed: { temperature: 105, target: 110, power: 0.62 },
     quad_gantry_level: { applied: true },
     fan: { speed: 0.75 },
     'neopixel sb_leds': {
@@ -63,6 +63,7 @@ test('normalizeStatus handles single-tool VORON 2.4 with sb_leds, QGL, part fan,
     percent: 75,
   })
   assert.deepEqual(data.bedSize, { originX: 0, originY: 0, width: 350, depth: 350 })
+  assert.equal(data.bed.power, 0.62)
 })
 
 test('normalizeStatus handles Trident with Z-tilt, negative endstop min, and filament motion sensor', () => {

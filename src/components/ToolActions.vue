@@ -37,17 +37,27 @@ const reason = action => toolActionReason(props.status, action, props.tool, prop
 function description(action) {
   const blocked = reason(action)
   if (blocked) return blocked
+  const temp = defaultActionTemperature(props.status, action)
+  const hasTemp = Number.isFinite(temp)
   const base = {
     park: 'Am Dock ablegen',
     pickup: 'Mit leerem Schlitten aufnehmen',
     select: `T${props.status?.active} parken und T${props.tool} aufnehmen`,
-    load: `Einziehen und purgen bei ${defaultActionTemperature(props.status, action)} °C, wischen, Heizung aus`,
-    unload: `Entladen bei ${defaultActionTemperature(props.status, action)} °C, Heizung aus`,
+    load: hasTemp
+      ? `Einziehen und purgen bei ${temp} °C, wischen, Heizung aus`
+      : 'Filament laden',
+    unload: hasTemp
+      ? `Entladen bei ${temp} °C, Heizung aus`
+      : 'Filament entladen',
     clean: 'Nozzle Clean am Silikonwiper',
-    purge: `Bei ${defaultActionTemperature(props.status, action)} °C purgen, wischen, Heizung aus`,
+    purge: hasTemp
+      ? `Bei ${temp} °C purgen, wischen, Heizung aus`
+      : 'Purge',
   }[action]
   const switchesTool =
-    ['load', 'unload', 'clean', 'purge'].includes(action) && props.status?.active !== props.tool
+    Boolean(props.status?.isToolchanger) &&
+    ['load', 'unload', 'clean', 'purge'].includes(action) &&
+    props.status?.active !== props.tool
   return switchesTool ? `${base} · wechselt zu diesem Tool` : base
 }
 

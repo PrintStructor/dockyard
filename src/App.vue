@@ -403,8 +403,10 @@ const isSingleTool = computed(() =>
 )
 const show3dScene = computed(() => {
   const preset = settingsStore.activePrinter.value?.model?.preset ?? 'auto'
-  if (preset === 'none') return false
-  if (preset === 'stormtrooper-6tc') return true
+  if (preset === 'none' || isSingleTool.value) return false
+  if (preset === 'stormtrooper-6tc') {
+    return !status.value || (Boolean(status.value.isToolchanger) && status.value.toolCount === 6)
+  }
   return Boolean(status.value?.isToolchanger && status.value?.toolCount === 6)
 })
 const hasLedDeck = computed(() => {
@@ -1083,6 +1085,7 @@ async function acknowledgeUncertain() {
       >
         <SingleToolOverview
           v-if="isSingleTool"
+          :key="`single-${printerSwitchKey}`"
           :status="status"
           :online="online"
           :pending="pending"
@@ -1172,7 +1175,13 @@ async function acknowledgeUncertain() {
               :class="{ 'single-col': !hasLedDeck }"
               :aria-label="t('Maschine & Vorbereitung')"
             >
-              <LedControls :status="status" :online="online" :pending="pending" @command="send" />
+              <LedControls
+                :key="`led-${printerSwitchKey}`"
+                :status="status"
+                :online="online"
+                :pending="pending"
+                @command="send"
+              />
             </section>
           </div>
 
@@ -1191,7 +1200,7 @@ async function acknowledgeUncertain() {
               <span class="field-label">{{ t('Düsentemperatur') }}</span>
               <div class="big-temperature">{{ temperature(current.temperature) }}<span>°C</span></div>
               <TemperatureTarget
-                :key="selected"
+                :key="`${printerSwitchKey}-${selected}`"
                 :tool="selected"
                 :target="current.target"
                 :max="status?.capabilities?.toolMax?.[selected]"
@@ -1391,6 +1400,7 @@ async function acknowledgeUncertain() {
         :send="send"
         :show-cameras="showCameras"
         :cameras="activeCameras"
+        :model-preset="settingsStore.activePrinter.value?.model?.preset ?? 'auto'"
         @select="selectTool"
         @command="send"
         @refresh="refresh"

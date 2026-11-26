@@ -48,6 +48,32 @@ function findLegacyPreset(legacyList, material, toolCount) {
   return { name: upper, bed, tools }
 }
 
+export function inferToolCountFromPresets(mainsail = null, legacy = null) {
+  let maxIdx = -1
+  const scanKeys = obj => {
+    if (!obj || typeof obj !== 'object') return
+    for (const key of Object.keys(obj)) {
+      if (key === 'extruder') maxIdx = Math.max(maxIdx, 0)
+      else {
+        const m = /^extruder([1-7])$/.exec(key)
+        if (m) maxIdx = Math.max(maxIdx, Number(m[1]))
+      }
+    }
+  }
+  const mainsailMap = mainsail?.presets ?? mainsail
+  if (mainsailMap && typeof mainsailMap === 'object') {
+    for (const entry of Object.values(mainsailMap)) {
+      scanKeys(entry?.values)
+    }
+  }
+  if (Array.isArray(legacy)) {
+    for (const entry of legacy) {
+      scanKeys(entry?.temps)
+    }
+  }
+  return maxIdx >= 0 ? Math.min(8, maxIdx + 1) : null
+}
+
 export function normalizePresets({ mainsail = null, legacy = null, toolCount = 6 } = {}) {
   const count = Number.isInteger(toolCount) && toolCount >= 1 && toolCount <= 8 ? toolCount : 6
   const mainsailMap = mainsail?.presets ?? mainsail

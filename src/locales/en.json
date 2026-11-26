@@ -1149,5 +1149,9 @@
   "Geometrie und aktives Höhenprofil des Druckbetts.": "Geometry and active bed heightmap.",
   "Z-Tilt-Toleranz": "Z-Tilt tolerance",
   "Z-Tilt starten?": "Start Z-Tilt?",
-  "Kein Bed Mesh oder motorisiertes Bett-Leveling konfiguriert.": "No bed mesh or motorized bed leveling configured."
+  "Kein Bed Mesh oder motorisiertes Bett-Leveling konfiguriert.": "No bed mesh or motorized bed leveling configured.",
+  "Kein Bed Mesh konfiguriert.": "No bed mesh configured.",
+  "Werkzeug-Offsets (T0–T{0})": "Tool offsets (T0–T{0})",
+  "{0}×{0}-Kalibrierungsmatrix (Nudge XY / Beacon Z)": "{0}×{0} calibration matrix (Nudge XY / Beacon Z)",
+  "Ungültiges Werkzeug (erlaubt: T0 bis T{0}).": "Invalid tool (allowed: T0 to T{0})."
 }

@@ -1,5 +1,5 @@
 import { ControlError } from './control.mjs'
-import { normalizeStatus } from './status.mjs'
+import { normalizeStatus, detectToolCount } from './status.mjs'
 
 const CALIBRATION_TIMEOUT_MS = 2_700_000
 
@@ -44,9 +44,9 @@ export function calibrationCapabilities(config = {}) {
   }
 }
 
-function assertToolIndex(value) {
-  if (!Number.isInteger(value) || value < 0 || value > 5) {
-    throw new ControlError('Ungültiges Werkzeug (erlaubt: T0 bis T5).', 400)
+function assertToolIndex(value, maxTool = 5) {
+  if (!Number.isInteger(value) || value < 0 || value > maxTool) {
+    throw new ControlError(`Ungültiges Werkzeug (erlaubt: T0 bis T${maxTool}).`, 400)
   }
   return value
 }
@@ -124,7 +124,8 @@ export function calibrationCommand(input, raw, caps) {
 
     case 'calibrate_beacon_z': {
       requireCap('beaconZ', 'BEACON_CALIBRATE_Z')
-      const tool = assertToolIndex(input.tool)
+      const maxTool = Math.max(0, Math.min(7, (caps?.toolCount ?? detectToolCount(raw)) - 1))
+      const tool = assertToolIndex(input.tool, maxTool)
       assertHomedXyz(raw)
       return {
         endpoint: '/printer/gcode/script',
@@ -154,7 +155,8 @@ export function calibrationCommand(input, raw, caps) {
 
     case 'calibrate_nozzle_expansion': {
       requireCap('nozzleExpansion', 'BEACON_CALIBRATE_NOZZLE_TEMP_OFFSET')
-      const tool = assertToolIndex(input.tool)
+      const maxTool = Math.max(0, Math.min(7, (caps?.toolCount ?? detectToolCount(raw)) - 1))
+      const tool = assertToolIndex(input.tool, maxTool)
       return {
         endpoint: '/printer/gcode/script',
         body: { script: `BEACON_CALIBRATE_NOZZLE_TEMP_OFFSET INITIAL_TOOL=${tool}` },
@@ -336,16 +338,16 @@ export function normalizeCalibrationData({ rawStatus = {}, configFiles = [] } = 
       ? { x: closureRaw[0], y: closureRaw[1] }
       : null
 
-  const nudgeXy = Array.from({ length: 6 }, (_, i) =>
-    Array.from({ length: 6 }, (_, j) => {
+  const nudgeXy = Array.from({ length: toolCount }, (_, i) =>
+    Array.from({ length: toolCount }, (_, j) => {
       if (i === j) return null
       const pair = vars[`nudge_xy_${i}_${j}`]
       return Array.isArray(pair) && finite(pair[0]) !== null && finite(pair[1]) !== null ? [pair[0], pair[1]] : null
     }),
   )
 
-  const beaconZ = Array.from({ length: 6 }, (_, i) =>
-    Array.from({ length: 6 }, (_, j) => {
+  const beaconZ = Array.from({ length: toolCount }, (_, i) =>
+    Array.from({ length: toolCount }, (_, j) => {
       if (i === j) return 0
       return finite(vars[`tool_z_offset_t${i}_t${j}`])
     }),

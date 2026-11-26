@@ -15,6 +15,7 @@ const props = defineProps({
   send: Function,
   showCameras: { type: Boolean, default: true },
   cameras: { type: Array, default: () => [] },
+  modelPreset: { type: String, default: 'auto' },
 })
 
 const emit = defineEmits(['command', 'select', 'refresh', 'context'])
@@ -31,8 +32,12 @@ const axisDrafts = ref({})
 const confirmMotors = ref(false)
 let confirmMotorsTimer = null
 
-const toolCount = computed(() => props.status?.toolCount ?? props.status?.tools?.length ?? 6)
-const isSingleTool = computed(() => !props.status?.isToolchanger && toolCount.value === 1)
+const toolCount = computed(
+  () => props.status?.toolCount ?? props.status?.tools?.length ?? (props.modelPreset === 'stormtrooper-6tc' ? 6 : 1),
+)
+const isSingleTool = computed(() =>
+  props.status ? !props.status.isToolchanger && toolCount.value === 1 : props.modelPreset !== 'stormtrooper-6tc',
+)
 const toolIds = computed(() => Array.from({ length: toolCount.value }, (_, id) => id))
 const activeToolId = computed(() => (isSingleTool.value ? 0 : props.selected))
 const levelingKind = computed(() => {
@@ -40,6 +45,10 @@ const levelingKind = computed(() => {
   if (props.status?.capabilities?.zTilt) return 'z_tilt'
   return null
 })
+const showBedMeshButton = computed(() =>
+  props.status ? Boolean(props.status.capabilities?.mesh) : props.modelPreset === 'stormtrooper-6tc',
+)
+const prepButtonCount = computed(() => 2 + (levelingKind.value ? 1 : 0) + (showBedMeshButton.value ? 1 : 0))
 const levelingApplied = computed(() => Boolean(props.status?.qglApplied || props.status?.zTiltApplied))
 
 watch(isSingleTool, single => {
@@ -354,7 +363,7 @@ watch(motion, allowed => {
           </form>
         </div>
 
-        <div class="motion-prep-bar">
+        <div class="motion-prep-bar" :data-count="prepButtonCount">
           <button
             class="subtle-button"
             :class="{ 'prep-done': allHomed && online }"
@@ -407,7 +416,7 @@ watch(motion, allowed => {
             <span>Z-Tilt</span>
           </button>
           <button
-            v-if="status?.capabilities?.mesh !== false"
+            v-if="showBedMeshButton"
             class="subtle-button"
             type="button"
             :disabled="!motion || !allHomed || !status?.capabilities?.mesh"

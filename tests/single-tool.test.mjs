@@ -341,3 +341,132 @@ test('GET /api/temperature-history infers single-tool count on cold start before
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('1-arg detectToolCount(raw) and extractBedSize(raw) fall back to raw.configfile.settings', () => {
+  const rawTrident = {
+    configfile: {
+      settings: {
+        extruder: { max_temp: 300 },
+        stepper_x: { position_min: -5, position_max: 300 },
+        stepper_y: { position_min: 0, position_max: 300 },
+      },
+    },
+  }
+  assert.deepEqual(extractBedSize(rawTrident), { originX: 0, originY: 0, width: 300, depth: 300 })
+
+  const raw4Tool = {
+    toolchanger: { status: 'ready' },
+    configfile: {
+      settings: {
+        toolchanger: {},
+        'tool t0': {},
+        'tool t1': {},
+        'tool t2': {},
+        'tool t3': {},
+      },
+    },
+  }
+  assert.equal(detectToolCount(raw4Tool), 4)
+})
+
+test('normalizeStatus matches mixed-case led_effect keys and hyphenated single-tool neopixels', () => {
+  const raw = {
+    extruder: { temperature: 210, target: 210 },
+    'neopixel sb-leds': {
+      color_data: [
+        [0.5, 1, 0.2, 0],
+        [1, 1, 1, 0],
+        [1, 1, 1, 0],
+      ],
+    },
+    'led_effect SB_Idle': { enabled: true },
+    configfile: {
+      settings: {
+        extruder: { max_temp: 300 },
+        'led_effect sb_idle': { leds: 'neopixel:sb-leds' },
+      },
+    },
+  }
+  const data = normalizeStatus(raw)
+  assert.deepEqual(data.tools[0].leds.number, [0.5, 1, 0.2, 0])
+  assert.deepEqual(data.tools[0].effects, ['SB_Idle'])
+})
+
+test('calibration scales matrices and tool index bounds dynamically for 4-tool and 8-tool toolchangers', () => {
+  const makeTc = count => {
+    const settings = {
+      toolchanger: {},
+      'gcode_macro beacon_calibrate_z': {},
+      'gcode_macro beacon_calibrate_nozzle_temp_offset': {},
+    }
+    const raw = {
+      webhooks: { state: 'ready' },
+      print_stats: { state: 'standby' },
+      idle_timeout: { state: 'Idle' },
+      toolhead: { homed_axes: 'xyz' },
+      toolchanger: { status: 'ready', tool_names: Array.from({ length: count }, (_, i) => `tool T${i}`) },
+      configfile: { settings },
+    }
+    for (let i = 0; i < count; i++) {
+      settings[i ? `extruder${i}` : 'extruder'] = { max_temp: 300 }
+      settings[`tool t${i}`] = {}
+    }
+    return raw
+  }
+
+  const tc8 = makeTc(8)
+  const cal8 = normalizeCalibrationData({ rawStatus: tc8 })
+  assert.equal(cal8.toolCount, 8)
+  assert.equal(cal8.nudgeXy.length, 8)
+  assert.equal(cal8.nudgeXy[0].length, 8)
+  assert.equal(cal8.beaconZ.length, 8)
+  assert.equal(commandFor({ action: 'calibrate_beacon_z', tool: 7 }, tc8).body.script, 'BEACON_CALIBRATE_Z INITIAL_TOOL=7')
+  assert.throws(() => commandFor({ action: 'calibrate_beacon_z', tool: 8 }, tc8), err => err.status === 400)
+
+  const tc4 = makeTc(4)
+  const cal4 = normalizeCalibrationData({ rawStatus: tc4 })
+  assert.equal(cal4.toolCount, 4)
+  assert.equal(cal4.nudgeXy.length, 4)
+  assert.throws(() => commandFor({ action: 'calibrate_beacon_z', tool: 4 }, tc4), err => err.status === 400)
+})
+
+test('GET /api/presets infers single-tool count on cold start before /api/status', async () => {
+  const mockMoonraker = http.createServer((req, res) => {
+    if (req.url?.startsWith('/server/database/item?namespace=mainsail')) {
+      res.setHeader('Content-Type', 'application/json')
+      res.end(
+        JSON.stringify({
+          result: {
+            value: {
+              '0': { name: 'PLA', values: { heater_bed: { value: 60 }, extruder: { value: 210 } } },
+            },
+          },
+        }),
+      )
+      return
+    }
+    res.statusCode = 404
+    res.end()
+  })
+  await new Promise(resolve => mockMoonraker.listen(0, '127.0.0.1', resolve))
+  const mockUrl = `http://127.0.0.1:${mockMoonraker.address().port}`
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'dockyard-single-presets-'))
+  const store = createSettingsStore({
+    filePath: path.join(dir, '.dockyard-settings.json'),
+    env: { PRINTER_URL: mockUrl, PRINTER_NAME: 'V01' },
+  })
+  const { printerMiddleware, closeLiveFeed } = createPrinterRuntime({ store })
+  const server = http.createServer((req, res) => printerMiddleware(req, res, () => { res.statusCode = 404; res.end() }))
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/presets`)
+    assert.equal(res.status, 200)
+    const body = await res.json()
+    assert.equal(body.presets[0].tools.length, 1)
+  } finally {
+    closeLiveFeed()
+    await new Promise(resolve => server.close(resolve))
+    await new Promise(resolve => mockMoonraker.close(resolve))
+    await rm(dir, { recursive: true, force: true })
+  }
+})

@@ -406,3 +406,87 @@ test('live feed polls discovered sb_leds on single-tool and skips LED polling wh
   assert.ok(withoutLeds.events.some(e => e.event === 'ping'))
   assert.equal(withoutLeds.ledQueries.length, 0)
 })
+
+test('live feed polls hyphenated sb-leds and skips long >8-LED enclosure strips', async () => {
+  const runWithInitial = async (objectsList, initialStatus) => {
+    const ledQueries = []
+    class StripWS {
+      constructor() {
+        this.readyState = 1
+        setImmediate(() => this.onopen?.())
+      }
+      send(payload) {
+        const msg = JSON.parse(payload)
+        if (msg.id === 1) {
+          setImmediate(() =>
+            this.onmessage?.({
+              data: JSON.stringify({ jsonrpc: '2.0', id: 1, result: { objects: objectsList } }),
+            }),
+          )
+        } else if (msg.id === 2) {
+          setImmediate(() =>
+            this.onmessage?.({
+              data: JSON.stringify({ jsonrpc: '2.0', id: 2, result: { status: initialStatus } }),
+            }),
+          )
+        } else if (msg.id === 3) {
+          ledQueries.push(Object.keys(msg.params?.objects ?? {}))
+          setImmediate(() =>
+            this.onmessage?.({
+              data: JSON.stringify({ jsonrpc: '2.0', id: 3, result: { status: {} } }),
+            }),
+          )
+        }
+      }
+      close() {
+        this.readyState = 3
+      }
+    }
+
+    const events = []
+    const feed = createLiveFeed({
+      printer: 'http://127.0.0.1:1979',
+      baseObjects: ['webhooks', 'extruder'],
+      snapshot: raw => ({ state: raw.webhooks?.state }),
+      WebSocketImpl: StripWS,
+      ledPollMs: 30,
+      pingIntervalMs: 70,
+    })
+    const fakeRes = {
+      destroyed: false,
+      writableLength: 0,
+      setHeader() {},
+      flushHeaders() {},
+      write(chunk) {
+        const match = chunk.match(/^event: (\w+)\ndata: (.+)\n\n$/s)
+        if (match) events.push({ event: match[1], data: JSON.parse(match[2]) })
+      },
+      end() {},
+      destroy() {},
+      on() {},
+    }
+    try {
+      feed.handle({}, fakeRes)
+      await waitForCondition(() => events.some(e => e.event === 'ping'))
+      return { events, ledQueries }
+    } finally {
+      feed.close()
+    }
+  }
+
+  const hyphenated = await runWithInitial(
+    ['webhooks', 'extruder', 'neopixel sb-leds'],
+    { webhooks: { state: 'ready' }, 'neopixel sb-leds': { color_data: [[1, 1, 1, 0], [0, 1, 0, 0], [0, 1, 0, 0]] } },
+  )
+  assert.ok(hyphenated.ledQueries.length >= 1)
+  assert.deepEqual(hyphenated.ledQueries[0], ['neopixel sb-leds'])
+
+  const caselight = await runWithInitial(
+    ['webhooks', 'extruder', 'neopixel caselight'],
+    {
+      webhooks: { state: 'ready' },
+      'neopixel caselight': { color_data: Array.from({ length: 24 }, () => [1, 1, 1, 0]) },
+    },
+  )
+  assert.equal(caselight.ledQueries.length, 0)
+})

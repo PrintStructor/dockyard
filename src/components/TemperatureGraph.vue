@@ -38,7 +38,8 @@ watch(plot, element => {
 })
 
 const timeTicks = computed(() => (plotWidth.value >= 600 ? [-600, -480, -360, -240, -120, 0] : [-600, -300, 0]))
-const colors = ['#c5f76b', '#6ed5e7', '#bca3ff', '#f3c67b', '#ff9a83', '#ed9fc8', '#edf1ed']
+const toolColors = ['#c5f76b', '#6ed5e7', '#bca3ff', '#f3c67b', '#ff9a83', '#ed9fc8', '#7be3b5', '#ffd27d']
+const bedColor = '#edf1ed'
 
 async function refresh() {
   if (disposed || document.hidden || request) return
@@ -114,7 +115,12 @@ onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', visibilityChanged)
 })
 
-const series = computed(() => (history.value?.series ?? []).map((item, i) => ({ ...item, color: colors[i] })))
+const series = computed(() =>
+  (history.value?.series ?? []).map((item, i) => ({
+    ...item,
+    color: item.id === 'heater_bed' ? bedColor : toolColors[i % toolColors.length],
+  })),
+)
 const visible = computed(() => series.value.filter(item => !hidden.value.has(item.id)))
 const hasData = computed(() => series.value.some(item => item.points.some(point => point.temperature != null)))
 

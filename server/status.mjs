@@ -1,7 +1,9 @@
 const MAX_TOOLS = 8
 const SINGLE_TOOL_NEOPIXEL_PRIORITY = [
   'neopixel sb_leds',
+  'neopixel sb-leds',
   'neopixel stealthburner_leds',
+  'neopixel stealthburner-leds',
   'neopixel head_leds',
   'neopixel toolhead_leds',
   'neopixel nozzle_leds',
@@ -44,7 +46,7 @@ function formatSensorLabel(rawName) {
     .replace(/\b\w/g, ch => ch.toUpperCase())
 }
 
-export function detectToolCount(raw = {}, config = {}) {
+export function detectToolCount(raw = {}, config = undefined) {
   const cfg = config ?? raw.configfile?.settings ?? raw.configfile?.config ?? {}
   const isToolchanger = Boolean(raw.toolchanger || cfg.toolchanger)
   let maxConfigIdx = -1
@@ -92,7 +94,7 @@ export function detectToolCount(raw = {}, config = {}) {
   return maxFound >= 1 ? Math.min(MAX_TOOLS, maxFound + 1) : 1
 }
 
-export function extractBedSize(raw = {}, config = {}) {
+export function extractBedSize(raw = {}, config = undefined) {
   const cfg = config ?? raw.configfile?.settings ?? raw.configfile?.config ?? {}
   const minX = numeric(cfg.stepper_x?.position_min) ?? finite(raw.toolhead?.axis_minimum?.[0])
   const maxX = numeric(cfg.stepper_x?.position_max) ?? finite(raw.toolhead?.axis_maximum?.[0])
@@ -192,7 +194,7 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
   const sensor = name => finite(status[`temperature_sensor ${name}`]?.temperature)
   const effects = Object.entries(status)
     .filter(([name, data]) => name.startsWith('led_effect ') && data.enabled === true)
-    .map(([name]) => ({ name: name.slice(11), leds: config[name]?.leds ?? '' }))
+    .map(([name]) => ({ name: name.slice(11), leds: config[name.toLowerCase()]?.leds ?? config[name]?.leds ?? '' }))
 
   const singleToolNeoKey = !isToolchanger && toolCount === 1 ? resolveSingleToolNeopixelKey(status) : null
   const singleToolFil = !isToolchanger && toolCount === 1 ? resolveSingleToolFilamentSensor(status) : null

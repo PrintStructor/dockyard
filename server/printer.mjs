@@ -37,7 +37,7 @@ import {
   encodeMoonrakerPath,
 } from './machine.mjs'
 import { validateShakeTuneImagePath, normalizeCalibrationData } from './calibration.mjs'
-import { normalizePresets } from './presets.mjs'
+import { normalizePresets, inferToolCountFromPresets } from './presets.mjs'
 import { serverHost, serverPort } from './config.mjs'
 import {
   settingsStore as defaultSettingsStore,
@@ -474,7 +474,7 @@ function isDynamicPrinterObject(name) {
     /^temperature_sensor .+$/.test(name) ||
     /^temperature_fan .+$/.test(name) ||
     /^filament_(?:switch|motion)_sensor .+$/.test(name) ||
-    /^neopixel [A-Za-z0-9_]+$/.test(name) ||
+    /^neopixel [A-Za-z0-9_-]+$/.test(name) ||
     /^led_effect .+$/.test(name)
   )
 }
@@ -1616,7 +1616,11 @@ function printerMiddleware(req, res, next) {
         ])
         const mainsail = mainsailRes?.ok ? (await mainsailRes.json().catch(() => null))?.result?.value : null
         const legacy = legacyRes?.ok ? (await legacyRes.json().catch(() => null))?.result?.value : null
-        const toolCount = capabilityCache?.toolCount ?? liveCapabilityRef.value?.toolCount ?? 6
+        const toolCount =
+          capabilityCache?.toolCount ??
+          liveCapabilityRef.value?.toolCount ??
+          inferToolCountFromPresets(mainsail, legacy) ??
+          6
         return json(200, { presets: normalizePresets({ mainsail, legacy, toolCount }) })
       }
 

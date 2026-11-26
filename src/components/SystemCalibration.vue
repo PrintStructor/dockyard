@@ -64,8 +64,9 @@ const geometrySubtitle = computed(() => {
   return 'Geometrie und aktives Höhenprofil des Druckbetts.'
 })
 
+const toolCount = computed(() => data.value?.toolCount ?? 6)
 const toolOptions = computed(() =>
-  Array.from({ length: data.value?.toolCount ?? 6 }, (_, id) => ({
+  Array.from({ length: toolCount.value }, (_, id) => ({
     value: String(id),
     label: `T${id}`,
   })),
@@ -287,7 +288,7 @@ onMounted(() => {
     <section v-if="isToolchanger" class="cal-section" :aria-label="t('Werkzeug-Offsets')">
       <div class="system-panel-head" style="margin-bottom: 0">
         <div>
-          <h2>{{ t('Werkzeug-Offsets (T0–T5)') }}</h2>
+          <h2>{{ t('Werkzeug-Offsets (T0–T{0})', [toolCount - 1]) }}</h2>
           <p>{{ t('Nudge XY, Beacon Z, thermische Düsen-Ausdehnung und Pressure Advance.') }}</p>
         </div>
         <div class="cal-header-meta">
@@ -351,7 +352,7 @@ onMounted(() => {
 
       <details v-if="data" class="cal-matrix-details">
         <summary>
-          <span>{{ t('6×6-Kalibrierungsmatrix (Nudge XY / Beacon Z)') }}</span>
+          <span>{{ t('{0}×{0}-Kalibrierungsmatrix (Nudge XY / Beacon Z)', [toolCount]) }}</span>
           <ChevronRight :size="15" />
         </summary>
         <div class="cal-matrix-controls">
@@ -370,13 +371,13 @@ onMounted(() => {
             <thead>
               <tr>
                 <th>{{ t('Ref → Ziel') }}</th>
-                <th v-for="j in 6" :key="j">T{{ j - 1 }}</th>
+                <th v-for="j in toolCount" :key="j">T{{ j - 1 }}</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="i in 6" :key="i">
+              <tr v-for="i in toolCount" :key="i">
                 <td>T{{ i - 1 }}</td>
-                <td v-for="j in 6" :key="j" :class="{ diag: i === j }">
+                <td v-for="j in toolCount" :key="j" :class="{ diag: i === j }">
                   <template v-if="i === j">—</template>
                   <template v-else-if="matrixMode === 'xy'">
                     {{
@@ -791,6 +792,9 @@ onMounted(() => {
         </template>
         <p v-else-if="data?.capabilities?.mesh || isToolchanger" class="muted" style="margin-top: 0">
           {{ t('Aktuell kein Bett-Mesh geladen. Starte „Bett vermessen“, um ein aktuelles Profil zu erzeugen.') }}
+        </p>
+        <p v-else-if="data?.qgl?.configured || data?.zTilt?.configured" class="muted" style="margin-top: 0">
+          {{ t('Kein Bed Mesh konfiguriert.') }}
         </p>
         <p v-else class="muted" style="margin-top: 0">
           {{ t('Kein Bed Mesh oder motorisiertes Bett-Leveling konfiguriert.') }}

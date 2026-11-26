@@ -15,7 +15,9 @@ function colorDataEqual(a, b) {
 
 const SINGLE_TOOL_LED_PRIORITY = [
   'sb_leds',
+  'sb-leds',
   'stealthburner_leds',
+  'stealthburner-leds',
   'head_leds',
   'toolhead_leds',
   'nozzle_leds',
@@ -34,7 +36,7 @@ function matchesDynamicSubscription(name, baseObjects) {
     /^temperature_sensor .+$/.test(name) ||
     /^temperature_fan .+$/.test(name) ||
     /^filament_(?:switch|motion)_sensor .+$/.test(name) ||
-    /^neopixel [A-Za-z0-9_]+$/.test(name) ||
+    /^neopixel [A-Za-z0-9_-]+$/.test(name) ||
     /^led_effect .+$/.test(name)
   )
 }
@@ -43,7 +45,7 @@ function selectPolledLedObjects(available) {
   const etLeds = available.filter(name => /^neopixel et[0-7]_leds$/.test(name)).sort()
   if (etLeds.length > 0) return etLeds
 
-  const neopixels = available.filter(name => /^neopixel [A-Za-z0-9_]+$/.test(name))
+  const neopixels = available.filter(name => /^neopixel [A-Za-z0-9_-]+$/.test(name))
   if (!neopixels.length) return []
 
   for (const preferred of SINGLE_TOOL_LED_PRIORITY) {
@@ -198,6 +200,13 @@ export function createLiveFeed({
           )
         } else if (data.id === 2) {
           raw = data.result.status
+          // Drop long enclosure strips (>8 LEDs) that status.mjs ignores as non-toolhead neopixels.
+          if (polledLedObjects.length > 0 && !polledLedObjects.some(k => /^neopixel et[0-7]_leds$/.test(k))) {
+            polledLedObjects = polledLedObjects.filter(key => {
+              const cd = raw[key]?.color_data
+              return !Array.isArray(cd) || (cd.length >= 1 && cd.length <= 8)
+            })
+          }
           ready = true
           emitStatus()
           if (polledLedObjects.length === 0) {

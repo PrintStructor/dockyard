@@ -1042,3 +1042,5 @@ input::placeholder{color:var(--muted);opacity:1}
 .app-shell.display-mode .single-thermal-card .inspector-target input,
 .app-shell.display-mode .single-thermal-card .apply-temperature{min-height:44px}
 .cal-two-col.cal-single-col{grid-template-columns:1fr}
+.motion-prep-bar[data-count="2"]{grid-template-columns:repeat(2,minmax(0,1fr))}
+.motion-prep-bar[data-count="3"]{grid-template-columns:1.15fr 1fr .85fr}

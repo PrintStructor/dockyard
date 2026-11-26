@@ -470,15 +470,11 @@ def _extract_appearance_rgba(body, occ, appearance_cache):
             seen_prop_ids.add(pid)
             target_list.append(cprop)
 
-        try:
-            push_prop(primary_props, props.itemByName("Color"))
-        except Exception:
-            pass
         for prop_id in (
             "opaque_albedo",
+            "metal_f0",
             "surface_albedo",
             "layered_diffuse",
-            "metal_f0",
             "prism_opaque",
             "generic_diffuse",
             "plastic_color",

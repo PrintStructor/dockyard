@@ -48,9 +48,11 @@ import { useCameras } from './useCameras.js'
 import { auxActionReason, ledProfiles } from './aux-action-state.mjs'
 import { toolActionReason, filamentToolIds, mountedToolId, maintenanceRestriction } from './tool-action-state.mjs'
 import { resolveMainsailUrl } from './printer-ui-url.mjs'
+import { resolveSceneConfig } from './model-config.mjs'
 import { toolState, heatState } from '../server/status.mjs'
 
 const ToolScene = defineAsyncComponent(() => import('./components/ToolScene.vue'))
+const PrinterScene = defineAsyncComponent(() => import('./components/PrinterScene.vue'))
 const PrintView = defineAsyncComponent(() => import('./components/PrintView.vue'))
 const HistoryView = defineAsyncComponent(() => import('./components/HistoryView.vue'))
 const SystemView = defineAsyncComponent(() => import('./components/SystemView.vue'))
@@ -401,14 +403,15 @@ const isSingleTool = computed(() =>
     ? !status.value.isToolchanger && status.value.toolCount === 1
     : settingsStore.activePrinter.value?.model?.preset !== 'stormtrooper-6tc',
 )
-const show3dScene = computed(() => {
-  const preset = settingsStore.activePrinter.value?.model?.preset ?? 'auto'
-  if (preset === 'none' || isSingleTool.value) return false
-  if (preset === 'stormtrooper-6tc') {
-    return !status.value || (Boolean(status.value.isToolchanger) && status.value.toolCount === 6)
-  }
-  return Boolean(status.value?.isToolchanger && status.value?.toolCount === 6)
-})
+const sceneConfig = computed(() =>
+  resolveSceneConfig(settingsStore.activePrinter.value, status.value, {
+    settingsLoaded: settingsStore.loaded.value,
+  }),
+)
+const show3dScene = computed(() => sceneConfig.value.kind === 'stormtrooper-6tc')
+const showMultiToolPrinterScene = computed(() => !isSingleTool.value && sceneConfig.value.kind === 'printer-scene')
+const hasAny3dScene = computed(() => sceneConfig.value.kind !== 'none' && !sceneConfig.value.emptyCustom)
+const canWrite = computed(() => settingsStore.runtime.value?.canWrite !== false)
 const hasLedDeck = computed(() => {
   const installed = status.value?.capabilities?.ledProfiles ?? []
   return ledProfiles.some(p => installed.includes(p.id))
@@ -1092,7 +1095,12 @@ async function acknowledgeUncertain() {
           :send="send"
           :time="time"
           :printer-subtitle="printerSubtitle"
+          :printer-name="printerName"
+          :scene-config="sceneConfig"
+          :can-write="canWrite"
           @command="send"
+          @open-settings="openSettings('printers')"
+          @refresh="refresh"
         />
 
         <template v-else>
@@ -1106,9 +1114,20 @@ async function acknowledgeUncertain() {
               :detected="status?.detected"
               @select="selectTool"
             />
+            <PrinterScene
+              v-else-if="showMultiToolPrinterScene"
+              :key="`printer-scene-${printerSwitchKey}`"
+              :scene-config="sceneConfig"
+              :tool="current"
+              :online="online"
+              :printer-name="printerName"
+              :bed-size="status?.bedSize ?? null"
+              :can-write="canWrite"
+              @open-settings="openSettings('printers')"
+            />
             <div
               class="tool-choices"
-              :class="{ 'no-scene': !show3dScene }"
+              :class="{ 'no-scene': !show3dScene && !showMultiToolPrinterScene }"
               :style="{ '--tool-cols': Math.min(6, Math.max(2, tools.length)) }"
               :aria-label="t('Werkzeug auswählen')"
             >
@@ -1496,7 +1515,7 @@ async function acknowledgeUncertain() {
         </span>
         <span>
           Moonraker · {{ online ? t('verbunden') : t(connectionLabel).toLowerCase() }}
-          <template v-if="show3dScene">
+          <template v-if="hasAny3dScene">
             <span class="footer-divider" aria-hidden="true">/</span> {{ t('CAD-Referenz') }}
           </template>
         </span>

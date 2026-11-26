@@ -34,6 +34,12 @@ import {
   parsePrintersImport,
   mergePrinterProfiles,
 } from '../useSettings.js'
+import {
+  MODEL_PRESETS,
+  ACCENT_SWATCHES,
+  DEFAULT_ACCENT_COLOR,
+  normalizeAccentColor,
+} from '../model-config.mjs'
 import { useConfigEditor } from '../useConfigEditor.js'
 import CockpitSelect from './CockpitSelect.vue'
 
@@ -111,15 +117,138 @@ const cameraTransportOptions = computed(() => [
 ])
 
 const modelPresetOptions = computed(() => [
-  { value: 'auto', label: t('Automatisch (Standard)') },
+  { value: 'auto', label: t('Automatisch (empfohlen)') },
+  { value: 'stealthburner', label: t('StealthBurner (VORON 2.4 / Trident)') },
+  { value: 'mini-stealthburner', label: t('Mini-StealthBurner (V0 / Ants)') },
   { value: 'stormtrooper-6tc', label: t('STORMTROOPER 6-Toolchanger (3D CAD)') },
-  { value: 'none', label: t('Kompakt (ohne 3D-Szene)') },
+  { value: 'custom', label: t('Eigenes CAD (.glb)') },
+  { value: 'none', label: t('Kein 3D (nur Live-Übersicht)') },
 ])
 
 function cloneModelDraft(model) {
   const preset = String(model?.preset ?? 'auto').trim().toLowerCase()
-  return { preset: ['auto', 'stormtrooper-6tc', 'none'].includes(preset) ? preset : 'auto' }
+  return {
+    preset: MODEL_PRESETS.includes(preset) ? preset : 'auto',
+    accentColor: normalizeAccentColor(model?.accentColor, DEFAULT_ACCENT_COLOR),
+  }
 }
+
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+const modelUploadBusy = ref({ toolhead: false, printer: false })
+const modelDragOver = ref({ toolhead: false, printer: false })
+const modelFeedback = ref(null)
+const modelFileInputs = ref({})
+
+const persistedSelectedPrinter = computed(() => {
+  const id = selectedPrinter.value?.id
+  if (!id) return null
+  return settingsStore.printers.value.find(p => p.id === id) ?? null
+})
+const isPersistedSelectedPrinter = computed(() => Boolean(persistedSelectedPrinter.value))
+const showModelExtras = computed(() => {
+  const preset = selectedPrinter.value?.model?.preset ?? 'auto'
+  return preset !== 'none' && preset !== 'stormtrooper-6tc'
+})
+const visibleModelSlots = computed(() => {
+  const preset = selectedPrinter.value?.model?.preset ?? 'auto'
+  if (preset === 'none' || preset === 'stormtrooper-6tc') return []
+  if (preset === 'custom') {
+    return [
+      { id: 'printer', title: 'Drucker-CAD (.glb)', hint: 'Gesamter Drucker (z. B. aus Fusion 360 oder 3D Print Rig).' },
+      { id: 'toolhead', title: 'Toolhead-CAD (.glb)', hint: 'Optionaler separater Toolhead für die Detailansicht.' },
+    ]
+  }
+  return [
+    {
+      id: 'printer',
+      title: 'Drucker-CAD (.glb, optional)',
+      hint: 'Ergänzt das Toolhead-Template um den Umschalter „Toolhead / Drucker“.',
+    },
+  ]
+})
+
+function customSlotMeta(slot) {
+  return persistedSelectedPrinter.value?.customModels?.[slot] ?? null
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB'
+  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(2)} MB`
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`
+}
+
+function setAccentColor(hex) {
+  if (!selectedPrinter.value || !canWrite.value) return
+  selectedPrinter.value.model.accentColor = normalizeAccentColor(hex, DEFAULT_ACCENT_COLOR)
+}
+
+function triggerModelFilePicker(slot) {
+  modelFileInputs.value[slot]?.click()
+}
+
+async function handleModelUpload(slot, file) {
+  const printerId = selectedPrinter.value?.id
+  if (!printerId || !file || !canWrite.value || modelUploadBusy.value[slot]) return
+  modelFeedback.value = null
+  if (!file.name.toLowerCase().endsWith('.glb')) {
+    modelFeedback.value = { ok: false, message: 'Bitte eine binäre glTF-2.0-Datei (.glb) auswählen.' }
+    return
+  }
+  if (file.size > MAX_UPLOAD_BYTES) {
+    modelFeedback.value = {
+      ok: false,
+      message: 'Datei ist größer als 25 MB. Bitte zuerst mit scripts/optimize-dockyard-glb.sh komprimieren.',
+    }
+    return
+  }
+  modelUploadBusy.value[slot] = true
+  try {
+    const res = await settingsStore.uploadModel(printerId, slot, file)
+    if (!res.ok) {
+      modelFeedback.value = { ok: false, message: res.error || 'Upload fehlgeschlagen.' }
+    } else {
+      modelFeedback.value = { ok: true, message: '3D-Modell gespeichert und live aktiviert.' }
+    }
+  } finally {
+    modelUploadBusy.value[slot] = false
+  }
+}
+
+function onModelFileInputChange(slot, event) {
+  const file = event.target?.files?.[0]
+  if (event.target) event.target.value = ''
+  if (file) handleModelUpload(slot, file)
+}
+
+function onModelDrop(slot, event) {
+  modelDragOver.value[slot] = false
+  const file = event.dataTransfer?.files?.[0]
+  if (file) handleModelUpload(slot, file)
+}
+
+async function handleModelDelete(slot) {
+  const printerId = selectedPrinter.value?.id
+  if (!printerId || !canWrite.value || modelUploadBusy.value[slot]) return
+  modelFeedback.value = null
+  modelUploadBusy.value[slot] = true
+  try {
+    const res = await settingsStore.deleteModel(printerId, slot)
+    if (!res.ok) {
+      modelFeedback.value = { ok: false, message: res.error || 'Löschen fehlgeschlagen.' }
+    } else {
+      modelFeedback.value = { ok: true, message: 'Eigenes 3D-Modell entfernt.' }
+    }
+  } finally {
+    modelUploadBusy.value[slot] = false
+  }
+}
+
+const importHasCustomPreset = computed(() =>
+  Boolean(importPreview.value?.parsed?.printers?.some(p => p.model?.preset === 'custom')),
+)
+watch(selectedPrinterId, () => {
+  modelFeedback.value = null
+})
 
 const canWrite = computed(() => settingsStore.runtime.value?.canWrite !== false)
 const envAllowLan = computed(() => Boolean(settingsStore.network.value?.envAllowLanOrigins))
@@ -848,8 +977,130 @@ watch(
                     :aria-label="t('3D-Ansicht / Modell')"
                   />
                   <small class="settings-hint">
-                    {{ t('„Automatisch“ zeigt die 3D-Szene nur bei Toolchangern und nutzt für Single-Tool-Drucker die kompakte Live-Übersicht.') }}
+                    {{
+                      t(
+                        '„Automatisch“ wählt bei 6-Toolchangern STORMTROOPER und bei Single-Tool-Druckern anhand der Bettgröße StealthBurner oder Mini-StealthBurner.',
+                      )
+                    }}
                   </small>
+                </div>
+
+                <div v-if="showModelExtras" class="settings-field settings-field-full">
+                  <span>{{ t('VORON-Akzentfarbe') }}</span>
+                  <div class="settings-accent-row" role="group" :aria-label="t('VORON-Akzentfarbe')">
+                    <button
+                      v-for="swatch in ACCENT_SWATCHES"
+                      :key="swatch.id"
+                      type="button"
+                      class="settings-swatch"
+                      :class="{ active: selectedPrinter.model.accentColor === swatch.hex }"
+                      :aria-pressed="selectedPrinter.model.accentColor === swatch.hex"
+                      :aria-label="t(swatch.label)"
+                      :title="t(swatch.label)"
+                      :disabled="!canWrite"
+                      @click="setAccentColor(swatch.hex)"
+                    >
+                      <span class="settings-swatch-dot" :style="{ background: swatch.hex }" />
+                    </button>
+                    <label class="settings-color-custom" :title="t('Eigene Akzentfarbe wählen')">
+                      <input
+                        type="color"
+                        :value="selectedPrinter.model.accentColor"
+                        :disabled="!canWrite"
+                        :aria-label="t('Eigene Akzentfarbe wählen')"
+                        @input="setAccentColor($event.target.value)"
+                      />
+                      <span class="settings-mono">{{ selectedPrinter.model.accentColor }}</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div v-if="visibleModelSlots.length" class="settings-field settings-field-full">
+                  <span>{{ t('Eigene CAD-Dateien (.glb)') }}</span>
+                  <p v-if="!isPersistedSelectedPrinter" class="settings-hint">
+                    {{ t('Profil zuerst speichern, um eigene .glb-Dateien hochzuladen.') }}
+                  </p>
+                  <div v-else class="settings-model-slots">
+                    <div
+                      v-for="slot in visibleModelSlots"
+                      :key="slot.id"
+                      class="settings-model-slot"
+                      :class="{ dragover: modelDragOver[slot.id] }"
+                      @dragover.prevent="modelDragOver[slot.id] = true"
+                      @dragleave.prevent="modelDragOver[slot.id] = false"
+                      @drop.prevent="onModelDrop(slot.id, $event)"
+                    >
+                      <div class="settings-model-slot-head">
+                        <div>
+                          <strong>{{ t(slot.title) }}</strong>
+                          <small class="settings-hint">{{ t(slot.hint) }}</small>
+                        </div>
+                        <div class="settings-model-slot-actions">
+                          <input
+                            :ref="el => { if (el) modelFileInputs[slot.id] = el }"
+                            type="file"
+                            accept=".glb,model/gltf-binary"
+                            class="sr-only"
+                            @change="onModelFileInputChange(slot.id, $event)"
+                          />
+                          <button
+                            type="button"
+                            class="subtle-button"
+                            :disabled="!canWrite || modelUploadBusy[slot.id]"
+                            @click="triggerModelFilePicker(slot.id)"
+                          >
+                            <Upload :size="13" />
+                            {{
+                              modelUploadBusy[slot.id]
+                                ? t('Lade hoch …')
+                                : customSlotMeta(slot.id)
+                                  ? t('Ersetzen')
+                                  : t('.glb hochladen')
+                            }}
+                          </button>
+                          <button
+                            v-if="customSlotMeta(slot.id)"
+                            type="button"
+                            class="icon-button"
+                            :disabled="!canWrite || modelUploadBusy[slot.id]"
+                            :title="t('Modell entfernen')"
+                            :aria-label="t('Modell entfernen')"
+                            @click="handleModelDelete(slot.id)"
+                          >
+                            <Trash2 :size="14" />
+                          </button>
+                        </div>
+                      </div>
+                      <div v-if="customSlotMeta(slot.id)" class="settings-model-file settings-mono">
+                        <span>{{ customSlotMeta(slot.id).filename }}</span>
+                        <span>{{ formatBytes(customSlotMeta(slot.id).bytes) }}</span>
+                      </div>
+                      <div v-else class="settings-model-empty">
+                        {{ t('Datei hier ablegen oder .glb auswählen (max. 25 MB).') }}
+                      </div>
+                    </div>
+                  </div>
+                  <p
+                    v-if="modelFeedback"
+                    class="settings-hint"
+                    :class="modelFeedback.ok ? 'text-lime' : 'settings-inline-error'"
+                    role="status"
+                  >
+                    {{ t(modelFeedback.message) }}
+                  </p>
+                  <details class="settings-cad-help">
+                    <summary>{{ t('Fusion-360- & 3D-Print-Rig-Export-Hilfe') }}</summary>
+                    <p>
+                      {{
+                        t(
+                          'In Fusion 360 Desktop: scripts/fusion-export-dockyard.py ausführen, große Baugruppen optional mit scripts/optimize-dockyard-glb.sh komprimieren und hier hochladen. Fertige Drucker aus Psych0h3ad/3d-print-rig lassen sich per scripts/import-3d-print-rig.sh abrufen.',
+                        )
+                      }}
+                    </p>
+                    <p class="settings-mono">
+                      {{ t('Optionale Live-Tags:') }} VORON_ACCENT · LED_LOGO · LED_NOZZLE_L · LED_NOZZLE_R
+                    </p>
+                  </details>
                 </div>
               </div>
             </div>
@@ -1232,6 +1483,9 @@ watch(
                 </div>
                 <p class="settings-hint">
                   {{ importPreview.parsed.printers.map(p => p.name || p.id).join(' · ') }}
+                </p>
+                <p v-if="importHasCustomPreset" class="settings-hint">
+                  {{ t('Hinweis: Eigene .glb-Dateien sind lokal auf dem jeweiligen Server gespeichert und nicht Teil der JSON-Sicherung.') }}
                 </p>
                 <div class="settings-import-modes">
                   <label>

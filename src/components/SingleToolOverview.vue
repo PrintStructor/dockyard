@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, defineAsyncComponent } from 'vue'
 import {
   Flame,
   Thermometer,
@@ -19,6 +19,9 @@ import ThermalGauge from './ThermalGauge.vue'
 import TemperatureTarget from './TemperatureTarget.vue'
 import FanControl from './FanControl.vue'
 import LedControls from './LedControls.vue'
+import SpoolmanPicker from './SpoolmanPicker.vue'
+
+const PrinterScene = defineAsyncComponent(() => import('./PrinterScene.vue'))
 
 const props = defineProps({
   status: Object,
@@ -27,9 +30,12 @@ const props = defineProps({
   send: Function,
   time: String,
   printerSubtitle: String,
+  printerName: { type: String, default: '' },
+  sceneConfig: { type: Object, default: () => ({ kind: 'none' }) },
+  canWrite: { type: Boolean, default: true },
 })
 
-const emit = defineEmits(['command'])
+const emit = defineEmits(['command', 'open-settings', 'refresh'])
 
 const extruder = computed(() => props.status?.tools?.[0] ?? {})
 const bed = computed(() => props.status?.bed ?? {})
@@ -145,6 +151,17 @@ function triggerQuickAction(id) {
 
 <template>
   <div class="single-tool-main">
+    <PrinterScene
+      v-if="sceneConfig?.kind === 'printer-scene'"
+      :scene-config="sceneConfig"
+      :tool="extruder"
+      :online="online"
+      :printer-name="printerName"
+      :bed-size="status?.bedSize ?? null"
+      :can-write="canWrite"
+      @open-settings="emit('open-settings')"
+    />
+
     <div class="single-thermal-grid" :aria-label="t('Temperaturen')">
       <!-- Extruder Card -->
       <article class="single-thermal-card" :class="{ stale: !online }">
@@ -196,7 +213,17 @@ function triggerQuickAction(id) {
           :send="send"
         />
 
-        <div v-if="hasFilamentSensor || Number.isFinite(extruder.pressureAdvance)" class="single-thermal-meta">
+        <div
+          v-if="hasFilamentSensor || Number.isFinite(extruder.pressureAdvance) || (status?.spoolman?.available && status?.spoolman?.connected)"
+          class="single-thermal-meta"
+        >
+          <SpoolmanPicker
+            v-if="status?.spoolman?.available && status?.spoolman?.connected"
+            :spoolman="status.spoolman"
+            :online="online"
+            :can-write="canWrite"
+            @changed="emit('refresh')"
+          />
           <span v-if="hasFilamentSensor" class="single-meta-pill" :class="filamentState.kind">
             <span class="single-meta-dot" />
             {{ t(filamentState.label) }}

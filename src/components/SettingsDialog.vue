@@ -226,7 +226,8 @@ async function handleModelUpload(slot, file) {
             optimizedSummary = { from: opt.originalBytes, to: opt.optimizedBytes }
           }
         }
-      } catch {
+      } catch (err) {
+        console.warn('[DOCKYARD] Browser GLB optimization skipped:', err)
         // If browser optimization cannot parse a non-standard file and the raw file fits,
         // let the server validate and report a clean error if malformed.
       }
@@ -263,10 +264,55 @@ function onModelFileInputChange(slot, event) {
   if (file) handleModelUpload(slot, file)
 }
 
+function extractDroppedFile(event) {
+  const dt = event?.dataTransfer
+  if (!dt) return null
+  if (dt.files && dt.files.length > 0) return dt.files[0]
+  if (dt.items && dt.items.length > 0) {
+    for (const item of dt.items) {
+      if (item.kind === 'file') {
+        const file = item.getAsFile?.()
+        if (file) return file
+      }
+    }
+  }
+  return null
+}
+
+function onModelDragEnter(slot, event) {
+  if (!canWrite.value || modelUploadState.value[slot]) return
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+  modelDragOver.value[slot] = true
+}
+
+function onModelDragOver(slot, event) {
+  if (!canWrite.value || modelUploadState.value[slot]) return
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+  modelDragOver.value[slot] = true
+}
+
+function onModelDragLeave(slot, event) {
+  if (event.currentTarget && event.relatedTarget && event.currentTarget.contains(event.relatedTarget)) {
+    return
+  }
+  modelDragOver.value[slot] = false
+}
+
 function onModelDrop(slot, event) {
   modelDragOver.value[slot] = false
-  const file = event.dataTransfer?.files?.[0]
-  if (file) handleModelUpload(slot, file)
+  if (!canWrite.value) {
+    modelFeedback.value = { ok: false, message: 'Nur Lesezugriff von diesem Browser-Origin.' }
+    return
+  }
+  const file = extractDroppedFile(event)
+  if (!file) {
+    modelFeedback.value = {
+      ok: false,
+      message: 'Keine Datei erkannt. Falls die Datei in iCloud liegt, bitte zuerst lokal laden oder über „.glb hochladen“ auswählen.',
+    }
+    return
+  }
+  handleModelUpload(slot, file)
 }
 
 async function handleModelDelete(slot) {
@@ -760,7 +806,7 @@ watch(
     @cancel.prevent="requestClose(false)"
     @click="onBackdropClick"
   >
-    <div class="settings-shell">
+    <div class="settings-shell" @dragover.prevent @drop.prevent>
       <header class="settings-header">
         <div class="settings-header-title">
           <Settings :size="17" />
@@ -1052,9 +1098,10 @@ watch(
                       :key="slot.id"
                       class="settings-model-slot"
                       :class="{ dragover: modelDragOver[slot.id] }"
-                      @dragover.prevent="modelDragOver[slot.id] = true"
-                      @dragleave.prevent="modelDragOver[slot.id] = false"
-                      @drop.prevent="onModelDrop(slot.id, $event)"
+                      @dragenter.prevent.stop="onModelDragEnter(slot.id, $event)"
+                      @dragover.prevent.stop="onModelDragOver(slot.id, $event)"
+                      @dragleave.prevent.stop="onModelDragLeave(slot.id, $event)"
+                      @drop.prevent.stop="onModelDrop(slot.id, $event)"
                     >
                       <div class="settings-model-slot-head">
                         <div>
@@ -1103,9 +1150,15 @@ watch(
                         <span>{{ customSlotMeta(slot.id).filename }}</span>
                         <span>{{ formatBytes(customSlotMeta(slot.id).bytes) }}</span>
                       </div>
-                      <div v-else class="settings-model-empty">
+                      <button
+                        v-else
+                        type="button"
+                        class="settings-model-empty"
+                        :disabled="!canWrite || Boolean(modelUploadState[slot.id])"
+                        @click="triggerModelFilePicker(slot.id)"
+                      >
                         {{ t('Datei hier ablegen oder .glb auswählen (große Exporte werden automatisch komprimiert).') }}
-                      </div>
+                      </button>
                     </div>
                   </div>
                   <p

@@ -163,6 +163,8 @@ test('dynamic Paket 2 model, settings, and Spoolman error messages translate to 
     'Optimiere 3D-Modell im Browser (57.00 MB) …',
     'Das 3D-Modell überschreitet selbst nach automatischer Komprimierung das 25-MB-Limit. Bitte in Fusion 360 mit „Kompakt“ exportieren.',
     '3D-Modell automatisch optimiert (57.00 MB → 5.00 MB) und live aktiviert.',
+    'Nur Lesezugriff von diesem Browser-Origin.',
+    'Keine Datei erkannt. Falls die Datei in iCloud liegt, bitte zuerst lokal laden oder über „.glb hochladen“ auswählen.',
   ]
   const untranslated = dynamicMessages.filter(msg => translate(msg, 'en') === msg)
   assert.deepEqual(untranslated, [], `Untranslated dynamic error messages:\n${untranslated.join('\n')}`)

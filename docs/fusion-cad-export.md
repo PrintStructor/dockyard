@@ -4,24 +4,31 @@ DOCKYARD bringt kompakte **StealthBurner**- und **Mini-StealthBurner**-Vorlagen 
 
 ---
 
-## Weg 1: Eigene Fusion-360-CADs exportieren (macOS)
+## Weg 1: Eigene Fusion-360-CADs exportieren (macOS Add-In)
 
-### 1. Skript einmalig in Fusion 360 einbinden
-1. Öffne **Fusion 360 Desktop** auf dem Mac.
-2. Wähle **Dienstprogramme → Zusatzmodule → Skripte und Zusatzmodule** (`Shift + S`).
-3. Klicke bei **Meine Skripte** auf **`+` → Skript oder Zusatzmodul vom Gerät hinzufügen** und wähle den Ordner `scripts/` dieses Repositories (bzw. `scripts/fusion-export-dockyard.py`).
+### 1. DOCKYARD-Add-In einmalig in Fusion 360 installieren
+```bash
+./scripts/install-fusion-addin.sh
+```
+Das Skript installiert das Add-In `fusion-addin/DockyardExport` direkt in `~/Library/Application Support/Autodesk/Autodesk Fusion 360/API/AddIns/DockyardExport`.
+
+- **Falls Fusion bereits offen ist:** `Shift + S` → **Zusatzmodule** → **`DockyardExport`** → **Ausführen**.
+- **Beim nächsten Start von Fusion:** Lädt automatisch (`runOnStartup: true`).
+- Danach erscheint der grüne Button **„DOCKYARD Export“** direkt in der Fusion-Toolbar unter **Konstruktion → Dienstprogramme → Zusatzmodule**.
 
 ### 2. Drucker oder Toolhead exportieren
 1. Öffne dein gewünschtes Fusion-Dokument (z. B. VORON 2.4 350 mm, VORON Trident 300 mm, VORON V0.1 oder Crucible).
 2. Blende Hilfsgeometrien/Skizzen aus, die nicht sichtbar sein sollen.
-3. Starte **`fusion-export-dockyard`** über `Shift + S`:
+3. Klicke in der Toolbar auf **„DOCKYARD Export“**:
    - **Export-Ziel:**
      - *Gesamter Drucker (`printer`)* exportiert alle sichtbaren Körper des Dokuments.
-     - *Toolhead / Aktive Auswahl (`toolhead`)* exportiert nur aktuell ausgewählte Komponenten/Vorkommen (oder sonst alle sichtbaren Körper).
+     - *Toolhead / Aktive Auswahl (`toolhead`)* exportiert nur aktuell ausgewählte Komponenten/Vorkommen (rekursiv inkl. Unterbaugruppen).
+   - **Hochachse:** erkennt deine Fusion-Einstellung automatisch (*Z-oben* für VORON/STEP oder *Y-oben* für Fusion-Standard).
    - **Detailstufe:** *Kompakt — Empfohlen (0.04 cm)* reicht für das Cockpit völlig aus und hält die Dateigröße klein.
    - **Kleinteile ausblenden:** aktiviert lassen (überspringt Schrauben, Muttern, Unterlegscheiben, Gewindeeinsätze und Lager — spart 40–60 % der Dreiecke).
+   - **Nach Export im Finder anzeigen:** öffnet direkt die fertige `.glb`-Datei zum Hineinziehen in DOCKYARD.
    - **Ausgabeordner:** standardmäßig `~/Desktop/dockyard-exports`.
-4. Das Skript richtet das Modell automatisch im glTF-Koordinatensystem aus (**Y-up**, Meter, X/Z zentriert, Boden bei `y = 0`) und schreibt `<dokument>-<slot>.glb`.
+4. Das Add-In richtet das Modell automatisch im glTF-Koordinatensystem aus (**Y-up**, Meter, X/Z zentriert, Boden bei `y = 0`), erkennt transparente Acryl-/Glas-Scheiben und schreibt `<dokument>-<slot>.glb`.
 
 ### 3. Große Baugruppen komprimieren (empfohlen ab ~5 MB)
 ```bash

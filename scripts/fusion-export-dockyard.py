@@ -354,6 +354,7 @@ def _execute_export(app, ui, slot, quality_mode, skip_fasteners, out_dir):
     surface_tol = 0.02 if quality_mode == "detail" else 0.04
 
     grouped = {}
+    mesh_cache = {}
     skipped = 0
     total_tris = 0
     min_x = min_y = min_z = float("inf")
@@ -368,18 +369,34 @@ def _execute_export(app, ui, slot, quality_mode, skip_fasteners, out_dir):
         color_key = tuple(round(c, 2) for c in rgba)
         group_key = (role, color_key)
 
-        try:
-            calc = body.meshManager.createMeshCalculator()
-            calc.setQuality(quality_opt)
-            calc.surfaceTolerance = surface_tol
-            tmesh = calc.calculate()
-        except Exception:
+        native = (getattr(body, "nativeObject", None) or body) if mat is not None else body
+        cache_key = native.entityToken
+        cached = mesh_cache.get(cache_key)
+        if cached is None:
+            try:
+                calc = native.meshManager.createMeshCalculator()
+                calc.setQuality(quality_opt)
+                calc.surfaceTolerance = surface_tol
+                tmesh = calc.calculate()
+                if not tmesh:
+                    mesh_cache[cache_key] = False
+                    skipped += 1
+                    continue
+                cached = (
+                    list(tmesh.nodeCoordinatesAsFloat),
+                    list(tmesh.normalVectorsAsFloat),
+                    list(tmesh.nodeIndices),
+                )
+                mesh_cache[cache_key] = cached
+            except Exception:
+                mesh_cache[cache_key] = False
+                skipped += 1
+                continue
+        if cached is False:
             skipped += 1
             continue
 
-        coords = tmesh.nodeCoordinatesAsFloat
-        normals = tmesh.normalVectorsAsFloat
-        indices = tmesh.nodeIndices
+        coords, normals, indices = cached
         if not coords or not indices:
             continue
 

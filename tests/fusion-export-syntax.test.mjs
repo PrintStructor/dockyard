@@ -1,13 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile, rm, access } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { validateGlbBuffer } from '../server/models.mjs'
 
 const ROOT = path.resolve(import.meta.dirname, '..')
 const FUSION_SCRIPT = path.join(ROOT, 'scripts/fusion-export-dockyard.py')
+const FUSION_ADDIN_DIR = path.join(ROOT, 'fusion-addin/DockyardExport')
+const FUSION_ADDIN_PY = path.join(FUSION_ADDIN_DIR, 'DockyardExport.py')
+const FUSION_ADDIN_MANIFEST = path.join(FUSION_ADDIN_DIR, 'DockyardExport.manifest')
+const INSTALL_ADDIN_SCRIPT = path.join(ROOT, 'scripts/install-fusion-addin.sh')
 const IMPORT_SCRIPT = path.join(ROOT, 'scripts/import-3d-print-rig.sh')
 
 test('fusion-export-dockyard.py compiles cleanly and pure-Python helpers normalize coordinates, tag roles and pack valid GLB v2', () => {
@@ -127,5 +131,79 @@ test('import-3d-print-rig.sh passes bash syntax check, lists filtered catalog of
     )
   } finally {
     await rm(tmp, { recursive: true, force: true })
+  }
+})
+
+test('Fusion 360 DockyardExport Add-In has valid manifest, icons, Add-In lifecycle and installer', async () => {
+  const manifest = JSON.parse(await readFile(FUSION_ADDIN_MANIFEST, 'utf8'))
+  assert.equal(manifest.autodeskProduct, 'Fusion')
+  assert.equal(manifest.type, 'addin')
+  assert.equal(manifest.runOnStartup, true)
+  assert.match(manifest.supportedOS, /mac/i)
+
+  const addinSrc = await readFile(FUSION_ADDIN_PY, 'utf8')
+  assert.doesNotMatch(addinSrc, /adsk\.terminate\s*\(/, 'Add-Ins must not call adsk.terminate()')
+  assert.match(addinSrc, /def run\(/)
+  assert.match(addinSrc, /def stop\(/)
+
+  const pyEnv = { ...process.env, PYTHONDONTWRITEBYTECODE: '1' }
+  const pyCode = `
+import importlib.util, sys, base64
+spec = importlib.util.spec_from_file_location('dockyard_addin', sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+assert mod.fusion_cm_to_gltf_m(10.0, 20.0, 30.0, up_axis='z') == (0.1, 0.3, -0.2)
+assert mod.fusion_cm_to_gltf_m(10.0, 20.0, 30.0, up_axis='y') == (0.1, 0.2, 0.3)
+assert mod.is_transparent_appearance('Polycarbonate Clear') is True
+assert mod.is_transparent_appearance('Black Anodized Aluminum') is False
+
+glb = mod.build_glb_bytes([
+  {
+    'name': 'AcrylPanel',
+    'role': None,
+    'color': [0.18, 0.28, 0.32, 0.14],
+    'positions': [0.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.05, 0.1, 0.0],
+    'normals': [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+    'indices': [0, 1, 2],
+  },
+], source_name='VORON 2.4')
+sys.stdout.write(base64.b64encode(glb).decode('ascii'))
+`
+  const b64 = execFileSync('python3', ['-c', pyCode, FUSION_ADDIN_PY], { encoding: 'utf8', env: pyEnv })
+  const buf = Buffer.from(b64, 'base64')
+  const info = validateGlbBuffer(buf)
+  const gltf = JSON.parse(buf.subarray(20, 20 + info.jsonChunkLength).toString('utf8'))
+  assert.equal(gltf.materials[0].alphaMode, 'BLEND')
+  assert.equal(gltf.materials[0].doubleSided, true)
+
+  // Verify all 6 PNG icons exist with exact PNG header and dimensions
+  for (const [file, expected] of [
+    ['16x16.png', 16],
+    ['32x32.png', 32],
+    ['64x64.png', 64],
+    ['16x16-dark.png', 16],
+    ['32x32-dark.png', 32],
+    ['64x64-dark.png', 64],
+  ]) {
+    const png = await readFile(path.join(FUSION_ADDIN_DIR, 'resources', file))
+    assert.equal(png.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', `${file} must be valid PNG`)
+    assert.equal(png.readUInt32BE(16), expected, `${file} width must be ${expected}`)
+    assert.equal(png.readUInt32BE(20), expected, `${file} height must be ${expected}`)
+  }
+
+  // Verify installer script syntax and installation into an isolated temp directory
+  execFileSync('bash', ['-n', INSTALL_ADDIN_SCRIPT], { stdio: 'pipe' })
+  const tmpAddIns = await mkdtemp(path.join(os.tmpdir(), 'dockyard-fusion-addins-'))
+  try {
+    execFileSync('bash', [INSTALL_ADDIN_SCRIPT], {
+      env: { ...process.env, FUSION_ADDINS_DIR: tmpAddIns },
+      stdio: 'pipe',
+    })
+    await access(path.join(tmpAddIns, 'DockyardExport/DockyardExport.py'))
+    await access(path.join(tmpAddIns, 'DockyardExport/DockyardExport.manifest'))
+    await access(path.join(tmpAddIns, 'DockyardExport/resources/32x32-dark.png'))
+  } finally {
+    await rm(tmpAddIns, { recursive: true, force: true })
   }
 })

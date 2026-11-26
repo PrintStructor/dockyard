@@ -1,4 +1,4 @@
-import { normalizeStatus } from './status.mjs'
+import { normalizeStatus, detectToolCount } from './status.mjs'
 import { toolActionReason, filamentToolIds, defaultActionTemperature } from '../src/tool-action-state.mjs'
 import { ControlError } from './control.mjs'
 
@@ -17,23 +17,55 @@ export function toolCapabilities(config, raw) {
   const has = name => !!config[`gcode_macro ${name}`]
   const common = ['_goto_purge_pos', '_purge_pos']
   const available = names => names.every(has)
-  const toolSelect = Array.from({ length: 6 }, (_, id) => has(`t${id}`) && !!config[`tool t${id}`])
-  const limits = Array.from({ length: 6 }, (_, id) =>
+  const isToolchanger = Boolean(raw.toolchanger || config.toolchanger)
+  const toolCount = detectToolCount(raw, config)
+  const toolSelect = Array.from({ length: toolCount }, (_, id) => has(`t${id}`) && !!config[`tool t${id}`])
+  const limits = Array.from({ length: toolCount }, (_, id) =>
     Number(config[id ? `extruder${id}` : 'extruder']?.min_extrude_temp ?? 170),
   )
 
+  const genericFans = Object.keys(raw)
+    .filter(
+      name =>
+        /^fan_generic [A-Za-z0-9_]+$/.test(name) &&
+        config[name.toLowerCase()] &&
+        !hiddenDummyFans.has(name.slice(12).toLowerCase()),
+    )
+    .map(name => ({
+      name: name.slice(12),
+      label: fanLabel(name.slice(12)),
+    }))
+    .sort((a, b) => fanOrder(a.name) - fanOrder(b.name) || a.name.localeCompare(b.name))
+
+  const fans = [
+    ...(config.fan || raw.fan ? [{ name: '__part_fan__', label: 'Bauteillüfter', kind: 'part_fan' }] : []),
+    ...genericFans,
+  ]
+
   return {
-    toolActions: {
-      park: has('park_toolhead'),
-      pickup: has('pickup_tool'),
-      select: toolSelect.some(Boolean),
-      clean: has('clean_nozzle'),
-      purge: available(['purge_nozzle', '_load_settings', 'clean_nozzle', ...common]),
-      load: available(['load_filament', '_load_settings', 'clean_nozzle', ...common]),
-      unload: available(['unload_filament', '_unload_settings', ...common]),
-      unload_all: available(['unload_filament', '_unload_settings', 'park_toolhead', ...common]),
-      load_all: available(['load_filament', '_load_settings', 'clean_nozzle', ...common]),
-    },
+    toolActions: isToolchanger
+      ? {
+          park: has('park_toolhead'),
+          pickup: has('pickup_tool'),
+          select: toolSelect.some(Boolean),
+          clean: has('clean_nozzle'),
+          purge: available(['purge_nozzle', '_load_settings', 'clean_nozzle', ...common]),
+          load: available(['load_filament', '_load_settings', 'clean_nozzle', ...common]),
+          unload: available(['unload_filament', '_unload_settings', ...common]),
+          unload_all: available(['unload_filament', '_unload_settings', 'park_toolhead', ...common]),
+          load_all: available(['load_filament', '_load_settings', 'clean_nozzle', ...common]),
+        }
+      : {
+          park: false,
+          pickup: false,
+          select: false,
+          clean: has('clean_nozzle'),
+          purge: has('purge_nozzle'),
+          load: has('load_filament'),
+          unload: has('unload_filament'),
+          unload_all: false,
+          load_all: false,
+        },
     toolSelect,
     extrusionMin: limits,
     filamentDefaults: {
@@ -44,18 +76,7 @@ export function toolCapabilities(config, raw) {
         ? raw['gcode_macro _UNLOAD_SETTINGS'].temp_default
         : null,
     },
-    fans: Object.keys(raw)
-      .filter(
-        name =>
-          /^fan_generic [A-Za-z0-9_]+$/.test(name) &&
-          config[name.toLowerCase()] &&
-          !hiddenDummyFans.has(name.slice(12).toLowerCase()),
-      )
-      .map(name => ({
-        name: name.slice(12),
-        label: fanLabel(name.slice(12)),
-      }))
-      .sort((a, b) => fanOrder(a.name) - fanOrder(b.name) || a.name.localeCompare(b.name)),
+    fans,
   }
 }
 
@@ -65,6 +86,30 @@ export function toolActionCommand(input, raw, capabilities) {
   const temperature = defaultActionTemperature(status, action)
   const reason = toolActionReason(status, action, tool)
   if (reason) throw new ControlError(reason, 409)
+
+  if (!status.isToolchanger) {
+    let script
+    let label
+    if (action === 'clean') {
+      script = 'CLEAN_NOZZLE'
+      label = 'Nozzle Clean'
+    } else if (action === 'purge') {
+      script = 'PURGE_NOZZLE'
+      label = 'Purge'
+    } else if (action === 'load') {
+      script = 'LOAD_FILAMENT'
+      label = 'Filament laden'
+    } else if (action === 'unload') {
+      script = 'UNLOAD_FILAMENT'
+      label = 'Filament entladen'
+    }
+    return {
+      endpoint: '/printer/gcode/script',
+      body: { script: `${script}\nM400` },
+      label,
+      async: true,
+    }
+  }
 
   const ids = action.endsWith('_all') ? filamentToolIds(status) : [tool]
   const first = ids[0]

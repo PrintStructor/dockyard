@@ -1,9 +1,18 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import http from 'node:http'
+import { mkdtemp, rm } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 import { normalizeStatus, detectToolCount, extractBedSize } from '../server/status.mjs'
 import { temperatureHistory, inferExtruderCountFromStore } from '../server/temperature.mjs'
 import { normalizePresets } from '../server/presets.mjs'
 import { normalizeCalibrationData } from '../server/calibration.mjs'
+import { capabilities, commandFor } from '../server/control.mjs'
+import { auxActionReason, quickMotionReason } from '../src/aux-action-state.mjs'
+import { toolActionReason } from '../src/tool-action-state.mjs'
+import { createSettingsStore } from '../server/settings.mjs'
+import { createPrinterRuntime } from '../server/printer.mjs'
 
 test('normalizeStatus handles single-tool VORON 2.4 with sb_leds, QGL, part fan, and 350x350 bed', () => {
   const raw = {
@@ -181,4 +190,153 @@ test('extractBedSize falls back safely to axis_minimum/axis_maximum when stepper
   )
   assert.deepEqual(bed, { originX: 0, originY: 0, width: 150, depth: 150 })
   assert.equal(extractBedSize({}, {}), null)
+})
+
+function singleToolTridentRaw(overrides = {}) {
+  return {
+    webhooks: { state: 'ready' },
+    print_stats: { state: 'standby' },
+    idle_timeout: { state: 'Idle' },
+    extruder: { temperature: 210, target: 210, power: 0.3, can_extrude: true },
+    heater_bed: { temperature: 60, target: 60 },
+    z_tilt: { applied: false },
+    fan: { speed: 0.5 },
+    toolhead: { homed_axes: 'xyz', position: [150, 150, 20, 0], axis_minimum: [0, 0, 0, 0], axis_maximum: [300, 300, 250, 0] },
+    configfile: {
+      settings: {
+        extruder: { max_temp: 300, min_extrude_temp: 170 },
+        heater_bed: { max_temp: 120 },
+        stepper_x: { position_min: 0, position_max: 300 },
+        stepper_y: { position_min: 0, position_max: 300 },
+        z_tilt: { retries: 5 },
+        bed_mesh: {},
+        fan: {},
+        'gcode_macro pause': {},
+        'gcode_macro resume': {},
+        'gcode_macro load_filament': {},
+        'gcode_macro unload_filament': {},
+        'gcode_macro clean_nozzle': {},
+        'gcode_macro purge_nozzle': {},
+      },
+    },
+    ...overrides,
+  }
+}
+
+test('commandFor supports z_tilt, standard [fan] M106, single-tool temperature, and rejects temperature_all', () => {
+  const raw = singleToolTridentRaw()
+  const caps = capabilities(raw)
+  assert.equal(caps.isToolchanger, false)
+  assert.equal(caps.toolCount, 1)
+  assert.equal(caps.zTilt, true)
+  assert.equal(caps.qgl, false)
+  assert.equal(caps.leveling, 'z_tilt')
+  assert.deepEqual(caps.bedSize, { originX: 0, originY: 0, width: 300, depth: 300 })
+  assert.ok(caps.fans.some(f => f.name === '__part_fan__' && f.kind === 'part_fan'))
+
+  const zTiltCmd = commandFor({ action: 'z_tilt' }, raw)
+  assert.equal(zTiltCmd.body.script, 'Z_TILT_ADJUST')
+  assert.equal(zTiltCmd.async, true)
+
+  const unhomedRaw = singleToolTridentRaw({ toolhead: { homed_axes: 'xy', position: [100, 100, 10, 0] } })
+  assert.throws(() => commandFor({ action: 'z_tilt' }, unhomedRaw), /homen/i)
+
+  const v0Raw = singleToolTridentRaw({
+    z_tilt: undefined,
+    configfile: { settings: { extruder: { max_temp: 280 }, heater_bed: { max_temp: 120 } } },
+  })
+  assert.throws(() => commandFor({ action: 'z_tilt' }, v0Raw), /konfiguriert/i)
+
+  const statusObj = { ...normalizeStatus(raw), capabilities: caps }
+  assert.equal(quickMotionReason(statusObj, 'z_tilt', true, false), '')
+  assert.match(quickMotionReason({ ...normalizeStatus(v0Raw), capabilities: capabilities(v0Raw) }, 'z_tilt', true, false), /konfiguriert/i)
+
+  // Standard Klipper [fan] M106 control
+  assert.equal(commandFor({ action: 'fan', fan: '__part_fan__', percent: 50 }, raw).body.script, 'M106 S128')
+  assert.equal(commandFor({ action: 'fan', fan: '__part_fan__', percent: 0 }, raw).body.script, 'M106 S0')
+  assert.equal(commandFor({ action: 'fan', fan: '__part_fan__', percent: 100 }, raw).body.script, 'M106 S255')
+
+  // Single-tool temperature label & temperature_all rejection
+  const heatCmd = commandFor({ action: 'temperature', heater: 'extruder', target: 210 }, raw)
+  assert.equal(heatCmd.label, 'Extruder auf 210 °C')
+  assert.throws(() => commandFor({ action: 'temperature_all', target: 140 }, raw), /mehreren Werkzeugen/i)
+})
+
+test('single-tool RESUME works without toolchangerState and single-tool macros omit T=0 and PICKUP_TOOL', () => {
+  const pausedRaw = singleToolTridentRaw({ print_stats: { state: 'paused' } })
+  const pausedStatus = { ...normalizeStatus(pausedRaw), capabilities: capabilities(pausedRaw) }
+  assert.equal(auxActionReason(pausedStatus, 'resume', true, false), '')
+  assert.equal(commandFor({ action: 'resume' }, pausedRaw).body.script, 'RESUME')
+
+  // Toolchanger RESUME must STILL reject when detected is null
+  const tcPausedRaw = {
+    webhooks: { state: 'ready' },
+    print_stats: { state: 'paused' },
+    idle_timeout: { state: 'Idle' },
+    toolhead: { homed_axes: 'xyz' },
+    toolchanger: { status: 'ready', has_detection: true, tool_number: 0, detected_tool_number: -1 },
+    configfile: { settings: { toolchanger: {}, 'gcode_macro resume': {} } },
+  }
+  const tcStatus = { ...normalizeStatus(tcPausedRaw), capabilities: capabilities(tcPausedRaw) }
+  assert.match(auxActionReason(tcStatus, 'resume', true, false), /Toolchanger/i)
+
+  // Single-tool maintenance macros run directly without T=0 or PICKUP_TOOL
+  const idleRaw = singleToolTridentRaw()
+  const idleStatus = { ...normalizeStatus(idleRaw), capabilities: capabilities(idleRaw) }
+  assert.equal(toolActionReason(idleStatus, 'load', 0, true, false), '')
+  assert.equal(toolActionReason(idleStatus, 'unload', 0, true, false), '')
+  assert.equal(toolActionReason(idleStatus, 'clean', 0, true, false), '')
+  assert.equal(toolActionReason(idleStatus, 'purge', 0, true, false), '')
+  assert.equal(commandFor({ action: 'load', tool: 0 }, idleRaw).body.script, 'LOAD_FILAMENT\nM400')
+  assert.equal(commandFor({ action: 'unload', tool: 0 }, idleRaw).body.script, 'UNLOAD_FILAMENT\nM400')
+  assert.equal(commandFor({ action: 'clean', tool: 0 }, idleRaw).body.script, 'CLEAN_NOZZLE\nM400')
+  assert.equal(commandFor({ action: 'purge', tool: 0 }, idleRaw).body.script, 'PURGE_NOZZLE\nM400')
+
+  // Toolchanger-only actions rejected on single-tool
+  assert.throws(() => commandFor({ action: 'park', tool: 0 }, idleRaw))
+  assert.throws(() => commandFor({ action: 'pickup', tool: 0 }, idleRaw))
+  assert.throws(() => commandFor({ action: 'select', tool: 0 }, idleRaw))
+})
+
+test('GET /api/temperature-history infers single-tool count on cold start before /api/status', async () => {
+  const mockMoonraker = http.createServer((req, res) => {
+    if (req.url === '/server/temperature_store') {
+      res.setHeader('Content-Type', 'application/json')
+      res.end(
+        JSON.stringify({
+          result: {
+            extruder: { temperatures: [210, 212], targets: [215, 215] },
+            heater_bed: { temperatures: [60, 61], targets: [60, 60] },
+          },
+        }),
+      )
+      return
+    }
+    res.statusCode = 404
+    res.end()
+  })
+  await new Promise(resolve => mockMoonraker.listen(0, '127.0.0.1', resolve))
+  const mockUrl = `http://127.0.0.1:${mockMoonraker.address().port}`
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'dockyard-single-temp-'))
+  const store = createSettingsStore({
+    filePath: path.join(dir, '.dockyard-settings.json'),
+    env: { PRINTER_URL: mockUrl, PRINTER_NAME: 'V01' },
+  })
+  const { printerMiddleware, closeLiveFeed } = createPrinterRuntime({ store })
+  const server = http.createServer((req, res) => printerMiddleware(req, res, () => { res.statusCode = 404; res.end() }))
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/temperature-history`)
+    assert.equal(res.status, 200)
+    const body = await res.json()
+    assert.equal(body.series.length, 2)
+    assert.equal(body.series[0].id, 'extruder')
+    assert.equal(body.series[0].label, 'Extruder')
+    assert.equal(body.series[1].id, 'heater_bed')
+  } finally {
+    closeLiveFeed()
+    await new Promise(resolve => server.close(resolve))
+    await new Promise(resolve => mockMoonraker.close(resolve))
+    await rm(dir, { recursive: true, force: true })
+  }
 })

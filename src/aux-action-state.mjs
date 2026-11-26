@@ -70,10 +70,11 @@ export function auxActionReason(status, action, online = true, pending = false) 
     if (!status.capabilities?.resume) return 'RESUME ist nicht konfiguriert.'
     if (status.printState !== 'paused') return 'Kein pausierter Druck.'
     if (
-      status.toolchangerState !== 'ready' ||
-      status.detectionMismatch ||
-      status.detectionConflict ||
-      status.detected == null
+      status.isToolchanger !== false &&
+      (status.toolchangerState !== 'ready' ||
+        status.detectionMismatch ||
+        status.detectionConflict ||
+        status.detected == null)
     ) {
       return 'Toolchanger und Werkzeugerkennung vor dem Fortsetzen prüfen.'
     }
@@ -117,6 +118,13 @@ export function quickMotionReason(status, action, online = true, pending = false
   if (action === 'qgl') {
     if (status.detectionMismatch) return 'Werkzeugerkennung prüfen.'
     if (!status.capabilities?.qgl) return 'QGL ist nicht konfiguriert.'
+    if (![...'xyz'].every(axis => status.homedAxes?.includes(axis))) return 'Zuerst alle Achsen homen.'
+    return ''
+  }
+
+  if (action === 'z_tilt') {
+    if (status.detectionMismatch) return 'Werkzeugerkennung prüfen.'
+    if (!status.capabilities?.zTilt) return 'Z-Tilt ist nicht konfiguriert.'
     if (![...'xyz'].every(axis => status.homedAxes?.includes(axis))) return 'Zuerst alle Achsen homen.'
     return ''
   }

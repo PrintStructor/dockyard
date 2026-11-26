@@ -49,30 +49,44 @@ export function detectToolCount(raw = {}, config = {}) {
   const isToolchanger = Boolean(raw.toolchanger || cfg.toolchanger)
   let maxConfigIdx = -1
   let maxRawIdx = -1
+  let maxToolDefIdx = -1
+
+  if (Array.isArray(raw.toolchanger?.tool_names) && raw.toolchanger.tool_names.length > 0) {
+    maxToolDefIdx = Math.max(maxToolDefIdx, raw.toolchanger.tool_names.length - 1)
+  }
 
   for (const key of Object.keys(cfg)) {
     const lower = key.toLowerCase()
     if (lower === 'extruder') maxConfigIdx = Math.max(maxConfigIdx, 0)
     else {
-      const m = /^(?:extruder|tool t)([0-7])$/.exec(lower)
-      if (m) maxConfigIdx = Math.max(maxConfigIdx, Number(m[1]))
+      const mTool = /^tool t([0-7])$/.exec(lower)
+      if (mTool) {
+        const idx = Number(mTool[1])
+        maxConfigIdx = Math.max(maxConfigIdx, idx)
+        maxToolDefIdx = Math.max(maxToolDefIdx, idx)
+      } else {
+        const mExt = /^extruder([1-7])$/.exec(lower)
+        if (mExt) maxConfigIdx = Math.max(maxConfigIdx, Number(mExt[1]))
+      }
     }
   }
 
   for (const key of Object.keys(raw)) {
     if (key === 'extruder') maxRawIdx = Math.max(maxRawIdx, 0)
     else {
-      const m = /^(?:extruder([1-7])|tool T([0-7])|neopixel et([0-7])_leds)$/.exec(key)
-      if (m) {
-        const idx = Number(m[1] ?? m[2] ?? m[3])
+      const mOther = /^(?:extruder([1-7])|tool T([0-7])|neopixel et([0-7])_leds)$/.exec(key)
+      if (mOther) {
+        const idx = Number(mOther[1] ?? mOther[2] ?? mOther[3])
         maxRawIdx = Math.max(maxRawIdx, idx)
       }
     }
   }
 
   if (isToolchanger) {
-    if (maxConfigIdx >= 0) return Math.min(MAX_TOOLS, Math.max(2, maxConfigIdx + 1))
-    return Math.min(MAX_TOOLS, Math.max(6, maxRawIdx + 1))
+    if (maxToolDefIdx >= 0) {
+      return Math.min(MAX_TOOLS, Math.max(2, maxToolDefIdx + 1, maxConfigIdx + 1))
+    }
+    return Math.min(MAX_TOOLS, Math.max(6, maxConfigIdx + 1, maxRawIdx + 1))
   }
   const maxFound = Math.max(maxConfigIdx, maxRawIdx)
   return maxFound >= 1 ? Math.min(MAX_TOOLS, maxFound + 1) : 1

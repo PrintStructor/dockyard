@@ -12,7 +12,7 @@ import {
   calibrationCapabilities,
   calibrationCommand,
 } from './calibration.mjs'
-import { canHomeBeforeInitialization } from './status.mjs'
+import { canHomeBeforeInitialization, detectToolCount, extractBedSize } from './status.mjs'
 import { getEffectiveAllowedOrigins, isLanOriginAllowed, isPrivateLanHostname } from './settings.mjs'
 
 export class ControlError extends Error {
@@ -30,13 +30,22 @@ const finite = value => typeof value === 'number' && Number.isFinite(value)
 
 export function capabilities(raw) {
   const config = raw.configfile?.settings ?? raw.configfile?.config ?? {}
+  const isToolchanger = Boolean(raw.toolchanger || config.toolchanger)
+  const toolCount = detectToolCount(raw, config)
   const limit = name =>
     Number.isFinite(Number(config[name]?.max_temp)) ? Math.max(0, Number(config[name].max_temp) - 5) : null
+  const qgl = !!config['quad_gantry_level']
+  const zTilt = !!config['z_tilt']
 
   return {
+    isToolchanger,
+    toolCount,
     bedMax: limit('heater_bed'),
-    toolMax: Array.from({ length: 6 }, (_, i) => limit(i ? `extruder${i}` : 'extruder')),
-    qgl: !!config['quad_gantry_level'],
+    toolMax: Array.from({ length: toolCount }, (_, i) => limit(i ? `extruder${i}` : 'extruder')),
+    qgl,
+    zTilt,
+    leveling: qgl ? 'qgl' : zTilt ? 'z_tilt' : null,
+    bedSize: extractBedSize(raw, config),
     mesh: !!config['bed_mesh'],
     ...toolCapabilities(config, raw),
     ...auxCapabilities(config),
@@ -56,6 +65,7 @@ export function commandFor(input, raw) {
     'temperature_all',
     'heaters_off',
     'qgl',
+    'z_tilt',
     'mesh',
     'motors_off',
     'emergency_stop',
@@ -128,23 +138,30 @@ export function commandFor(input, raw) {
       fail('Ungültiger Lüfter oder Prozentwert.')
     }
     const targetFan = fans.find(fan => fan.name === input.fan)
+    const script =
+      targetFan.kind === 'part_fan' || targetFan.name === '__part_fan__'
+        ? `M106 S${Math.round((input.percent / 100) * 255)}`
+        : `SET_FAN_SPEED FAN=${input.fan} SPEED=${input.percent / 100}`
     return {
       endpoint: '/printer/gcode/script',
-      body: { script: `SET_FAN_SPEED FAN=${input.fan} SPEED=${input.percent / 100}` },
+      body: { script },
       label: `${targetFan.label} auf ${input.percent} %`,
     }
   }
 
   if (action === 'temperature_all') {
+    const limits = capabilities(raw)
+    if (limits.toolCount <= 1) {
+      fail('Gemeinsames Heizen ist nur bei mehreren Werkzeugen verfügbar.', 409)
+    }
     if (['printing', 'paused'].includes(printState) || raw.idle_timeout?.state === 'Printing') {
       fail('Gemeinsames Heizen ist während eines Drucks, einer Pause oder laufender Befehle gesperrt.', 409)
     }
-    const limits = capabilities(raw)
     if (!Number.isInteger(input.target) || input.target < 0 || limits.toolMax.some(max => max == null || input.target > max)) {
       fail('Temperaturgrenzen der Werkzeuge prüfen.')
     }
     const script = Array.from(
-      { length: 6 },
+      { length: limits.toolCount },
       (_, id) => `SET_HEATER_TEMPERATURE HEATER=${id ? `extruder${id}` : 'extruder'} TARGET=${input.target}`,
     ).join('\n')
     return {
@@ -154,7 +171,7 @@ export function commandFor(input, raw) {
     }
   }
 
-  const motion = ['home', 'jog', 'move_to', 'qgl', 'mesh', 'motors_off'].includes(action)
+  const motion = ['home', 'jog', 'move_to', 'qgl', 'z_tilt', 'mesh', 'motors_off'].includes(action)
   if (motion && raw['gcode_macro LOAD_WATCH']?.active === 1) {
     fail('Einlegehilfe ist scharf. Zuerst mit Fertig beenden.', 409)
   }
@@ -171,9 +188,11 @@ export function commandFor(input, raw) {
   }
 
   const tc = raw.toolchanger
+  const tcCount = detectToolCount(raw)
   if (
     motion &&
-    Array.from({ length: 6 }, (_, id) => raw[`tool T${id}`]?.detect_state === 1).filter(Boolean).length > 1
+    tc &&
+    Array.from({ length: tcCount }, (_, id) => raw[`tool T${id}`]?.detect_state === 1).filter(Boolean).length > 1
   ) {
     fail('Mehrere Werkzeuge melden eine Verbindung. Erkennung prüfen.', 409)
   }
@@ -234,20 +253,25 @@ export function commandFor(input, raw) {
     script = `SAVE_GCODE_STATE NAME=DOCKYARD_UI_MOVE\nG90\nG1 ${axis}${target} F${feed}\nM400\nRESTORE_GCODE_STATE NAME=DOCKYARD_UI_MOVE MOVE=0`
     label = `${axis} auf ${target} mm`
   } else if (action === 'temperature') {
+    const limits = capabilities(raw)
+    const allowedHeaters = [
+      'heater_bed',
+      ...Array.from({ length: limits.toolCount }, (_, id) => (id ? `extruder${id}` : 'extruder')),
+    ]
     if (
-      !['heater_bed', 'extruder', 'extruder1', 'extruder2', 'extruder3', 'extruder4', 'extruder5'].includes(input.heater) ||
+      !allowedHeaters.includes(input.heater) ||
       !finite(input.target) ||
       !Number.isInteger(input.target)
     ) {
       fail('Ungültige Temperaturangabe.')
     }
-    const limits = capabilities(raw)
     const i = input.heater === 'extruder' ? 0 : Number(input.heater.replace('extruder', ''))
     const max = input.heater === 'heater_bed' ? limits.bedMax : limits.toolMax[i]
     if (max == null) fail('Temperaturgrenze ist unbekannt.', 409)
     if (input.target < 0 || input.target > max) fail(`Zieltemperatur muss zwischen 0 und ${max} °C liegen.`)
     script = `SET_HEATER_TEMPERATURE HEATER=${input.heater} TARGET=${input.target}`
-    label = `${input.heater === 'heater_bed' ? 'Druckbett' : `T${i}`} auf ${input.target} °C`
+    const heaterLabel = input.heater === 'heater_bed' ? 'Druckbett' : limits.toolCount === 1 ? 'Extruder' : `T${i}`
+    label = `${heaterLabel} auf ${input.target} °C`
   } else if (action === 'heaters_off') {
     if (printState === 'printing') {
       fail('Cooldown ist während eines laufenden Drucks gesperrt. Bei einer Druckpause ist Cooldown verfügbar.', 409)
@@ -257,6 +281,12 @@ export function commandFor(input, raw) {
   } else if (action === 'motors_off') {
     script = 'DISABLE_MOTORS'
     label = 'Motoren lösen'
+  } else if (action === 'z_tilt') {
+    requireAxes('xyz')
+    if (!capabilities(raw).zTilt) fail('Z-Tilt ist nicht konfiguriert.', 409)
+    script = 'Z_TILT_ADJUST'
+    label = 'Z-Tilt ausrichten'
+    asyncJob = true
   } else {
     requireAxes('xyz')
     if (!capabilities(raw)[action]) fail('Diese Kalibrierung ist nicht konfiguriert.', 409)

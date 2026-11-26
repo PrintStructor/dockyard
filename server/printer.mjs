@@ -3,7 +3,7 @@ import https from 'node:https'
 import { createMaterialsReader } from './materials.mjs'
 import { createLiveFeed } from './live.mjs'
 import { normalizeStatus } from './status.mjs'
-import { temperatureHistory } from './temperature.mjs'
+import { temperatureHistory, inferExtruderCountFromStore } from './temperature.mjs'
 import { capabilities, commandFor, ControlError, isOriginWriteAllowed, sameOriginRequest } from './control.mjs'
 import { executeGcodeScript, executeMoonrakerRpc, AbortedCommandError } from './ws-rpc.mjs'
 import {
@@ -116,6 +116,7 @@ export function createPrinterRuntime({ store = defaultSettingsStore } = {}) {
   let configCache = null
   let effectObjects = []
   let fanObjects = []
+  let discoveredObjects = []
   let capabilityCache = null
   let capabilityAt = 0
   let gcodeFileSetCache = null
@@ -193,6 +194,7 @@ export function createPrinterRuntime({ store = defaultSettingsStore } = {}) {
       configCache = null
       effectObjects = []
       fanObjects = []
+      discoveredObjects = []
       capabilityCache = null
       capabilityAt = 0
       gcodeFileSetCache = null
@@ -394,7 +396,7 @@ function getControlState() {
 
 function cachedCapabilities(raw) {
   const fanSignature = Object.keys(raw)
-    .filter(name => /^fan_generic [A-Za-z0-9_]+$/.test(name))
+    .filter(name => name === 'fan' || /^fan_generic [A-Za-z0-9_]+$/.test(name))
     .sort()
     .join(',')
   const load = raw['gcode_macro _LOAD_SETTINGS']?.temp_default ?? null
@@ -460,10 +462,28 @@ async function readJson(req, max = 64_000) {
   }
 }
 
+function isDynamicPrinterObject(name) {
+  return (
+    objects.includes(name) ||
+    /^extruder([1-7])?$/.test(name) ||
+    /^tool T[0-7]$/.test(name) ||
+    name === 'z_tilt' ||
+    name === 'quad_gantry_level' ||
+    name === 'fan' ||
+    /^fan_generic [A-Za-z0-9_]+$/.test(name) ||
+    /^temperature_sensor .+$/.test(name) ||
+    /^temperature_fan .+$/.test(name) ||
+    /^filament_(?:switch|motion)_sensor .+$/.test(name) ||
+    /^neopixel [A-Za-z0-9_]+$/.test(name) ||
+    /^led_effect .+$/.test(name)
+  )
+}
+
 async function query(withConfig = false) {
   const epoch = runtimeEpoch
   const base = activeUrl()
   let nextFanObjects = fanObjects
+  let nextDiscovered = discoveredObjects
   if (withConfig) {
     const response = await fetchUpstream(`${base}/printer/objects/list`, { signal: AbortSignal.timeout(5000) })
     if (!response.ok) throw new Error('Druckerobjekte nicht erreichbar.')
@@ -471,10 +491,17 @@ async function query(withConfig = false) {
     if (epoch !== runtimeEpoch) {
       throw new ControlError('Der aktive Drucker wurde während der Abfrage gewechselt.', 409)
     }
-    nextFanObjects = (data.result?.objects ?? []).filter(name => /^fan_generic [A-Za-z0-9_]+$/.test(name))
+    const available = Array.isArray(data.result?.objects) ? data.result.objects : []
+    nextFanObjects = available.filter(name => /^fan_generic [A-Za-z0-9_]+$/.test(name))
+    nextDiscovered = available.filter(isDynamicPrinterObject)
     fanObjects = nextFanObjects
+    discoveredObjects = nextDiscovered
   }
-  const queryNames = [...objects, ...effectObjects, ...nextFanObjects].map(encodeURIComponent).join('&')
+  const queryList =
+    nextDiscovered.length > 0
+      ? Array.from(new Set([...nextDiscovered, ...effectObjects]))
+      : [...objects, ...effectObjects, ...nextFanObjects]
+  const queryNames = queryList.map(encodeURIComponent).join('&')
   const response = await fetchUpstream(
     `${base}/printer/objects/query?${queryNames}${withConfig ? '&configfile=settings' : ''}`,
     { signal: AbortSignal.timeout(5000) },
@@ -1058,13 +1085,14 @@ function printerMiddleware(req, res, next) {
           const wanted = [
             'bed_mesh',
             'quad_gantry_level',
+            'z_tilt',
             'beacon',
             'tools_calibrate',
             'save_variables',
             'gcode_macro _BEACON_BATCH_STATE',
             'toolchanger',
             'temperature_sensor beacon_coil',
-            ...Array.from({ length: 6 }, (_, i) => [i ? `extruder${i}` : 'extruder', `tool T${i}`]).flat(),
+            ...Array.from({ length: 8 }, (_, i) => [i ? `extruder${i}` : 'extruder', `tool T${i}`]).flat(),
           ].filter(name => availSet.size === 0 || availSet.has(name))
 
           const queryStr = [...wanted.map(encodeURIComponent), 'configfile=settings'].join('&')
@@ -1572,7 +1600,9 @@ function printerMiddleware(req, res, next) {
         const response = await fetchUpstream(`${printer}/server/temperature_store`, { signal: AbortSignal.timeout(5000) })
         if (!response.ok) throw new Error('Temperaturverlauf nicht erreichbar.')
         const data = await response.json()
-        return json(200, temperatureHistory(data.result))
+        const knownToolCount = capabilityCache?.toolCount ?? liveCapabilityRef.value?.toolCount ?? null
+        const toolCount = knownToolCount ?? inferExtruderCountFromStore(data.result)
+        return json(200, temperatureHistory(data.result, undefined, { toolCount }))
       }
 
       if (path === '/api/presets') {
@@ -1586,7 +1616,8 @@ function printerMiddleware(req, res, next) {
         ])
         const mainsail = mainsailRes?.ok ? (await mainsailRes.json().catch(() => null))?.result?.value : null
         const legacy = legacyRes?.ok ? (await legacyRes.json().catch(() => null))?.result?.value : null
-        return json(200, { presets: normalizePresets({ mainsail, legacy }) })
+        const toolCount = capabilityCache?.toolCount ?? liveCapabilityRef.value?.toolCount ?? 6
+        return json(200, { presets: normalizePresets({ mainsail, legacy, toolCount }) })
       }
 
       if (path === '/api/console') {

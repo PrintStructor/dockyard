@@ -13,6 +13,46 @@ function colorDataEqual(a, b) {
   return true
 }
 
+const SINGLE_TOOL_LED_PRIORITY = [
+  'sb_leds',
+  'stealthburner_leds',
+  'head_leds',
+  'toolhead_leds',
+  'nozzle_leds',
+  'rgb',
+]
+
+function matchesDynamicSubscription(name, baseObjects) {
+  return (
+    baseObjects.includes(name) ||
+    /^extruder([1-7])?$/.test(name) ||
+    /^tool T[0-7]$/.test(name) ||
+    name === 'z_tilt' ||
+    name === 'quad_gantry_level' ||
+    name === 'fan' ||
+    /^fan_generic [A-Za-z0-9_]+$/.test(name) ||
+    /^temperature_sensor .+$/.test(name) ||
+    /^temperature_fan .+$/.test(name) ||
+    /^filament_(?:switch|motion)_sensor .+$/.test(name) ||
+    /^neopixel [A-Za-z0-9_]+$/.test(name) ||
+    /^led_effect .+$/.test(name)
+  )
+}
+
+function selectPolledLedObjects(available) {
+  const etLeds = available.filter(name => /^neopixel et[0-7]_leds$/.test(name)).sort()
+  if (etLeds.length > 0) return etLeds
+
+  const neopixels = available.filter(name => /^neopixel [A-Za-z0-9_]+$/.test(name))
+  if (!neopixels.length) return []
+
+  for (const preferred of SINGLE_TOOL_LED_PRIORITY) {
+    const match = neopixels.find(name => name.slice(9).toLowerCase() === preferred)
+    if (match) return [match]
+  }
+  return [neopixels[0]]
+}
+
 export function createLiveFeed({
   printer,
   getPrinter,
@@ -30,16 +70,20 @@ export function createLiveFeed({
   let retry = null
   let tick = null
   let raw = {}
+  let polledLedObjects = []
   let ready = false
   let lastMessage = 0
   let lastEmitAt = 0
   let lastLedChangeAt = 0
   let ledPending = 0
+  let keepalivePending = 0
   let tickDelay = ledPollMs
 
   const isLedActive = (now = Date.now()) => lastLedChangeAt > 0 && now - lastLedChangeAt < ledActiveWindowMs
-  const currentPollDelay = (now = Date.now()) =>
-    Math.min(isLedActive(now) ? activeLedPollMs : ledPollMs, pingIntervalMs)
+  const currentPollDelay = (now = Date.now()) => {
+    if (ready && polledLedObjects.length === 0) return Math.min(pingIntervalMs, 1000)
+    return Math.min(isLedActive(now) ? activeLedPollMs : ledPollMs, pingIntervalMs)
+  }
 
   const emit = (event, value) => {
     const message = `event: ${event}\ndata: ${JSON.stringify(value)}\n\n`
@@ -87,7 +131,11 @@ export function createLiveFeed({
     tick = setTimeout(() => {
       if (ws !== socket) return
       const now = Date.now()
-      if (now - lastMessage > 7000 || (ledPending && now - ledPending > 5000)) {
+      if (
+        now - lastMessage > 7000 ||
+        (ledPending && now - ledPending > 5000) ||
+        (keepalivePending && now - keepalivePending > 5000)
+      ) {
         socket.close()
         return
       }
@@ -97,14 +145,17 @@ export function createLiveFeed({
       }
       // This installed led_effect mutates color_data in place: subscriptions don't
       // publish its animation frames. Poll adaptively up to ~12 Hz while LEDs animate,
-      // relaxing to 4 Hz when static, and emit only on diff.
-      if (ready && !ledPending) {
+      // relaxing to 4 Hz when static, and emit only on diff. Skip completely when no LEDs exist.
+      if (ready && !ledPending && polledLedObjects.length > 0) {
         ledPending = now
         send(
           3,
           'printer.objects.query',
-          Object.fromEntries(Array.from({ length: 6 }, (_, i) => [`neopixel et${i}_leds`, ['color_data']])),
+          Object.fromEntries(polledLedObjects.map(name => [name, ['color_data']])),
         )
+      } else if (ready && polledLedObjects.length === 0 && !keepalivePending && now - lastMessage > 3500) {
+        keepalivePending = now
+        send(4, 'server.info')
       }
       scheduleTick(socket)
     }, delay)
@@ -113,11 +164,13 @@ export function createLiveFeed({
   function connect() {
     if (!clients.size || ws) return
     raw = {}
+    polledLedObjects = []
     ready = false
     lastMessage = Date.now()
     lastEmitAt = 0
     lastLedChangeAt = 0
     ledPending = 0
+    keepalivePending = 0
 
     const targetPrinter = resolvePrinter()
     const socket = new WebSocketImpl(targetPrinter.replace(/^http/, 'ws') + '/websocket')
@@ -135,10 +188,9 @@ export function createLiveFeed({
           return
         }
         if (data.id === 1) {
-          const available = data.result.objects
-          const selected = available.filter(
-            name => baseObjects.includes(name) || name.startsWith('led_effect ') || name.startsWith('fan_generic '),
-          )
+          const available = Array.isArray(data.result?.objects) ? data.result.objects : []
+          const selected = available.filter(name => matchesDynamicSubscription(name, baseObjects))
+          polledLedObjects = selectPolledLedObjects(available)
           send(
             2,
             'printer.objects.subscribe',
@@ -148,6 +200,9 @@ export function createLiveFeed({
           raw = data.result.status
           ready = true
           emitStatus()
+          if (polledLedObjects.length === 0) {
+            scheduleTick(socket)
+          }
         } else if (data.id === 3) {
           ledPending = 0
           const wasActive = isLedActive()
@@ -157,6 +212,8 @@ export function createLiveFeed({
               scheduleTick(socket, activeLedPollMs)
             }
           }
+        } else if (data.id === 4) {
+          keepalivePending = 0
         } else if (data.method === 'notify_status_update') {
           const wasActive = isLedActive()
           if (merge(data.params?.[0]) && ready) {
@@ -218,6 +275,8 @@ export function createLiveFeed({
     old?.close()
     ready = false
     raw = {}
+    polledLedObjects = []
+    keepalivePending = 0
   }
 
   return {

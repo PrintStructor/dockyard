@@ -325,3 +325,84 @@ test('live feed reconnects dynamically via getPrinter and broadcasts settings ev
     feed.close()
   }
 })
+
+test('live feed polls discovered sb_leds on single-tool and skips LED polling when printer has zero neopixels', async () => {
+  const runScenario = async objectsList => {
+    const ledQueries = []
+    class SingleToolWS {
+      constructor() {
+        this.readyState = 1
+        setImmediate(() => this.onopen?.())
+      }
+      send(payload) {
+        const msg = JSON.parse(payload)
+        if (msg.id === 1) {
+          setImmediate(() =>
+            this.onmessage?.({
+              data: JSON.stringify({ jsonrpc: '2.0', id: 1, result: { objects: objectsList } }),
+            }),
+          )
+        } else if (msg.id === 2) {
+          setImmediate(() =>
+            this.onmessage?.({
+              data: JSON.stringify({
+                jsonrpc: '2.0',
+                id: 2,
+                result: { status: { webhooks: { state: 'ready' }, extruder: { temperature: 25 } } },
+              }),
+            }),
+          )
+        } else if (msg.id === 3) {
+          ledQueries.push(Object.keys(msg.params?.objects ?? {}))
+          setImmediate(() =>
+            this.onmessage?.({
+              data: JSON.stringify({ jsonrpc: '2.0', id: 3, result: { status: {} } }),
+            }),
+          )
+        }
+      }
+      close() {
+        this.readyState = 3
+      }
+    }
+
+    const events = []
+    const feed = createLiveFeed({
+      printer: 'http://127.0.0.1:1978',
+      baseObjects: ['webhooks', 'extruder'],
+      snapshot: raw => ({ state: raw.webhooks?.state }),
+      WebSocketImpl: SingleToolWS,
+      ledPollMs: 30,
+      pingIntervalMs: 70,
+    })
+    const fakeRes = {
+      destroyed: false,
+      writableLength: 0,
+      setHeader() {},
+      flushHeaders() {},
+      write(chunk) {
+        const match = chunk.match(/^event: (\w+)\ndata: (.+)\n\n$/s)
+        if (match) events.push({ event: match[1], data: JSON.parse(match[2]) })
+      },
+      end() {},
+      destroy() {},
+      on() {},
+    }
+    try {
+      feed.handle({}, fakeRes)
+      await waitForCondition(() => events.some(e => e.event === 'ping'))
+      return { events, ledQueries }
+    } finally {
+      feed.close()
+    }
+  }
+
+  const withSb = await runScenario(['webhooks', 'extruder', 'neopixel sb_leds'])
+  assert.ok(withSb.ledQueries.length >= 1)
+  assert.deepEqual(withSb.ledQueries[0], ['neopixel sb_leds'])
+
+  const withoutLeds = await runScenario(['webhooks', 'extruder', 'temperature_sensor skr_pico'])
+  assert.ok(withoutLeds.events.some(e => e.event === 'status'))
+  assert.ok(withoutLeds.events.some(e => e.event === 'ping'))
+  assert.equal(withoutLeds.ledQueries.length, 0)
+})

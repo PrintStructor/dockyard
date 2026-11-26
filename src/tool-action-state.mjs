@@ -1,12 +1,13 @@
 export function mountedToolId(status) {
   if (!status) return undefined
-  if (Number.isInteger(status.active) && status.active >= 0 && status.active <= 5) return status.active
+  const maxTool = Math.max(0, (status.toolCount ?? 6) - 1)
+  if (Number.isInteger(status.active) && status.active >= 0 && status.active <= maxTool) return status.active
   if (
     status.active == null &&
     !status.detectionConflict &&
     Number.isInteger(status.detected) &&
     status.detected >= 0 &&
-    status.detected <= 5
+    status.detected <= maxTool
   ) {
     return status.detected
   }
@@ -29,13 +30,34 @@ export function toolActionReason(status, action, tool, online = true, pending = 
     return 'Während eines Drucks, einer Pause oder laufender Befehle gesperrt.'
   }
   if (status.loadWatchActive) return 'Einlegehilfe ist scharf. Zuerst mit „Fertig“ beenden.'
+
+  const isToolchanger = status.isToolchanger ?? status.capabilities?.isToolchanger ?? true
+  const maxTool = Math.max(0, (status.toolCount ?? status.capabilities?.toolCount ?? 6) - 1)
+
+  if (!isToolchanger) {
+    if (!['load', 'unload', 'clean', 'purge'].includes(action)) {
+      return 'Nur für Toolchanger verfügbar.'
+    }
+    if (!status.capabilities?.toolActions?.[action]) {
+      return 'Das benötigte Makro ist nicht vollständig konfiguriert.'
+    }
+    if (!Number.isInteger(tool) || tool < 0 || tool > maxTool) return 'Ungültiges Werkzeug.'
+    if (
+      (action === 'clean' || action === 'purge') &&
+      ![...'xyz'].every(axis => status.homedAxes?.includes(axis))
+    ) {
+      return 'Zuerst alle Achsen homen.'
+    }
+    return ''
+  }
+
   if (![...'xyz'].every(axis => status.homedAxes?.includes(axis))) return 'Zuerst alle Achsen homen.'
   if (!status.hasDetection || status.detectionMismatch || status.detectionConflict) return 'Werkzeugerkennung prüfen.'
   if (status.toolchangerState !== 'ready') return 'Toolchanger ist nicht bereit.'
   if (!status.capabilities?.toolActions?.[action]) return 'Das benötigte Makro ist nicht vollständig konfiguriert.'
 
   const bulk = action.endsWith('_all')
-  if (!bulk && (!Number.isInteger(tool) || tool < 0 || tool > 5)) return 'Ungültiges Werkzeug.'
+  if (!bulk && (!Number.isInteger(tool) || tool < 0 || tool > maxTool)) return 'Ungültiges Werkzeug.'
   if (action === 'park' && status.active !== tool) return 'Nur das aufgenommene Werkzeug kann geparkt werden.'
   if (action === 'pickup' && (status.active != null || status.detected != null)) {
     return 'Zuerst das aufgenommene Werkzeug parken.'

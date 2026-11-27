@@ -319,3 +319,213 @@ sys.stdout.write(base64.b64encode(glb).decode('ascii'))
     await rm(tmpAddIns, { recursive: true, force: true })
   }
 })
+
+test('DockyardExport native USDZ/USDA and 3MF parsers preserve PBR colors, GeomSubsets, live tags and micro-filtering', () => {
+  const pyEnv = { ...process.env, PYTHONDONTWRITEBYTECODE: '1' }
+  const pyCode = `
+import importlib.util, os, sys, tempfile, zipfile, base64, json
+spec = importlib.util.spec_from_file_location('dockyard_addin', sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+with tempfile.TemporaryDirectory() as tmp:
+    # 1. Synthetic Fusion-format .usda with PBR metals, glass, multi-color GeomSubset,
+    #    mirrored instance, live DOCKYARD role tag, and sub-millimeter PCB micro-part.
+    usda_path = os.path.join(tmp, 'sample.usda')
+    open(usda_path, 'w', encoding='utf-8').write("""#usda 1.0
+(
+    defaultPrim = "sample"
+    metersPerUnit = 0.001
+    upAxis = "Y"
+)
+def Xform "sample"
+{
+    def Material "XID_PlasticMatteBlack_AAA"
+    {
+        def Shader "shader"
+        {
+            color3f inputs:diffuseColor = (0.0998528, 0.0998528, 0.0998528)
+            float inputs:metallic = 0
+            float inputs:opacity = 1
+            float inputs:roughness = 0.7
+        }
+    }
+    def Material "XID_SteelSatin_BBB"
+    {
+        def Shader "shader"
+        {
+            color3f inputs:diffuseColor = (0.62621, 0.62621, 0.62621)
+            float inputs:metallic = 1
+            float inputs:opacity = 1
+            float inputs:roughness = 0.26
+        }
+    }
+    def Material "XID_GlassClear_CCC"
+    {
+        def Shader "shader"
+        {
+            color3f inputs:diffuseColor = (0.8, 0.9, 0.95)
+            float inputs:metallic = 0
+            float inputs:opacity = 0.2
+            float inputs:roughness = 0.05
+        }
+    }
+    def Material "XID_VORONACCENT_DDD"
+    {
+        def Shader "shader"
+        {
+            color3f inputs:diffuseColor = (0.380392, 1, 0)
+            float inputs:metallic = 0
+            float inputs:opacity = 1
+            float inputs:roughness = 0.3
+        }
+    }
+    def Xform "MeshInstance_0" (
+        prepend references = </MeshPrimDef_0>
+    )
+    {
+        matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1) )
+        over "Body1"
+        {
+            rel material:binding = </sample/XID_PlasticMatteBlack_AAA>
+            over "subset_steel"
+            {
+                rel material:binding = </sample/XID_SteelSatin_BBB>
+            }
+        }
+    }
+    def Xform "MeshInstance_1" (
+        prepend references = </MeshPrimDef_1>
+    )
+    {
+        matrix4d xformOp:transform = ( (-1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (50, 10, 0, 1) )
+        over "BodyGlass"
+        {
+            rel material:binding = </sample/XID_GlassClear_CCC>
+        }
+    }
+    def Xform "MeshInstance_2" (
+        prepend references = </MeshPrimDef_Micro>
+    )
+    {
+        matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1) )
+        over "Tiny"
+        {
+            rel material:binding = </sample/XID_PlasticMatteBlack_AAA>
+        }
+    }
+    def Xform "MeshInstance_3" (
+        prepend references = </MeshPrimDef_Micro>
+    )
+    {
+        matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (10, 0, 0, 1) )
+        over "Tiny"
+        {
+            rel material:binding = </sample/XID_VORONACCENT_DDD>
+        }
+    }
+}
+over Xform "MeshPrimDef_0"
+{
+    def Mesh "Body1"
+    {
+        float3[] extent = [(0, 0, 0), (2, 2, 2)]
+        int[] faceVertexCounts = [3, 3]
+        int[] faceVertexIndices = [0, 1, 2, 0, 2, 3]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1), (0, 0, 1)]
+        point3f[] points = [(0, 0, 0), (2, 0, 0), (2, 2, 0), (0, 2, 0)]
+        matrix4d xformOp:transform = ( (10, 0, 0, 0), (0, 10, 0, 0), (0, 0, 10, 0), (0, 0, 0, 1) )
+        def GeomSubset "subset_steel"
+        {
+            int[] indices = [1]
+        }
+    }
+}
+over Xform "MeshPrimDef_1"
+{
+    def Mesh "BodyGlass"
+    {
+        float3[] extent = [(0, 0, 0), (2, 2, 0)]
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        normal3f[] normals = [(0, 0, 1), (0, 0, 1), (0, 0, 1)]
+        point3f[] points = [(0, 0, 0), (2, 0, 0), (0, 2, 0)]
+        matrix4d xformOp:transform = ( (10, 0, 0, 0), (0, 10, 0, 0), (0, 0, 10, 0), (0, 0, 0, 1) )
+    }
+}
+over Xform "MeshPrimDef_Micro"
+{
+    def Mesh "Tiny"
+    {
+        float3[] extent = [(0, 0, 0), (0.01, 0.01, 0.01)]
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        normal3f[] normals = [(0, 1, 0), (0, 1, 0), (0, 1, 0)]
+        point3f[] points = [(0, 0, 0), (0.01, 0, 0), (0, 0.01, 0)]
+        matrix4d xformOp:transform = ( (10, 0, 0, 0), (0, 10, 0, 0), (0, 0, 10, 0), (0, 0, 0, 1) )
+    }
+}
+""")
+
+    groups, tris, seen_mats, skipped = mod.parse_usda_to_mesh_groups(usda_path, min_diag_m=0.0025)
+    assert skipped == 1, f'expected 1 micro body skipped, got {skipped}'
+    assert tris == 4, f'expected 4 tris (black + steel + glass + tiny accent), got {tris}'
+    assert len(groups) == 4, [(g['name'], g['color'], g['metallic']) for g in groups]
+
+    # Verify live VORON_ACCENT survived micro-filter, metallic steel is metallic, glass is translucent, black is dark
+    by_role = {g['role']: g for g in groups}
+    assert 'accent' in by_role, by_role.keys()
+    assert any(g['metallic'] >= 0.8 for g in groups), groups
+    assert any(g['color'][3] < 0.3 for g in groups), groups
+    assert any(g['color'][0] < 0.02 and g['color'][1] < 0.02 and g['color'][2] < 0.02 for g in groups), groups
+
+    glb_usd = mod.build_glb_bytes(groups, source_name='USD Sample')
+
+    # 2. Synthetic Fusion-format .3mf with per-object & per-triangle colors
+    tmf_path = os.path.join(tmp, 'sample.3mf')
+    model_xml = """<?xml version="1.0" encoding="utf-8"?>
+<model xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02" unit="millimeter" xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">
+  <resources>
+    <m:colorgroup id="2"><m:color color="#222222FF"/><m:color color="#D0D0D0FF"/></m:colorgroup>
+    <object id="1" name="Stepper" type="model" pid="2" pindex="0">
+      <mesh>
+        <vertices>
+          <vertex x="0" y="0" z="0"/>
+          <vertex x="20" y="0" z="0"/>
+          <vertex x="20" y="20" z="0"/>
+          <vertex x="0" y="20" z="10"/>
+        </vertices>
+        <triangles>
+          <triangle v1="0" v2="1" v3="2"/>
+          <triangle v1="0" v2="2" v3="3" pid="2" p1="1"/>
+        </triangles>
+      </mesh>
+    </object>
+  </resources>
+  <build><item objectid="1"/></build>
+</model>"""
+    with zipfile.ZipFile(tmf_path, 'w') as zf:
+        zf.writestr('3D/3dmodel.model', model_xml)
+
+    g3, t3 = mod.parse_3mf_to_mesh_groups(tmf_path)
+    assert t3 == 2 and len(g3) == 2, (t3, len(g3))
+    glb_3mf = mod.build_glb_bytes(g3, source_name='3MF Sample')
+
+    sys.stdout.write(json.dumps({
+        'usd': base64.b64encode(glb_usd).decode('ascii'),
+        'tmf': base64.b64encode(glb_3mf).decode('ascii'),
+    }))
+`
+  const out = JSON.parse(execFileSync('python3', ['-c', pyCode, FUSION_ADDIN_PY], { encoding: 'utf8', env: pyEnv }))
+  const usdBuf = Buffer.from(out.usd, 'base64')
+  const tmfBuf = Buffer.from(out.tmf, 'base64')
+  const usdInfo = validateGlbBuffer(usdBuf)
+  const tmfInfo = validateGlbBuffer(tmfBuf)
+  assert.equal(usdInfo.assetVersion, '2.0')
+  assert.equal(tmfInfo.assetVersion, '2.0')
+
+  const gltf = JSON.parse(usdBuf.subarray(20, 20 + usdInfo.jsonChunkLength).toString('utf8'))
+  assert.ok(gltf.nodes.some(n => n.name === 'VORON_ACCENT'))
+  assert.ok(gltf.materials.some(m => m.alphaMode === 'BLEND'))
+  assert.ok(gltf.materials.some(m => m.pbrMetallicRoughness.metallicFactor >= 0.8))
+})

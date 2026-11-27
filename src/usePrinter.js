@@ -1,10 +1,26 @@
 import { ref, onMounted, onUnmounted } from 'vue'
 
-export function usePrinter({ onConsole, onUpdate, onSettings, onPrompt, onReconnect } = {}) {
+export function usePrinter({ onConsole, onUpdate, onSettings, onPrompt, onReconnect, printerId = '', lite = false } = {}) {
   const status = ref(null)
   const connection = ref('connecting')
   const error = ref('')
   const updating = ref(false)
+
+  const resolvePrinterId = () => {
+    const val = typeof printerId === 'function' ? printerId() : printerId && typeof printerId === 'object' ? printerId.value : printerId
+    return typeof val === 'string' ? val.trim() : ''
+  }
+
+  const buildUrl = (basePath, extraParams = {}) => {
+    const params = new URLSearchParams()
+    const pid = resolvePrinterId()
+    if (pid) params.set('printer', pid)
+    for (const [k, v] of Object.entries(extraParams)) {
+      if (v != null && v !== '') params.set(k, String(v))
+    }
+    const qs = params.toString()
+    return qs ? `${basePath}?${qs}` : basePath
+  }
 
   let timer = null
   let controller = null
@@ -35,7 +51,7 @@ export function usePrinter({ onConsole, onUpdate, onSettings, onPrompt, onReconn
     const timeout = setTimeout(() => controller.abort(), 7000)
     const started = Date.now()
     try {
-      const response = await fetch('/api/status', { signal: controller.signal })
+      const response = await fetch(buildUrl('/api/status'), { signal: controller.signal })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error)
       if (!stopped && liveAt < started) accept(data)
@@ -49,7 +65,7 @@ export function usePrinter({ onConsole, onUpdate, onSettings, onPrompt, onReconn
 
   function connect() {
     events?.close()
-    events = new EventSource('/api/events')
+    events = new EventSource(buildUrl('/api/events', lite ? { lite: '1' } : {}))
     events.addEventListener('status', event => {
       liveAt = Date.now()
       accept(JSON.parse(event.data))
@@ -127,13 +143,14 @@ export function usePrinter({ onConsole, onUpdate, onSettings, onPrompt, onReconn
     document.removeEventListener('visibilitychange', visibility)
   })
 
-  function resetForPrinterSwitch() {
+  function resetForPrinterSwitch({ reconnectSse = false } = {}) {
     controller?.abort()
     wasOnline = false
     liveAt = 0
     status.value = null
     connection.value = 'connecting'
     error.value = ''
+    if (reconnectSse) connect()
     refresh()
   }
 

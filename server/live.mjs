@@ -164,9 +164,10 @@ export function createLiveFeed({
   activeLedPollMs = Math.min(ledPollMs, 85),
   ledActiveWindowMs = 2000,
   pingIntervalMs = 2000,
+  liteThrottleMs = 500,
 }) {
   const resolvePrinter = () => (typeof getPrinter === 'function' ? getPrinter() : printer)
-  const clients = new Set()
+  const clients = new Map()
   let ws = null
   let retry = null
   let tick = null
@@ -181,27 +182,77 @@ export function createLiveFeed({
   let tickDelay = ledPollMs
   const promptParser = createPromptParser()
 
+  const hasFullClient = () => {
+    for (const meta of clients.values()) {
+      if (!meta.lite) return true
+    }
+    return false
+  }
+
   const isLedActive = (now = Date.now()) => lastLedChangeAt > 0 && now - lastLedChangeAt < ledActiveWindowMs
   const currentPollDelay = (now = Date.now()) => {
-    if (ready && polledLedObjects.length === 0) return Math.min(pingIntervalMs, 1000)
+    if (ready && (polledLedObjects.length === 0 || !hasFullClient())) return Math.min(pingIntervalMs, 1000)
     return Math.min(isLedActive(now) ? activeLedPollMs : ledPollMs, pingIntervalMs)
+  }
+
+  const dropClient = res => {
+    const meta = clients.get(res)
+    if (meta?.trailingTimer) clearTimeout(meta.trailingTimer)
+    clients.delete(res)
+  }
+
+  const writeToClient = (res, message) => {
+    if (res.destroyed || res.writableLength > 128000) {
+      res.destroy()
+      dropClient(res)
+      return false
+    }
+    res.write(message)
+    return true
   }
 
   const emit = (event, value) => {
     const message = `event: ${event}\ndata: ${JSON.stringify(value)}\n\n`
     lastEmitAt = Date.now()
-    for (const res of clients) {
-      if (res.destroyed || res.writableLength > 128000) {
-        res.destroy()
-        clients.delete(res)
-      } else {
-        res.write(message)
-      }
+    for (const res of [...clients.keys()]) {
+      writeToClient(res, message)
     }
   }
 
-  const emitStatus = () => {
-    if (ready && clients.size) emit('status', snapshot(raw))
+  const emitStatus = ({ force = false, ledOnly = false } = {}) => {
+    if (!ready || !clients.size) return
+    const now = Date.now()
+    let serialized = null
+    const getMessage = () => {
+      if (serialized === null) serialized = `event: status\ndata: ${JSON.stringify(snapshot(raw))}\n\n`
+      return serialized
+    }
+    for (const [res, meta] of [...clients.entries()]) {
+      if (!meta.lite) {
+        lastEmitAt = now
+        writeToClient(res, getMessage())
+        continue
+      }
+      if (ledOnly && !force) continue
+      const elapsed = now - meta.lastStatusAt
+      if (force || elapsed >= liteThrottleMs) {
+        if (meta.trailingTimer) {
+          clearTimeout(meta.trailingTimer)
+          meta.trailingTimer = null
+        }
+        meta.lastStatusAt = now
+        lastEmitAt = now
+        writeToClient(res, getMessage())
+      } else if (!meta.trailingTimer) {
+        meta.trailingTimer = setTimeout(() => {
+          meta.trailingTimer = null
+          if (!ready || !clients.has(res)) return
+          meta.lastStatusAt = Date.now()
+          lastEmitAt = meta.lastStatusAt
+          writeToClient(res, `event: status\ndata: ${JSON.stringify(snapshot(raw))}\n\n`)
+        }, Math.max(20, liteThrottleMs - elapsed))
+      }
+    }
   }
 
   const send = (id, method, objects) =>
@@ -247,15 +298,16 @@ export function createLiveFeed({
       }
       // This installed led_effect mutates color_data in place: subscriptions don't
       // publish its animation frames. Poll adaptively up to ~12 Hz while LEDs animate,
-      // relaxing to 4 Hz when static, and emit only on diff. Skip completely when no LEDs exist.
-      if (ready && !ledPending && polledLedObjects.length > 0) {
+      // relaxing to 4 Hz when static, and emit only on diff. Skip completely when no LEDs exist
+      // or when only ?lite=1 touchscreens are connected.
+      if (ready && !ledPending && polledLedObjects.length > 0 && hasFullClient()) {
         ledPending = now
         send(
           3,
           'printer.objects.query',
           Object.fromEntries(polledLedObjects.map(name => [name, ['color_data']])),
         )
-      } else if (ready && polledLedObjects.length === 0 && !keepalivePending && now - lastMessage > 3500) {
+      } else if (ready && (polledLedObjects.length === 0 || !hasFullClient()) && !keepalivePending && now - lastMessage > 3500) {
         keepalivePending = now
         send(4, 'server.info')
       }
@@ -319,7 +371,7 @@ export function createLiveFeed({
           ledPending = 0
           const wasActive = isLedActive()
           if (merge(data.result.status) && ready) {
-            emitStatus()
+            emitStatus({ ledOnly: true })
             if (!wasActive && isLedActive() && tickDelay > activeLedPollMs) {
               scheduleTick(socket, activeLedPollMs)
             }
@@ -401,17 +453,30 @@ export function createLiveFeed({
 
   return {
     handle(req, res) {
+      let lite = false
+      try {
+        if (req?.url) {
+          const parsed = new URL(req.url, 'http://localhost')
+          lite = parsed.searchParams.get('lite') === '1'
+        }
+      } catch {
+        lite = false
+      }
       res.setHeader('Content-Type', 'text/event-stream')
       res.setHeader('X-Accel-Buffering', 'no')
       res.flushHeaders()
       res.write('retry: 2500\n\n')
-      clients.add(res)
-      if (ready) res.write(`event: status\ndata: ${JSON.stringify(snapshot(raw))}\n\n`)
+      const meta = { lite, lastStatusAt: 0, trailingTimer: null }
+      clients.set(res, meta)
+      if (ready) {
+        meta.lastStatusAt = Date.now()
+        res.write(`event: status\ndata: ${JSON.stringify(snapshot(raw))}\n\n`)
+      }
       const activePrompt = promptParser.getActive()
       if (activePrompt?.open) res.write(`event: prompt\ndata: ${JSON.stringify(activePrompt)}\n\n`)
       connect()
       res.on('close', () => {
-        clients.delete(res)
+        dropClient(res)
         if (!clients.size) close()
       })
     },
@@ -423,7 +488,7 @@ export function createLiveFeed({
       if (cleared && clients.size) emit('prompt', cleared)
     },
     notify() {
-      emitStatus()
+      emitStatus({ force: true })
     },
     emitConsole(entry) {
       if (clients.size && entry?.message) emit('console', entry)
@@ -442,7 +507,10 @@ export function createLiveFeed({
       }
     },
     close() {
-      for (const res of clients) res.end()
+      for (const [res, meta] of [...clients.entries()]) {
+        if (meta?.trailingTimer) clearTimeout(meta.trailingTimer)
+        res.end()
+      }
       clients.clear()
       close()
     },

@@ -17,6 +17,7 @@ import {
   Upload,
   Lock,
   RefreshCw,
+  Monitor,
 } from '@lucide/vue'
 import { t, language, setLanguage } from '../i18n.mjs'
 import {
@@ -42,6 +43,7 @@ import {
   normalizeAccentColor,
 } from '../model-config.mjs'
 import { useConfigEditor } from '../useConfigEditor.js'
+import { buildTouchKioskUrl } from '../touch/touch-config.mjs'
 import CockpitSelect from './CockpitSelect.vue'
 
 const props = defineProps({
@@ -854,6 +856,32 @@ function confirmDirtyConfigProceed() {
   }
 }
 
+const copiedKioskId = ref('')
+let copiedKioskTimer = null
+
+function touchPreviewUrl(printerId) {
+  return buildTouchKioskUrl({ printerId })
+}
+
+function touchKioskFullUrl(printerId) {
+  const origin = typeof globalThis.location !== 'undefined' ? globalThis.location.origin : ''
+  return buildTouchKioskUrl({ origin, printerId, locked: true, hideCursor: true })
+}
+
+async function copyKioskUrl(printerId) {
+  const url = touchKioskFullUrl(printerId)
+  try {
+    await navigator.clipboard.writeText(url)
+    copiedKioskId.value = printerId
+    clearTimeout(copiedKioskTimer)
+    copiedKioskTimer = setTimeout(() => {
+      copiedKioskId.value = ''
+    }, 2500)
+  } catch {
+    // Fallback ignored if clipboard unavailable over plain HTTP
+  }
+}
+
 function discardDraft() {
   cloneDraftFromStore()
   saveFeedback.value = null
@@ -1523,6 +1551,49 @@ watch(
                   align="right"
                   @update:model-value="setDefaultTab"
                 />
+              </div>
+            </div>
+
+            <div class="settings-card">
+              <div class="settings-card-head">
+                <h4>{{ t('800×480 Drucker-Touchscreen (KlipperScreen-Ersatz)') }}</h4>
+                <a
+                  class="subtle-button"
+                  :href="touchPreviewUrl(settingsStore.activePrinter.value?.id ?? '')"
+                >
+                  <Monitor :size="14" />{{ t('Touch-HMI öffnen') }}
+                </a>
+              </div>
+              <p class="settings-hint">
+                {{
+                  t(
+                    'Eigenständige, leichtgewichtige 5"-Touch-Oberfläche ohne 3D-Engine. Jeder Drucker erhält eine feste Kiosk-URL (?printer=…) und bleibt von Druckerwechseln am Desktop unabhängig.',
+                  )
+                }}
+              </p>
+              <div class="settings-kiosk-list">
+                <div
+                  v-for="printer in settingsStore.printers.value"
+                  :key="printer.id"
+                  class="settings-kiosk-row"
+                >
+                  <div class="settings-kiosk-meta">
+                    <strong>{{ printer.name || printer.id }}</strong>
+                    <code class="settings-mono">{{ touchKioskFullUrl(printer.id) }}</code>
+                  </div>
+                  <div class="settings-inline-buttons">
+                    <a class="subtle-button" :href="touchPreviewUrl(printer.id)">
+                      {{ t('Öffnen') }}
+                    </a>
+                    <button
+                      type="button"
+                      class="subtle-button"
+                      @click="copyKioskUrl(printer.id)"
+                    >
+                      {{ copiedKioskId === printer.id ? t('Kopiert') : t('Kiosk-URL kopieren') }}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
           </section>

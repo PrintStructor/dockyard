@@ -1735,3 +1735,8 @@ input[type=range],input[type=checkbox]{accent-color:var(--accent)}
 .app-shell.display-mode .tuning-pause-input input,
 .app-shell.display-mode .tc-filament-toggle,
 .app-shell.display-mode .print-dir-delete-btn{min-height:44px}
+
+.settings-kiosk-list{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.settings-kiosk-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding:10px 12px;border:1px solid var(--line-subtle);border-radius:var(--radius-sm);background:var(--surface-deep)}
+.settings-kiosk-meta{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}
+.settings-kiosk-meta code{font-size:11px;color:var(--muted);overflow-wrap:anywhere}

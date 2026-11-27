@@ -1,12 +1,17 @@
 import { ref } from 'vue'
 
-export function useControls(refresh) {
+export function useControls(refresh, { printerId = '' } = {}) {
   const pending = ref(false)
   const stopping = ref(false)
   const feedback = ref(null)
   let lastResultId = null
   let initialized = false
   let dismissTimer = null
+
+  const resolvePrinterId = () => {
+    const val = typeof printerId === 'function' ? printerId() : printerId && typeof printerId === 'object' ? printerId.value : printerId
+    return typeof val === 'string' ? val.trim() : ''
+  }
 
   function setFeedback(next, { autoDismiss = false } = {}) {
     if (dismissTimer) {
@@ -49,12 +54,16 @@ export function useControls(refresh) {
 
     try {
       const timeoutMs = stop ? 12_000 : command.action === 'console' ? 610_000 : 60_000
-      const response = await fetch('/api/control', {
+      const pid = resolvePrinterId()
+      const controlUrl = pid ? `/api/control?printer=${encodeURIComponent(pid)}` : '/api/control'
+      const headers = {
+        'Content-Type': 'application/json',
+        'X-Cockpit-Request': '1',
+      }
+      if (pid) headers['X-Dockyard-Printer'] = pid
+      const response = await fetch(controlUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Cockpit-Request': '1',
-        },
+        headers,
         body: JSON.stringify(command),
         signal: AbortSignal.timeout(timeoutMs),
       })

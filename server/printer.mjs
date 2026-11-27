@@ -123,10 +123,40 @@ export function createPrinterRuntime({
   store = defaultSettingsStore,
   modelStore = defaultModelStore,
   fetchImpl = defaultFetchUpstream,
+  pinnedPrinterId = null,
 } = {}) {
   const fetchUpstream = fetchImpl
-  const getActive = () => store.getActivePrinter()
+  const getActive = () => {
+    if (pinnedPrinterId) {
+      const found = store.getSettings().printers.find(p => p.id === pinnedPrinterId)
+      if (found) return found
+    }
+    return store.getActivePrinter()
+  }
   const activeUrl = () => getActive().url
+  const scopedRuntimes = pinnedPrinterId ? null : new Map()
+
+  function getScopedRuntime(printerId) {
+    if (!scopedRuntimes) return null
+    const id = String(printerId ?? '').trim().toLowerCase()
+    if (!id) return null
+    const profile = store.getSettings().printers.find(p => p.id === id)
+    if (!profile) return null
+    let entry = scopedRuntimes.get(id)
+    if (entry && entry.url !== profile.url) {
+      entry.runtime.closeLiveFeed()
+      scopedRuntimes.delete(id)
+      entry = null
+    }
+    if (!entry) {
+      entry = {
+        url: profile.url,
+        runtime: createPrinterRuntime({ store, modelStore, fetchImpl, pinnedPrinterId: id }),
+      }
+      scopedRuntimes.set(id, entry)
+    }
+    return entry.runtime
+  }
 
   function enrichPublicSettings(publicSettings) {
     if (!publicSettings || typeof publicSettings !== 'object') return publicSettings
@@ -239,6 +269,27 @@ export function createPrinterRuntime({
     } else {
       live.emitSettings({ ...publicSettings, activePrinterChanged: false, printerUrlChanged: false })
       live.notify()
+    }
+    if (scopedRuntimes) {
+      const currentPrinters = new Map(store.getSettings().printers.map(p => [p.id, p]))
+      for (const [id, entry] of [...scopedRuntimes.entries()]) {
+        const profile = currentPrinters.get(id)
+        if (!profile) {
+          entry.runtime.closeLiveFeed()
+          scopedRuntimes.delete(id)
+        } else if (entry.url !== profile.url) {
+          entry.url = profile.url
+          entry.runtime.notifySettingsChange({
+            activePrinterChanged: false,
+            printerUrlChanged: true,
+          })
+        } else {
+          entry.runtime.notifySettingsChange({
+            activePrinterChanged: false,
+            printerUrlChanged: false,
+          })
+        }
+      }
     }
   }
 
@@ -479,7 +530,15 @@ live = createLiveFeed({
   }),
 })
 
-const closeLiveFeed = () => live.close()
+const closeLiveFeed = () => {
+  live.close()
+  if (scopedRuntimes) {
+    for (const entry of scopedRuntimes.values()) {
+      entry.runtime.closeLiveFeed()
+    }
+    scopedRuntimes.clear()
+  }
+}
 
 const MAX_GCODE_UPLOAD_BYTES = 100 * 1024 * 1024
 
@@ -1170,6 +1229,19 @@ function printerMiddleware(req, res, next) {
   const settingsSub = settingsRoute?.[1]
   const spoolmanSub = spoolmanRoute?.[1]
   const printSub = printRoute?.[1]
+
+  if (!pinnedPrinterId && !settingsRoute && !modelRoute) {
+    const requestedPrinterId = String(
+      parsedUrl.searchParams.get('printer') ?? req.headers?.['x-dockyard-printer'] ?? '',
+    )
+      .trim()
+      .toLowerCase()
+    if (requestedPrinterId) {
+      const scoped = getScopedRuntime(requestedPrinterId)
+      if (!scoped) return json(404, { error: 'Druckerprofil nicht gefunden.' })
+      return scoped.printerMiddleware(req, res, next)
+    }
+  }
   const isSettingsGet = path === '/api/settings' && req.method === 'GET'
   const isPresetsGet = path === '/api/presets' && req.method === 'GET'
   const isPresetsWrite = path === '/api/presets' && req.method === 'POST'
@@ -2609,7 +2681,7 @@ function printerMiddleware(req, res, next) {
   })()
 }
 
-  return { printerMiddleware, control, getControlState, closeLiveFeed }
+  return { printerMiddleware, control, getControlState, closeLiveFeed, notifySettingsChange: applyRuntimeSettingsChange }
 }
 
 const defaultRuntime = createPrinterRuntime()

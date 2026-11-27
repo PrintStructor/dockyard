@@ -453,11 +453,21 @@ async function loadActiveModel(forceReload = false) {
         object.material = object.material.clone()
       }
       const mats = Array.isArray(object.material) ? object.material : [object.material]
+      let hasTransparentGlass = false
       for (const mat of mats) {
         if (!mat) continue
-        if (mat.metalness != null) mat.metalness = Math.min(mat.metalness, 0.45)
-        if (mat.roughness != null) mat.roughness = Math.max(mat.roughness, 0.35)
+        const isGlass = Boolean(mat.transparent) && mat.opacity != null && mat.opacity < 0.95
+        if (isGlass) {
+          hasTransparentGlass = true
+          mat.depthWrite = false
+          if (mat.roughness != null) mat.roughness = Math.min(mat.roughness, 0.16)
+          if (mat.metalness != null) mat.metalness = Math.min(mat.metalness, 0.15)
+        } else {
+          if (mat.metalness != null) mat.metalness = Math.min(mat.metalness, 0.45)
+          if (mat.roughness != null) mat.roughness = Math.max(mat.roughness, 0.35)
+        }
       }
+      if (hasTransparentGlass) object.renderOrder = 1
     })
 
     const classified = classifyModelNodes(root)

@@ -465,6 +465,7 @@ def parse_usda_to_mesh_groups(usda_path, min_diag_m=0.0, progress_cb=None):
                             "name": name,
                             "proto": ref_proto,
                             "transform": _IDENTITY_MAT4,
+                            "default_mat": None,
                             "bindings": {},
                         }
                         if ref_proto:
@@ -564,7 +565,13 @@ def parse_usda_to_mesh_groups(usda_path, min_diag_m=0.0, progress_cb=None):
                             },
                         )
                     elif kind == "instance":
-                        ctx = {"name": name, "proto": ref_proto, "transform": _IDENTITY_MAT4, "bindings": {}}
+                        ctx = {
+                            "name": name,
+                            "proto": ref_proto,
+                            "transform": _IDENTITY_MAT4,
+                            "default_mat": None,
+                            "bindings": {},
+                        }
                         if ref_proto:
                             instances.append(ctx)
                     elif kind == "proto":
@@ -636,6 +643,10 @@ def parse_usda_to_mesh_groups(usda_path, min_diag_m=0.0, progress_cb=None):
             elif top_kind == "instance":
                 if s.startswith("matrix4d xformOp:transform ="):
                     top_ctx["transform"] = _parse_usda_matrix(s.split("=", 1)[1])
+                elif s.startswith("rel material:binding ="):
+                    rm = _REF_PATH_RE.search(s)
+                    if rm:
+                        top_ctx["default_mat"] = rm.group(1).split("/")[-1]
             elif top_kind == "over_body":
                 if s.startswith("rel material:binding ="):
                     rm = _REF_PATH_RE.search(s)
@@ -684,20 +695,26 @@ def parse_usda_to_mesh_groups(usda_path, min_diag_m=0.0, progress_cb=None):
             return (0.18, 0.21, 0.24, 1.0), 0.12, 0.54
         r, g, b = m["diffuse"]
         op = m["opacity"]
+        metallic = round(m["metallic"], 2)
+        roughness = round(m["roughness"], 2)
         if is_transparent_appearance(mat_name):
-            alpha = min(op, 0.22) if op < 0.99 else 0.16
-            if r < 0.15 and g < 0.15 and b < 0.15:
-                r, g, b = 0.12, 0.18, 0.22
+            low_name = str(mat_name or "").lower()
+            is_tinted = any(k in low_name for k in ("heavy", "smoke", "tint", "dark", "bronze", "grey", "gray"))
+            alpha = 0.15 if is_tinted else 0.07
+            r, g, b = (0.14, 0.20, 0.24) if is_tinted else (0.24, 0.36, 0.44)
+            metallic = 0.05
+            roughness = 0.08
         elif op < 0.99:
-            alpha = max(0.12, min(0.85, op))
+            alpha = max(0.08, min(0.85, op))
+            roughness = min(roughness, 0.18)
         else:
             alpha = 1.0
         rgba = (round(r, 4), round(g, 4), round(b, 4), round(alpha, 3))
         if mat_name and len(seen_mats) < 60 and mat_name not in seen_mats:
             seen_mats[mat_name] = [round(c, 3) for c in rgba]
-        return rgba, round(m["metallic"], 2), round(m["roughness"], 2)
+        return rgba, metallic, roughness
 
-    def emit_mesh(inst_name, inst_transform, body_name, mesh_dict, body_binding):
+    def emit_mesh(inst_name, inst_transform, body_name, mesh_dict, body_binding, inst_default_mat=None):
         nonlocal total_tris, skipped_micro, min_x, max_x, min_y, max_y, min_z, max_z
         pts = mesh_dict["points"]
         fv_idx = mesh_dict["faceVertexIndices"]
@@ -716,6 +733,7 @@ def parse_usda_to_mesh_groups(usda_path, min_diag_m=0.0, progress_cb=None):
             if world_diag < min_diag_m:
                 mat_candidates = [
                     (body_binding.get("default") if body_binding else None) or "",
+                    inst_default_mat or "",
                     mesh_dict.get("default_mat") or "",
                 ]
                 if body_binding and body_binding.get("subsets"):
@@ -809,8 +827,13 @@ def parse_usda_to_mesh_groups(usda_path, min_diag_m=0.0, progress_cb=None):
             else:
                 wnorm[k + 1] = 1.0
 
-        # Resolve per-face material bindings (supports GeomSubset multi-color STEP parts!)
-        default_mat = (body_binding.get("default") if body_binding else None) or mesh_dict.get("default_mat")
+        # Resolve per-face material bindings (supports GeomSubset multi-color STEP parts
+        # AND Fusion's instance-level rel material:binding on def Xform "MeshInstance_*")
+        default_mat = (
+            (body_binding.get("default") if body_binding else None)
+            or inst_default_mat
+            or mesh_dict.get("default_mat")
+        )
         sub_bindings = body_binding.get("subsets", {}) if body_binding else {}
         subsets = mesh_dict.get("subsets") or {}
 
@@ -897,8 +920,9 @@ def parse_usda_to_mesh_groups(usda_path, min_diag_m=0.0, progress_cb=None):
         if not proto_bodies:
             continue
         inst_bindings = inst["bindings"]
+        inst_default = inst.get("default_mat")
         for bname, mesh_dict in proto_bodies.items():
-            emit_mesh(inst["name"], inst["transform"], bname, mesh_dict, inst_bindings.get(bname))
+            emit_mesh(inst["name"], inst["transform"], bname, mesh_dict, inst_bindings.get(bname), inst_default)
 
     for inst_name, inst_mat, mesh_dict in inline_meshes:
         emit_mesh(inst_name, inst_mat, mesh_dict["name"], mesh_dict, None)

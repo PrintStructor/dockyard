@@ -117,6 +117,7 @@ if (isEntrypoint) {
   const shutdown = () => {
     closeLiveFeed()
     server.close(() => process.exit(0))
+    server.closeAllConnections?.()
   }
   process.on('SIGINT', shutdown)
   process.on('SIGTERM', shutdown)

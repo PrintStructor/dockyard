@@ -395,14 +395,12 @@ def Xform "sample"
         }
     }
     def Xform "MeshInstance_1" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
         prepend references = </MeshPrimDef_1>
     )
     {
+        rel material:binding = </sample/XID_GlassClear_CCC>
         matrix4d xformOp:transform = ( (-1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (50, 10, 0, 1) )
-        over "BodyGlass"
-        {
-            rel material:binding = </sample/XID_GlassClear_CCC>
-        }
     }
     def Xform "MeshInstance_2" (
         prepend references = </MeshPrimDef_Micro>
@@ -472,12 +470,16 @@ over Xform "MeshPrimDef_Micro"
     assert tris == 4, f'expected 4 tris (black + steel + glass + tiny accent), got {tris}'
     assert len(groups) == 4, [(g['name'], g['color'], g['metallic']) for g in groups]
 
-    # Verify live VORON_ACCENT survived micro-filter, metallic steel is metallic, glass is translucent, black is dark
+    # Verify live VORON_ACCENT survived micro-filter, metallic steel is metallic,
+    # instance-level bound clear glass stays glossy & crystal-clear, and black is dark.
     by_role = {g['role']: g for g in groups}
     assert 'accent' in by_role, by_role.keys()
     assert any(g['metallic'] >= 0.8 for g in groups), groups
-    assert any(g['color'][3] < 0.3 for g in groups), groups
+    glass_groups = [g for g in groups if g['color'][3] < 0.2]
+    assert len(glass_groups) == 1 and glass_groups[0]['roughness'] <= 0.12 and glass_groups[0]['color'][3] <= 0.1, glass_groups
     assert any(g['color'][0] < 0.02 and g['color'][1] < 0.02 and g['color'][2] < 0.02 for g in groups), groups
+    # Verify ZERO fallback slate-grey default material leaked from instance-level material:binding
+    assert not any(g['color'] == [0.18, 0.21, 0.24, 1.0] for g in groups), groups
 
     glb_usd = mod.build_glb_bytes(groups, source_name='USD Sample')
 

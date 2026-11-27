@@ -102,8 +102,10 @@ export function computePrinterTheme(rawHex) {
       accent: '#c5f76b',
       accentHover: '#d6ff8b',
       accentTint: '#283522',
+      accentTintHover: '#324429',
       accentLine: '#627c43',
       accentContrast: '#111618',
+      accentSoft: '#d3ebbc',
     }
   }
 
@@ -118,7 +120,9 @@ export function computePrinterTheme(rawHex) {
 
   const hoverRgb = hslToRgb([h, s, Math.min(0.95, l + 0.06)])
   const tintRgb = mixRgb(fgRgb, SURFACE_RGB, 0.16)
+  const tintHoverRgb = mixRgb(fgRgb, SURFACE_RGB, 0.24)
   const lineRgb = mixRgb(fgRgb, LINE_BASE_RGB, 0.48)
+  const softRgb = mixRgb(fgRgb, [237, 241, 237], 0.35)
   const darkText = [17, 22, 24] // #111618
   const lightText = [248, 250, 252] // #f8fafc
   const accentContrast =
@@ -129,8 +133,10 @@ export function computePrinterTheme(rawHex) {
     accent: rgbToHex(fgRgb),
     accentHover: rgbToHex(hoverRgb),
     accentTint: rgbToHex(tintRgb),
+    accentTintHover: rgbToHex(tintHoverRgb),
     accentLine: rgbToHex(lineRgb),
     accentContrast,
+    accentSoft: rgbToHex(softRgb),
   }
 }
 
@@ -140,8 +146,13 @@ export function themeStyleVars(rawHex) {
     '--accent': theme.accent,
     '--accent-hover': theme.accentHover,
     '--accent-tint': theme.accentTint,
+    '--accent-tint-hover': theme.accentTintHover,
     '--accent-line': theme.accentLine,
     '--accent-contrast': theme.accentContrast,
+    '--accent-soft': theme.accentSoft,
     '--accent-raw': theme.raw,
+    '--lime': theme.accent,
+    '--lime-tint': theme.accentTint,
+    '--lime-line': theme.accentLine,
   }
 }

@@ -151,7 +151,7 @@ const items = computed(() => {
       const isCurrent = p.id === props.activePrinterId
       list.push({
         id: `printer-${p.id}`,
-        group: 'Drucker',
+        group: 'Druckerprofile',
         label: p.name || p.id,
         hint: isCurrent ? t('Aktiv') : p.url,
         dotColor: computePrinterTheme(p.model?.accentColor).accent,

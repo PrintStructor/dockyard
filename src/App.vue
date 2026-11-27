@@ -726,7 +726,36 @@ async function acknowledgeUncertain() {
           :aria-label="isSingleTool ? t('DOCKYARD Cockpit') : t('DOCKYARD Werkzeugübersicht')"
           @click.prevent="tab = 'tools'"
         >
-          <img src="/voron-logo.svg" width="34" height="39" alt="DOCKYARD" />
+          <svg
+            class="brand-logo"
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 93.887299 108.41164"
+            width="34"
+            height="39"
+            role="img"
+            aria-label="DOCKYARD"
+          >
+            <g transform="translate(-88.747651,-222.49449)">
+              <g transform="matrix(2.4840959,0,0,2.4840959,261.35926,-2597.1265)">
+                <path
+                  fill="var(--accent)"
+                  d="m -31.691336,1167.801 v -21.8211 l -18.897638,-10.9105 -18.897638,10.9105 v 21.8211 l 18.897638,10.9106 z"
+                />
+                <path
+                  fill="var(--bg)"
+                  d="m -42.406057,1156.8905 h 5.455278 l -6.953846,12.0444 h -5.455278 z"
+                />
+                <path
+                  fill="var(--bg)"
+                  d="m -64.22717,1156.8905 6.953846,-12.0444 h 5.455279 l -6.953846,12.0444 z"
+                />
+                <path
+                  fill="var(--bg)"
+                  d="m -40.907489,1144.8461 -13.907692,24.0888 h -5.455278 l 13.907692,-24.0888 z"
+                />
+              </g>
+            </g>
+          </svg>
         </a>
         <span>
           <span class="brand-title">

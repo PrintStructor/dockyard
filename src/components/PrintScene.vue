@@ -384,10 +384,11 @@ function disposeBedPlate(group) {
 }
 
 function buildNozzleMarker() {
+  const accentHex = props.accentColor || '#c5f76b'
   const group = new THREE.Group()
   const cone = new THREE.Mesh(
     new THREE.ConeGeometry(2.4, 8, 16),
-    new THREE.MeshBasicMaterial({ color: 0xc5f76b }),
+    new THREE.MeshBasicMaterial({ color: accentHex }),
   )
   cone.rotation.x = Math.PI
   cone.position.y = 4.2
@@ -396,7 +397,7 @@ function buildNozzleMarker() {
 
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(3.2, 4.4, 24),
-    new THREE.MeshBasicMaterial({ color: 0xc5f76b, side: THREE.DoubleSide, transparent: true, opacity: 0.75 }),
+    new THREE.MeshBasicMaterial({ color: accentHex, side: THREE.DoubleSide, transparent: true, opacity: 0.75 }),
   )
   ring.rotation.x = -Math.PI / 2
   ring.position.y = 0.25
@@ -408,8 +409,9 @@ function buildNozzleMarker() {
 
 function buildBedCrosshair() {
   const { halfW, halfD } = resolvedBed()
+  const accentHex = props.accentColor || '#c5f76b'
   const group = new THREE.Group()
-  const mat = new THREE.LineBasicMaterial({ color: 0xc5f76b, transparent: true, opacity: 0.32 })
+  const mat = new THREE.LineBasicMaterial({ color: accentHex, transparent: true, opacity: 0.32 })
   const xLine = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(-halfW, 0.08, 0),

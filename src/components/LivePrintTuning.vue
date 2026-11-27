@@ -14,6 +14,8 @@ import {
   Save,
   SlidersHorizontal,
   ChevronDown,
+  Layers,
+  X,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import { auxActionReason } from '../aux-action-state.mjs'
@@ -25,6 +27,7 @@ const props = defineProps({
   pending: Boolean,
   send: Function,
   compact: { type: Boolean, default: false },
+  allowStandby: { type: Boolean, default: false },
 })
 
 const zSteps = [0.005, 0.01, 0.025, 0.05]
@@ -43,6 +46,8 @@ const retractLenDraft = ref(null)
 const retractSpdDraft = ref(null)
 const unretractExtraDraft = ref(null)
 const unretractSpdDraft = ref(null)
+const pauseLayerDraft = ref('')
+const hoveredExclude = ref('')
 
 const confirmCancel = ref(false)
 const confirmExclude = ref('')
@@ -67,22 +72,27 @@ onBeforeUnmount(() => {
 })
 
 const isPrintActive = computed(() => props.online && ['printing', 'paused'].includes(props.status?.printState))
+const showStandbyPanel = computed(() => props.allowStandby && props.online && !isPrintActive.value)
 watch(isPrintActive, active => {
   if (!active) {
     resetCancelConfirm()
     resetExcludeConfirm()
     speedDraft.value = null
     flowDraft.value = null
-    paAdvanceDraft.value = null
-    paSmoothDraft.value = null
-    velDraft.value = null
-    accelDraft.value = null
-    cruiseDraft.value = null
-    scvDraft.value = null
-    retractLenDraft.value = null
-    retractSpdDraft.value = null
-    unretractExtraDraft.value = null
-    unretractSpdDraft.value = null
+    pauseLayerDraft.value = ''
+    hoveredExclude.value = ''
+    if (!props.allowStandby) {
+      paAdvanceDraft.value = null
+      paSmoothDraft.value = null
+      velDraft.value = null
+      accelDraft.value = null
+      cruiseDraft.value = null
+      scvDraft.value = null
+      retractLenDraft.value = null
+      retractSpdDraft.value = null
+      unretractExtraDraft.value = null
+      unretractSpdDraft.value = null
+    }
   }
 })
 
@@ -97,6 +107,36 @@ const paReason = computed(() => printControlReason(props.status, 'tune_pressure_
 const velReason = computed(() => printControlReason(props.status, 'tune_velocity_limits', props.online, props.pending))
 const retractReason = computed(() => printControlReason(props.status, 'tune_retraction', props.online, props.pending))
 const excludeReason = computed(() => printControlReason(props.status, 'exclude_object', props.online, props.pending))
+const pauseNextReason = computed(() => printControlReason(props.status, 'pause_next_layer', props.online, props.pending))
+const pauseAtReason = computed(() => printControlReason(props.status, 'pause_at_layer', props.online, props.pending))
+
+const hasPauseLayerCaps = computed(
+  () => Boolean(props.status?.capabilities?.pauseNextLayer || props.status?.capabilities?.pauseAtLayer),
+)
+const pauseAtState = computed(
+  () => props.status?.pauseAtLayer ?? { nextLayer: false, targetEnabled: false, targetLayer: null },
+)
+const pauseLayerNum = computed(() => {
+  const n = Number(pauseLayerDraft.value)
+  return Number.isInteger(n) && n >= 1 && n <= 100_000 ? n : null
+})
+
+async function togglePauseNextLayer() {
+  if (pauseNextReason.value) return
+  await props.send({ action: 'pause_next_layer', enable: !pauseAtState.value.nextLayer })
+}
+
+async function applyPauseAtLayer() {
+  if (pauseAtReason.value || pauseLayerNum.value == null) return
+  if (await props.send({ action: 'pause_at_layer', enable: true, layer: pauseLayerNum.value })) {
+    pauseLayerDraft.value = ''
+  }
+}
+
+async function clearPauseAtLayer() {
+  if (pauseAtReason.value) return
+  await props.send({ action: 'pause_at_layer', enable: false })
+}
 
 const activeToolIdx = computed(() => {
   const idx = props.status?.active
@@ -236,6 +276,72 @@ const formattedZOffset = computed(() => {
 const excludeData = computed(() => props.status?.excludeObjects ?? { available: false, objects: [], excluded: [], current: null })
 const excludedSet = computed(() => new Set(excludeData.value.excluded ?? []))
 
+const excludeMap = computed(() => {
+  const objs = excludeData.value.objects ?? []
+  const mappable = objs.filter(o => (Array.isArray(o.polygon) && o.polygon.length >= 3) || Array.isArray(o.center))
+  if (!mappable.length) return null
+
+  const bed = props.status?.bedSize
+  let minX = Number.isFinite(bed?.originX) ? bed.originX : 0
+  let minY = Number.isFinite(bed?.originY) ? bed.originY : 0
+  let maxX = minX + (Number.isFinite(bed?.width) && bed.width > 10 ? bed.width : 250)
+  let maxY = minY + (Number.isFinite(bed?.depth) && bed.depth > 10 ? bed.depth : 250)
+
+  for (const obj of mappable) {
+    if (Array.isArray(obj.polygon)) {
+      for (const [x, y] of obj.polygon) {
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+        if (y < minY) minY = y
+        if (y > maxY) maxY = y
+      }
+    }
+    if (Array.isArray(obj.center)) {
+      const [cx, cy] = obj.center
+      if (cx < minX) minX = cx
+      if (cx > maxX) maxX = cx
+      if (cy < minY) minY = cy
+      if (cy > maxY) maxY = cy
+    }
+  }
+
+  const w = Math.max(10, maxX - minX)
+  const h = Math.max(10, maxY - minY)
+  const toSvgX = x => x - minX
+  const toSvgY = y => maxY - y
+  const fallbackR = Math.max(3, Math.min(w, h) * 0.035)
+
+  const items = mappable.map(obj => {
+    const points =
+      Array.isArray(obj.polygon) && obj.polygon.length >= 3
+        ? obj.polygon.map(([x, y]) => `${toSvgX(x).toFixed(2)},${toSvgY(y).toFixed(2)}`).join(' ')
+        : ''
+    const cx = Array.isArray(obj.center) ? toSvgX(obj.center[0]) : w / 2
+    const cy = Array.isArray(obj.center) ? toSvgY(obj.center[1]) : h / 2
+    return {
+      name: obj.name,
+      points,
+      cx,
+      cy,
+      r: fallbackR,
+    }
+  })
+
+  const gridLines = []
+  for (let i = 1; i < 4; i++) {
+    gridLines.push({ x1: (w * i) / 4, y1: 0, x2: (w * i) / 4, y2: h })
+    gridLines.push({ x1: 0, y1: (h * i) / 4, x2: w, y2: (h * i) / 4 })
+  }
+
+  return {
+    viewBox: `0 0 ${w.toFixed(1)} ${h.toFixed(1)}`,
+    width: w,
+    height: h,
+    gridLines,
+    items,
+  }
+})
+
 async function togglePause() {
   if (!pauseReason.value) await props.send({ action: pauseAction.value })
 }
@@ -347,11 +453,12 @@ async function requestOrRunExclude(name) {
 
 <template>
   <section
-    v-if="isPrintActive"
+    v-if="isPrintActive || showStandbyPanel"
     class="live-tuning"
-    :class="{ compact }"
-    :aria-label="t('Live-Drucksteuerung')"
+    :class="{ compact, standby: showStandbyPanel }"
+    :aria-label="showStandbyPanel ? t('Standby-Tuning') : t('Live-Drucksteuerung')"
   >
+    <template v-if="isPrintActive">
     <div class="live-tuning-actions">
       <button
         type="button"
@@ -390,6 +497,64 @@ async function requestOrRunExclude(name) {
         <Square :size="13" />
         {{ confirmCancel ? t('Wirklich?') : t('Abbrechen') }}
       </button>
+    </div>
+
+    <div v-if="hasPauseLayerCaps" class="tuning-pause-layer-bar" :aria-label="t('Layer-Pause')">
+      <button
+        v-if="status?.capabilities?.pauseNextLayer"
+        type="button"
+        class="subtle-button tuning-pause-next-btn"
+        :class="{ active: pauseAtState.nextLayer }"
+        :aria-pressed="pauseAtState.nextLayer"
+        :disabled="!!pauseNextReason"
+        :title="pauseNextReason ? t(pauseNextReason) : t('Am nächsten Schichtwechsel automatisch pausieren')"
+        @click="togglePauseNextLayer"
+      >
+        <Layers :size="13" />
+        {{ pauseAtState.nextLayer ? t('Pause beim nächsten Layer aktiv') : t('Nächster Layer pausieren') }}
+      </button>
+
+      <form
+        v-if="status?.capabilities?.pauseAtLayer"
+        class="tuning-pause-at-form"
+        @submit.prevent="applyPauseAtLayer"
+      >
+        <span v-if="pauseAtState.targetEnabled && pauseAtState.targetLayer != null" class="tuning-pause-badge">
+          {{ t('Pause bei Layer {0}', [pauseAtState.targetLayer]) }}
+          <button
+            type="button"
+            class="icon-button tuning-pause-clear"
+            :disabled="!!pauseAtReason"
+            :title="t('Layer-Pause aufheben')"
+            :aria-label="t('Layer-Pause aufheben')"
+            @click="clearPauseAtLayer"
+          >
+            <X :size="12" />
+          </button>
+        </span>
+        <label class="tuning-pause-input">
+          <span>{{ t('Pause bei Layer') }}</span>
+          <input
+            v-model="pauseLayerDraft"
+            type="number"
+            min="1"
+            max="100000"
+            step="1"
+            inputmode="numeric"
+            :placeholder="status?.printLayer != null ? String(Math.round(status.printLayer) + 1) : '10'"
+            :disabled="!!pauseAtReason"
+          />
+        </label>
+        <button
+          type="submit"
+          class="apply-temperature"
+          :disabled="!!pauseAtReason || pauseLayerNum == null"
+          :title="t('Pause bei Layer vormerken')"
+          :aria-label="t('Pause bei Layer vormerken')"
+        >
+          <Check :size="13" />
+        </button>
+      </form>
     </div>
 
     <div class="live-tuning-grid">
@@ -541,9 +706,26 @@ async function requestOrRunExclude(name) {
         </form>
       </div>
     </div>
+    </template>
+
+    <div v-if="showStandbyPanel && canSaveZ" class="tuning-standby-savez">
+      <span>
+        {{ t('Aktiver Z-Offset') }}: <strong>{{ formattedZOffset }}</strong>
+      </span>
+      <button
+        type="button"
+        class="subtle-button"
+        :disabled="!canSaveZ"
+        :title="t(saveZTargetLabel)"
+        @click="saveZOffset"
+      >
+        <Save :size="13" />{{ t('Z-Offset übernehmen') }}
+      </button>
+    </div>
 
     <div class="tuning-advanced-wrap">
       <button
+        v-if="isPrintActive"
         type="button"
         class="tuning-advanced-toggle"
         :aria-expanded="showAdvanced"
@@ -556,7 +738,7 @@ async function requestOrRunExclude(name) {
         <ChevronDown :size="14" class="tuning-chevron" :class="{ open: showAdvanced }" />
       </button>
 
-      <div v-if="showAdvanced" class="tuning-advanced-grid">
+      <div v-if="showAdvanced || showStandbyPanel" class="tuning-advanced-grid">
         <form class="tuning-adv-card" @submit.prevent="applyPressureAdvance">
           <div class="tuning-block-head">
             <span>{{ t('Pressure Advance') }}</span>
@@ -733,13 +915,76 @@ async function requestOrRunExclude(name) {
       </div>
     </div>
 
-    <div v-if="excludeData.objects.length" class="tuning-exclude-section">
+    <div v-if="isPrintActive && excludeData.objects.length" class="tuning-exclude-section">
       <div class="tuning-block-head">
         <span><Ban :size="13" />{{ t('Objekte im Druck') }}</span>
         <small class="tuning-exclude-count">
           {{ t('{0} aktiv · {1} übersprungen', [excludeData.objects.length - excludedSet.size, excludedSet.size]) }}
         </small>
       </div>
+
+      <div v-if="excludeMap" class="exclude-map-wrap">
+        <svg
+          class="exclude-map-svg"
+          :viewBox="excludeMap.viewBox"
+          preserveAspectRatio="xMidYMid meet"
+          role="img"
+          :aria-label="t('2D-Druckbett-Karte der Objekte')"
+        >
+          <rect class="exclude-map-bed" x="0" y="0" :width="excludeMap.width" :height="excludeMap.height" rx="2" />
+          <line
+            v-for="(line, gIdx) in excludeMap.gridLines"
+            :key="gIdx"
+            class="exclude-map-grid"
+            :x1="line.x1"
+            :y1="line.y1"
+            :x2="line.x2"
+            :y2="line.y2"
+          />
+          <g
+            v-for="item in excludeMap.items"
+            :key="item.name"
+            class="exclude-map-obj"
+            :class="{
+              current: excludeData.current === item.name,
+              excluded: excludedSet.has(item.name),
+              confirming: confirmExclude === item.name,
+              hovered: hoveredExclude === item.name,
+              disabled: !!excludeReason || excludedSet.has(item.name),
+            }"
+            role="button"
+            :tabindex="excludedSet.has(item.name) ? -1 : 0"
+            :aria-label="
+              excludedSet.has(item.name)
+                ? t('{0} (übersprungen)', [item.name])
+                : confirmExclude === item.name
+                  ? t('{0} wirklich überspringen?', [item.name])
+                  : t('{0} überspringen', [item.name])
+            "
+            @mouseenter="hoveredExclude = item.name"
+            @mouseleave="hoveredExclude === item.name && (hoveredExclude = '')"
+            @focus="hoveredExclude = item.name"
+            @blur="hoveredExclude === item.name && (hoveredExclude = '')"
+            @click="requestOrRunExclude(item.name)"
+            @keydown.enter.prevent="requestOrRunExclude(item.name)"
+            @keydown.space.prevent="requestOrRunExclude(item.name)"
+          >
+            <title>
+              {{ item.name }}{{ excludedSet.has(item.name) ? ` (${t('Übersprungen')})` : excludeData.current === item.name ? ` (${t('Aktiv')})` : '' }}
+            </title>
+            <polygon v-if="item.points" :points="item.points" />
+            <circle v-else :cx="item.cx" :cy="item.cy" :r="item.r" />
+          </g>
+        </svg>
+        <div class="exclude-map-caption">
+          <span v-if="confirmExclude" class="exclude-map-confirm">
+            {{ t('Nochmal klicken: „{0}“ überspringen', [confirmExclude]) }}
+          </span>
+          <span v-else-if="hoveredExclude" class="exclude-map-hover">{{ hoveredExclude }}</span>
+          <span v-else>{{ t('Objekt anklicken zum Überspringen · Vorne unten') }}</span>
+        </div>
+      </div>
+
       <ul class="exclude-object-list">
         <li
           v-for="obj in excludeData.objects"
@@ -748,7 +993,10 @@ async function requestOrRunExclude(name) {
           :class="{
             current: excludeData.current === obj.name,
             excluded: excludedSet.has(obj.name),
+            hovered: hoveredExclude === obj.name,
           }"
+          @mouseenter="hoveredExclude = obj.name"
+          @mouseleave="hoveredExclude === obj.name && (hoveredExclude = '')"
         >
           <span class="exclude-object-name" :title="obj.name">
             <span class="exclude-object-label">{{ obj.name }}</span>

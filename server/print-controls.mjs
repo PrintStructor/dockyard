@@ -21,6 +21,8 @@ export const printControlActions = [
   'tune_retraction',
   'save_z_offset',
   'exclude_object',
+  'pause_next_layer',
+  'pause_at_layer',
 ]
 
 export const printControlActionKeys = {
@@ -34,6 +36,8 @@ export const printControlActionKeys = {
   tune_retraction: ['action', 'retractLength', 'retractSpeed', 'unretractExtraLength', 'unretractSpeed'],
   save_z_offset: ['action'],
   exclude_object: ['action', 'name'],
+  pause_next_layer: ['action', 'enable'],
+  pause_at_layer: ['action', 'enable', 'layer'],
 }
 
 export function printControlCapabilities(config, raw) {
@@ -65,6 +69,8 @@ export function printControlCapabilities(config, raw) {
     zOffsetSaveTarget,
     firmwareRetraction: Boolean(config.firmware_retraction || raw?.firmware_retraction),
     excludeObject: raw?.exclude_object != null || !!config.exclude_object,
+    pauseNextLayer: has('SET_PAUSE_NEXT_LAYER'),
+    pauseAtLayer: has('SET_PAUSE_AT_LAYER'),
   }
 }
 
@@ -312,6 +318,35 @@ export function printControlCommand(input, raw, capabilities) {
       endpoint: '/printer/gcode/script',
       body: { script: `EXCLUDE_OBJECT NAME=${name}` },
       label: `Objekt überspringen · ${name}`,
+    }
+  }
+
+  if (action === 'pause_next_layer') {
+    if (typeof input.enable !== 'boolean') throw new ControlError('Ungültiger Parameter für Pause beim nächsten Layer.', 400)
+    return {
+      endpoint: '/printer/gcode/script',
+      body: { script: `SET_PAUSE_NEXT_LAYER ENABLE=${input.enable ? 1 : 0}` },
+      label: input.enable ? 'Pause beim nächsten Layer vorgemerkt' : 'Pause beim nächsten Layer aufgehoben',
+    }
+  }
+
+  if (action === 'pause_at_layer') {
+    if (typeof input.enable !== 'boolean') throw new ControlError('Ungültiger Parameter für Pause bei Layer.', 400)
+    if (!input.enable) {
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script: 'SET_PAUSE_AT_LAYER ENABLE=0' },
+        label: 'Layer-Pause aufgehoben',
+      }
+    }
+    const layer = input.layer
+    if (!Number.isInteger(layer) || layer < 1 || layer > 100_000) {
+      throw new ControlError('Layer-Nummer muss eine ganze Zahl ≥ 1 sein.', 400)
+    }
+    return {
+      endpoint: '/printer/gcode/script',
+      body: { script: `SET_PAUSE_AT_LAYER ENABLE=1 LAYER=${layer}` },
+      label: `Pause bei Layer ${layer} vorgemerkt`,
     }
   }
 

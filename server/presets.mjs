@@ -184,16 +184,24 @@ export function applyMainsailPresetMutation(currentDb, payload) {
   }
 
   const id = existingKey ?? `dockyard_${name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || Date.now()}`
-  const prevValues = existingMap[id]?.values && typeof existingMap[id].values === 'object' ? existingMap[id].values : {}
+  const prevValues = existingMap[id]?.values && typeof existingMap[id].values === 'object' ? { ...existingMap[id].values } : {}
+  const nextValues = {
+    ...prevValues,
+    extruder: { bool: extruder != null && extruder > 0, type: 'heater', value: extruder ?? 0 },
+    heater_bed: { bool: bed != null && bed > 0, type: 'heater', value: bed ?? 0 },
+  }
+  const toolCount = Number.isInteger(payload?.toolCount) && payload.toolCount > 1 ? Math.min(8, payload.toolCount) : 1
+  for (let i = 1; i < 8; i++) {
+    const key = `extruder${i}`
+    if (i < toolCount || Object.hasOwn(prevValues, key)) {
+      nextValues[key] = { bool: extruder != null && extruder > 0, type: 'heater', value: extruder ?? 0 }
+    }
+  }
   existingMap[id] = {
     ...(existingMap[id] ?? {}),
     name,
     gcode: typeof existingMap[id]?.gcode === 'string' ? existingMap[id].gcode : '',
-    values: {
-      ...prevValues,
-      extruder: { bool: extruder != null, type: 'heater', value: extruder ?? 0 },
-      heater_bed: { bool: bed != null, type: 'heater', value: bed ?? 0 },
-    },
+    values: nextValues,
   }
   return currentDb?.presets ? { ...currentDb, presets: existingMap } : { presets: existingMap }
 }

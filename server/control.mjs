@@ -254,8 +254,8 @@ export function commandFor(input, raw) {
     if (raw['gcode_macro LOAD_WATCH']?.active === 1) {
       fail('Einlegehilfe ist scharf. Zuerst mit Fertig beenden.', 409)
     }
-    if (['printing', 'paused'].includes(printState)) {
-      fail('Makros sind während eines aktiven oder pausierten Drucks gesperrt.', 409)
+    if (printState === 'printing') {
+      fail('Makros sind während eines aktiven Drucks gesperrt.', 409)
     }
     if (raw.idle_timeout?.state === 'Printing') {
       fail('Der Drucker führt bereits eine Bewegung oder einen Befehl aus.', 409)

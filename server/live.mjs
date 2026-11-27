@@ -24,6 +24,94 @@ const SINGLE_TOOL_LED_PRIORITY = [
   'rgb',
 ]
 
+const PROMPT_BUTTON_STYLES = new Set(['primary', 'secondary', 'info', 'warning', 'error'])
+
+export function createPromptParser() {
+  let draft = null
+  let active = null
+  let currentGroup = null
+
+  function parseButtonSpec(raw) {
+    const parts = String(raw ?? '').split('|')
+    const label = (parts[0] ?? '').trim()
+    if (!label) return null
+    const gcode = (parts[1] ?? label).trim()
+    const rawStyle = (parts[2] ?? '').trim().toLowerCase()
+    const style = PROMPT_BUTTON_STYLES.has(rawStyle) ? rawStyle : 'secondary'
+    return { label, gcode, style }
+  }
+
+  return {
+    getActive() {
+      return active
+    },
+    reset() {
+      const hadActive = Boolean(active?.open)
+      draft = null
+      active = null
+      currentGroup = null
+      return hadActive ? { open: false } : null
+    },
+    feed(rawLine) {
+      if (typeof rawLine !== 'string') return null
+      const match = /^(?:\/\/\s*)?action:prompt_([a-z_]+)(?:\s+(.*))?$/i.exec(rawLine.trim())
+      if (!match) return null
+      const cmd = match[1].toLowerCase()
+      const arg = (match[2] ?? '').trim()
+
+      if (cmd === 'begin') {
+        draft = { title: arg || 'Klipper', items: [], footerButtons: [] }
+        currentGroup = null
+        return null
+      }
+      if (cmd === 'end') {
+        draft = null
+        currentGroup = null
+        const hadActive = Boolean(active?.open)
+        active = null
+        return hadActive ? { open: false } : null
+      }
+      if (!draft) return null
+
+      if (cmd === 'text') {
+        if (arg) draft.items.push({ kind: 'text', text: arg })
+        return null
+      }
+      if (cmd === 'button_group_start') {
+        currentGroup = { kind: 'group', buttons: [] }
+        draft.items.push(currentGroup)
+        return null
+      }
+      if (cmd === 'button_group_end') {
+        currentGroup = null
+        return null
+      }
+      if (cmd === 'button') {
+        const btn = parseButtonSpec(arg)
+        if (!btn) return null
+        if (currentGroup) currentGroup.buttons.push(btn)
+        else draft.items.push({ kind: 'button', ...btn })
+        return null
+      }
+      if (cmd === 'footer_button') {
+        const btn = parseButtonSpec(arg)
+        if (btn) draft.footerButtons.push(btn)
+        return null
+      }
+      if (cmd === 'show') {
+        active = {
+          open: true,
+          title: draft.title,
+          items: draft.items,
+          footerButtons: draft.footerButtons,
+        }
+        return active
+      }
+      return null
+    },
+  }
+}
+
 function matchesDynamicSubscription(name, baseObjects) {
   return (
     baseObjects.includes(name) ||
@@ -35,6 +123,8 @@ function matchesDynamicSubscription(name, baseObjects) {
     name === 'screws_tilt_adjust' ||
     name === 'manual_probe' ||
     name === 'firmware_retraction' ||
+    name === 'gcode_macro SET_PAUSE_NEXT_LAYER' ||
+    name === 'gcode_macro SET_PAUSE_AT_LAYER' ||
     name === 'fan' ||
     /^fan_generic [A-Za-z0-9_-]+$/.test(name) ||
     /^heater_fan [A-Za-z0-9_-]+$/.test(name) ||
@@ -89,6 +179,7 @@ export function createLiveFeed({
   let ledPending = 0
   let keepalivePending = 0
   let tickDelay = ledPollMs
+  const promptParser = createPromptParser()
 
   const isLedActive = (now = Date.now()) => lastLedChangeAt > 0 && now - lastLedChangeAt < ledActiveWindowMs
   const currentPollDelay = (now = Date.now()) => {
@@ -245,8 +336,14 @@ export function createLiveFeed({
           }
         } else if (data.method === 'notify_gcode_response') {
           const message = String(data.params?.[0] ?? '')
-          if (message && clients.size) {
-            emit('console', { time: Date.now() / 1000, type: 'response', message })
+          if (message) {
+            for (const line of message.split(/\r?\n/)) {
+              const promptUpdate = promptParser.feed(line)
+              if (promptUpdate && clients.size) emit('prompt', promptUpdate)
+            }
+            if (clients.size) {
+              emit('console', { time: Date.now() / 1000, type: 'response', message })
+            }
           }
         } else if (data.method === 'notify_update_response') {
           const info = data.params?.[0]
@@ -298,6 +395,8 @@ export function createLiveFeed({
     raw = {}
     polledLedObjects = []
     keepalivePending = 0
+    const clearedPrompt = promptParser.reset()
+    if (clearedPrompt && clients.size) emit('prompt', clearedPrompt)
   }
 
   return {
@@ -308,11 +407,20 @@ export function createLiveFeed({
       res.write('retry: 2500\n\n')
       clients.add(res)
       if (ready) res.write(`event: status\ndata: ${JSON.stringify(snapshot(raw))}\n\n`)
+      const activePrompt = promptParser.getActive()
+      if (activePrompt?.open) res.write(`event: prompt\ndata: ${JSON.stringify(activePrompt)}\n\n`)
       connect()
       res.on('close', () => {
         clients.delete(res)
         if (!clients.size) close()
       })
+    },
+    getActivePrompt() {
+      return promptParser.getActive()
+    },
+    clearPrompt() {
+      const cleared = promptParser.reset()
+      if (cleared && clients.size) emit('prompt', cleared)
     },
     notify() {
       emitStatus()

@@ -27,6 +27,9 @@ import {
   Save,
   Search,
   X,
+  MessageSquare,
+  Thermometer,
+  Compass,
 } from '@lucide/vue'
 import { t, locale, language, setLanguage, setDocumentTitle } from './i18n.mjs'
 import { displayMode, showCameras, defaultTab, toggleDisplayMode, sanitizeTabForCameras } from './display-mode.mjs'
@@ -42,6 +45,7 @@ import LivePrintTuning from './components/LivePrintTuning.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import SingleToolOverview from './components/SingleToolOverview.vue'
 import CommandPalette from './components/CommandPalette.vue'
+import PromptDialog from './components/PromptDialog.vue'
 import { computePrinterTheme, themeStyleVars } from './theme-accent.mjs'
 import { useControls } from './useControls.js'
 import { usePrinter } from './usePrinter.js'
@@ -75,6 +79,7 @@ const printerSwitchKey = ref(0)
 const settingsOpen = ref(false)
 const settingsInitialSection = ref('printers')
 const paletteOpen = ref(false)
+const activePrompt = ref(null)
 const printerPopoverOpen = ref(false)
 const switcherRoot = ref(null)
 const popoverDirtyConfirm = ref(null)
@@ -100,6 +105,9 @@ const { status, connection, error, updating, refresh, resetForPrinterSwitch } = 
   onSettings: payload => {
     applySettingsTransition(payload, { isFromSse: true })
   },
+  onPrompt: payload => {
+    activePrompt.value = payload?.open ? payload : null
+  },
   onReconnect: () => {
     if (consoleStore.loaded.value) consoleStore.refresh()
   },
@@ -124,6 +132,7 @@ function applySettingsTransition(payload, { isFromSse = false } = {}) {
   if (targetChanged) {
     requestedPrintFile.value = ''
     lastUpdateEvent.value = null
+    activePrompt.value = null
     lastMountedTool = undefined
     clearFeedback()
     printerSwitchKey.value++
@@ -243,6 +252,9 @@ const activeCameras = computed(() => {
   }
   return []
 })
+const bottomTabCameras = computed(() =>
+  tab.value === 'tools' && isSingleTool.value ? activeCameras.value.slice(1) : activeCameras.value,
+)
 watch(
   [language, printerName, () => Boolean(status.value?.isToolchanger ?? settingsStore.activePrinter.value?.model?.preset === 'stormtrooper-6tc')],
   ([nextLang, nextPrinter, nextTc]) => setDocumentTitle(nextLang, nextPrinter, nextTc),
@@ -523,6 +535,26 @@ const filament = tool =>
       : tool.filamentDetected
         ? 'Filament erkannt'
         : 'Kein Filament erkannt'
+
+const canToggleToolFilament = computed(
+  () => online.value && canWrite.value && status.value?.klipperState === 'ready' && !pending.value,
+)
+
+function toggleToolFilamentSensor(tool) {
+  if (!canToggleToolFilament.value || !tool?.filamentSensorName || tool.filamentEnabled == null) return
+  send({ action: 'filament_sensor', sensor: tool.filamentSensorName, enabled: !tool.filamentEnabled })
+}
+
+function tcAxisDisplay(axis, idx) {
+  if (!online.value || !status.value?.homedAxes?.includes(axis)) return '—'
+  const val = status.value?.position?.[idx]
+  return Number.isFinite(val) ? number(val, axis === 'z' ? 2 : 1) : '—'
+}
+
+const liveDisplayMessage = computed(() => {
+  if (!online.value) return ''
+  return status.value?.displayMessage || status.value?.printMessage || ''
+})
 
 const printAction = computed(() => (status.value?.printState === 'paused' ? 'resume' : 'pause'))
 const printActionReason = computed(() => auxActionReason(status.value, printAction.value, online.value, pending.value))
@@ -1050,6 +1082,9 @@ async function acknowledgeUncertain() {
           <span v-if="status.flowPercent != null && status.flowPercent !== 100" class="print-tuning-pill">
             {{ t('Fluss') }} {{ status.flowPercent }} %
           </span>
+          <span v-if="liveDisplayMessage" class="print-m117-pill" :title="liveDisplayMessage">
+            <MessageSquare :size="12" />{{ liveDisplayMessage }}
+          </span>
           <div class="print-job-bar-actions">
             <button
               type="button"
@@ -1352,6 +1387,11 @@ async function acknowledgeUncertain() {
         </div>
       </Transition>
 
+      <div v-if="liveDisplayMessage && (!isPrintActive || tab === 'print')" class="m117-status-banner" role="status">
+        <MessageSquare :size="14" />
+        <span>{{ liveDisplayMessage }}</span>
+      </div>
+
       <div class="page-heading">
         <div>
           <h1>{{ t(pageHeading) }}</h1>
@@ -1394,6 +1434,7 @@ async function acknowledgeUncertain() {
           :scene-config="sceneConfig"
           :can-write="canWrite"
           :display-mode="displayMode"
+          :cameras="showCameras ? activeCameras : []"
           @command="send"
           @open-settings="openSettings('printers')"
           @refresh="refresh"
@@ -1487,6 +1528,36 @@ async function acknowledgeUncertain() {
               </article>
             </div>
 
+            <section v-if="status" class="tc-telemetry-strip" :aria-label="t('Maschinenstatus')">
+              <div class="tc-telemetry-cell">
+                <span class="tc-telemetry-label"><Thermometer :size="12" />{{ t('Druckbett') }}</span>
+                <strong class="tc-telemetry-value">
+                  {{ temperature(status.bed?.temperature) }} °C
+                  <small v-if="status.bed?.target != null && status.bed.target > 0">/ {{ Math.round(status.bed.target) }}°</small>
+                </strong>
+              </div>
+              <div v-if="status.chamber != null" class="tc-telemetry-cell">
+                <span class="tc-telemetry-label"><Thermometer :size="12" />{{ t('Kammer') }}</span>
+                <strong class="tc-telemetry-value">{{ temperature(status.chamber) }} °C</strong>
+              </div>
+              <div class="tc-telemetry-cell">
+                <span class="tc-telemetry-label"><Compass :size="12" />{{ t('Position') }}</span>
+                <strong class="tc-telemetry-value">
+                  <span><em>X</em> {{ tcAxisDisplay('x', 0) }}</span>
+                  <span><em>Y</em> {{ tcAxisDisplay('y', 1) }}</span>
+                  <span><em>Z</em> {{ tcAxisDisplay('z', 2) }}</span>
+                </strong>
+              </div>
+              <div class="tc-telemetry-cell">
+                <span class="tc-telemetry-label">{{ t('Status') }}</span>
+                <strong class="tc-telemetry-value">
+                  {{ t(printLabel) }}
+                  <small v-if="status.qglApplied && online" class="tc-telemetry-badge">QGL</small>
+                  <small v-else-if="status.zTiltApplied && online" class="tc-telemetry-badge">Z-Tilt</small>
+                </strong>
+              </div>
+            </section>
+
             <section
               class="tools-machine-panel"
               :class="{ 'single-col': !hasLedDeck }"
@@ -1569,7 +1640,27 @@ async function acknowledgeUncertain() {
               <div>
                 <dt>Filament</dt>
                 <dd :class="{ 'text-lime': current.filamentEnabled && current.filamentDetected }">
-                  {{ t(filament(current)) }}
+                  <button
+                    v-if="current.filamentSensorName && current.filamentEnabled != null"
+                    type="button"
+                    class="tc-filament-toggle"
+                    :class="{
+                      present: online && current.filamentEnabled && current.filamentDetected,
+                      empty: online && current.filamentEnabled && current.filamentDetected === false,
+                      disabled: current.filamentEnabled === false,
+                    }"
+                    :disabled="!canToggleToolFilament"
+                    :aria-pressed="current.filamentEnabled === true"
+                    :title="
+                      current.filamentEnabled === true
+                        ? t('Filamentsensor T{0} deaktivieren', [selected])
+                        : t('Filamentsensor T{0} aktivieren', [selected])
+                    "
+                    @click="toggleToolFilamentSensor(current)"
+                  >
+                    {{ t(filament(current)) }}
+                  </button>
+                  <template v-else>{{ t(filament(current)) }}</template>
                 </dd>
               </div>
             </dl>
@@ -1720,6 +1811,8 @@ async function acknowledgeUncertain() {
         :show-cameras="showCameras"
         :cameras="activeCameras"
         :model-preset="settingsStore.activePrinter.value?.model?.preset ?? 'auto'"
+        :printer-id="settingsStore.activePrinter.value?.id ?? ''"
+        :can-write="canWrite"
         @select="selectTool"
         @command="send"
         @refresh="refresh"
@@ -1752,7 +1845,7 @@ async function acknowledgeUncertain() {
       />
 
       <section
-        v-if="showCameras && (tab === 'cameras' || (tab === 'tools' && activeCameras.length > 0))"
+        v-if="showCameras && (tab === 'cameras' || (tab === 'tools' && bottomTabCameras.length > 0))"
         class="camera-section"
         :aria-label="t('Druckerkameras')"
       >
@@ -1760,16 +1853,16 @@ async function acknowledgeUncertain() {
           <h2>{{ t('Am Drucker') }}</h2>
           <span>
             {{
-              activeCameras.length === 1
+              bottomTabCameras.length === 1
                 ? t('Live aus der Kamera')
-                : t('Live aus {0} Kameras', [activeCameras.length])
+                : t('Live aus {0} Kameras', [bottomTabCameras.length])
             }}
           </span>
         </div>
         <h2 v-else class="sr-only">{{ t('Druckerkameras') }}</h2>
-        <div v-if="activeCameras.length > 0" class="camera-grid">
+        <div v-if="bottomTabCameras.length > 0" class="camera-grid">
           <CameraView
-            v-for="cam in activeCameras"
+            v-for="cam in bottomTabCameras"
             :key="`${printerSwitchKey}-${cam.id}`"
             :id="cam.id"
             :name="cam.name"
@@ -1849,6 +1942,13 @@ async function acknowledgeUncertain() {
       @switch-printer="quickSwitchPrinter"
       @open-settings="openSettings"
       @command="send"
+    />
+
+    <PromptDialog
+      :prompt="activePrompt"
+      :busy="pending"
+      @action="gcode => send({ action: 'prompt_action', gcode })"
+      @dismiss="send({ action: 'prompt_action', dismiss: true })"
     />
   </div>
 </template>

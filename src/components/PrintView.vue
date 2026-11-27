@@ -25,6 +25,9 @@ import {
   ListPlus,
   AlertTriangle,
   ListOrdered,
+  Download,
+  Thermometer,
+  Flame,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import { printControlReason } from '../print-control-state.mjs'
@@ -68,12 +71,15 @@ const renameDraft = ref('')
 const renameBusy = ref(false)
 
 const uploadInputEl = ref(null)
+const uploadPrintInputEl = ref(null)
 const dragOver = ref(false)
 const uploading = ref(false)
 const uploadProgress = ref(0)
 const fileActionFeedback = ref(null) // { ok: boolean, message: string }
 const confirmDeletePath = ref('')
+const confirmDeleteDir = ref('')
 let deleteConfirmTimer = null
+let deleteDirConfirmTimer = null
 
 const queue = ref({ available: false, queueState: null, jobs: [] })
 const queueBusy = ref(false)
@@ -106,6 +112,27 @@ function resetDeleteConfirm() {
   clearTimeout(deleteConfirmTimer)
   deleteConfirmTimer = null
 }
+
+function resetDeleteDirConfirm() {
+  confirmDeleteDir.value = ''
+  clearTimeout(deleteDirConfirmTimer)
+  deleteDirConfirmTimer = null
+}
+
+const canUploadAndPrint = computed(
+  () =>
+    props.canWrite &&
+    props.online &&
+    !uploading.value &&
+    !isPrintActive.value &&
+    props.status?.klipperState === 'ready' &&
+    !props.pending &&
+    !props.status?.control?.job &&
+    !props.status?.loadWatchActive &&
+    props.status?.idleState !== 'Printing' &&
+    !props.status?.detectionConflict &&
+    props.status?.toolchangerState !== 'error',
+)
 
 const printStartReason = computed(() => {
   if (!selectedFile.value) return 'Keine Druckdatei ausgewählt.'
@@ -201,39 +228,143 @@ function normalizeMaterialToken(raw) {
     .replace(/[^A-Z0-9]/g, '')
 }
 
-const prePrintWarnings = computed(() => {
-  if (!showInlineSpoolman.value || !activeSpool.value || !metadata.value || isViewingActivePrint.value) return []
-  const warnings = []
-  const spool = activeSpool.value
-  const neededWeight = metadata.value.filamentWeightTotal ?? metadata.value.tools?.[0]?.weight ?? null
-  if (
-    Number.isFinite(spool.remainingWeight) &&
-    Number.isFinite(neededWeight) &&
-    neededWeight > 0 &&
-    spool.remainingWeight < neededWeight
-  ) {
-    const deficit = Math.max(0.1, neededWeight - spool.remainingWeight)
-    warnings.push({
-      id: 'weight',
-      message: t('Spule reicht evtl. nicht: {0} g übrig, Druck benötigt {1} g (ca. {2} g fehlen).', [
-        formatNumber(spool.remainingWeight, 0),
-        formatNumber(neededWeight, 1),
-        formatNumber(deficit, 1),
-      ]),
-    })
-  }
-  const slicedMat = metadata.value.tools?.[0]?.type
-  const spoolMat = spool.material
-  if (slicedMat && spoolMat) {
-    const a = normalizeMaterialToken(spoolMat)
-    const b = normalizeMaterialToken(slicedMat)
-    if (a && b && a !== b && !a.startsWith(b) && !b.startsWith(a)) {
-      warnings.push({
-        id: 'material',
-        message: t('Material-Abweichung: Geladene Spule ist {0}, Datei ist für {1} gesliced.', [spoolMat, slicedMat]),
+const liveTempPills = computed(() => {
+  if (!props.online || !props.status) return []
+  const items = []
+  const tools = props.status.tools ?? []
+  if (showMultiToolUi.value && tools.length > 1) {
+    const shown = new Set()
+    const activeId = props.status.active
+    if (Number.isInteger(activeId) && tools[activeId]) {
+      shown.add(activeId)
+      const tObj = tools[activeId]
+      items.push({
+        id: `t${activeId}`,
+        kind: 'tool',
+        label: `T${activeId}`,
+        temp: tObj.temperature,
+        target: tObj.target,
       })
     }
+    for (const tObj of tools) {
+      if (shown.has(tObj.id)) continue
+      if (Number.isFinite(tObj.target) && tObj.target > 0) {
+        shown.add(tObj.id)
+        items.push({
+          id: `t${tObj.id}`,
+          kind: 'tool',
+          label: `T${tObj.id}`,
+          temp: tObj.temperature,
+          target: tObj.target,
+        })
+      }
+    }
+    if (!items.length && tools[0]) {
+      items.push({
+        id: 't0',
+        kind: 'tool',
+        label: 'T0',
+        temp: tools[0].temperature,
+        target: tools[0].target,
+      })
+    }
+  } else if (tools[0]) {
+    items.push({
+      id: 'extruder',
+      kind: 'tool',
+      label: t('Düse'),
+      temp: tools[0].temperature,
+      target: tools[0].target,
+    })
   }
+  if (props.status.bed) {
+    items.push({
+      id: 'bed',
+      kind: 'bed',
+      label: t('Bett'),
+      temp: props.status.bed.temperature,
+      target: props.status.bed.target,
+    })
+  }
+  const chamber =
+    props.status.chamber ??
+    props.status.sensors?.find(s => /chamber|kammer/i.test(`${s.name ?? ''} ${s.label ?? ''}`))?.temperature ??
+    null
+  if (Number.isFinite(chamber)) {
+    items.push({
+      id: 'chamber',
+      kind: 'chamber',
+      label: t('Kammer'),
+      temp: chamber,
+      target: null,
+    })
+  }
+  return items
+})
+
+const prePrintWarnings = computed(() => {
+  if (isViewingActivePrint.value) return []
+  const warnings = []
+
+  // 1-Tool Spoolman sanity checks
+  if (showInlineSpoolman.value && activeSpool.value && metadata.value) {
+    const spool = activeSpool.value
+    const neededWeight = metadata.value.filamentWeightTotal ?? metadata.value.tools?.[0]?.weight ?? null
+    if (
+      Number.isFinite(spool.remainingWeight) &&
+      Number.isFinite(neededWeight) &&
+      neededWeight > 0 &&
+      spool.remainingWeight < neededWeight
+    ) {
+      const deficit = Math.max(0.1, neededWeight - spool.remainingWeight)
+      warnings.push({
+        id: 'weight',
+        message: t('Spule reicht evtl. nicht: {0} g übrig, Druck benötigt {1} g (ca. {2} g fehlen).', [
+          formatNumber(spool.remainingWeight, 0),
+          formatNumber(neededWeight, 1),
+          formatNumber(deficit, 1),
+        ]),
+      })
+    }
+    const slicedMat = metadata.value.tools?.[0]?.type
+    const spoolMat = spool.material
+    if (slicedMat && spoolMat) {
+      const a = normalizeMaterialToken(spoolMat)
+      const b = normalizeMaterialToken(slicedMat)
+      if (a && b && a !== b && !a.startsWith(b) && !b.startsWith(a)) {
+        warnings.push({
+          id: 'material',
+          message: t('Material-Abweichung: Geladene Spule ist {0}, Datei ist für {1} gesliced.', [spoolMat, slicedMat]),
+        })
+      }
+    }
+  }
+
+  // Multi-Toolchanger Pre-Flight checks
+  if (showMultiToolUi.value && props.online && props.status) {
+    if (props.status.toolchangerState && props.status.toolchangerState !== 'ready') {
+      warnings.push({
+        id: 'tc-state',
+        message: t('Toolchanger ist nicht bereit ({0}).', [props.status.toolchangerState]),
+      })
+    }
+    if (props.status.detectionMismatch) {
+      warnings.push({
+        id: 'tc-mismatch',
+        message: t('Werkzeugerkennung stimmt nicht überein — vor Druckstart prüfen.'),
+      })
+    }
+    for (const u of usedToolsList.value) {
+      const liveTool = props.status.tools?.[u.id]
+      if (liveTool?.filamentEnabled === true && liveTool?.filamentDetected === false) {
+        warnings.push({
+          id: `tc-fil-${u.id}`,
+          message: t('Kein Filament an T{0} erkannt (für diesen Druck benötigt).', [u.id]),
+        })
+      }
+    }
+  }
+
   return warnings
 })
 
@@ -424,7 +555,7 @@ async function createFolder() {
 function startRename(file) {
   if (!props.canWrite || isFileActivePrint(file.path)) return
   renamingPath.value = file.path
-  renameDraft.value = file.name
+  renameDraft.value = file.dir ? file.path : file.name
 }
 
 function cancelRename() {
@@ -433,10 +564,17 @@ function cancelRename() {
 }
 
 async function submitRename(file) {
-  const nextName = renameDraft.value.trim()
-  if (!nextName || !props.canWrite || renameBusy.value) return
-  const dest = file.dir ? `${file.dir}/${nextName}` : nextName
-  if (dest === file.path) {
+  const nextRaw = renameDraft.value.trim()
+  if (!nextRaw || !props.canWrite || renameBusy.value) return
+  let dest
+  if (nextRaw.startsWith('/')) {
+    dest = nextRaw.replace(/^\/+/, '').replace(/\/+/g, '/')
+  } else if (nextRaw.includes('/')) {
+    dest = nextRaw.replace(/\/+/g, '/')
+  } else {
+    dest = file.dir ? `${file.dir}/${nextRaw}` : nextRaw
+  }
+  if (!dest || dest === file.path) {
     cancelRename()
     return
   }
@@ -453,13 +591,46 @@ async function submitRename(file) {
     if (!res.ok) throw new Error(data.error || 'Datei konnte nicht umbenannt werden.')
     const wasSelected = selectedFile.value === file.path
     cancelRename()
-    fileActionFeedback.value = { ok: true, message: t('Umbenannt in {0}.', [nextName]) }
+    fileActionFeedback.value = { ok: true, message: t('Verschoben / umbenannt in {0}.', [dest]) }
     await loadFiles(activeFolder.value)
     if (wasSelected) selectedFile.value = dest
   } catch (err) {
     fileActionFeedback.value = { ok: false, message: err.message || 'Datei konnte nicht umbenannt werden.' }
   } finally {
     renameBusy.value = false
+  }
+}
+
+function downloadUrl(filePath) {
+  return `/api/print/download?filename=${encodeURIComponent(filePath)}`
+}
+
+async function requestOrDeleteFolder(dirPath) {
+  if (!dirPath || !props.canWrite || folderBusy.value) return
+  if (confirmDeleteDir.value !== dirPath) {
+    confirmDeleteDir.value = dirPath
+    clearTimeout(deleteDirConfirmTimer)
+    deleteDirConfirmTimer = setTimeout(resetDeleteDirConfirm, 5000)
+    return
+  }
+  resetDeleteDirConfirm()
+  folderBusy.value = true
+  fileActionFeedback.value = null
+  try {
+    const res = await fetch(`/api/print/dir?path=${encodeURIComponent(dirPath)}`, {
+      method: 'DELETE',
+      headers: { 'X-Cockpit-Request': '1' },
+      signal: AbortSignal.timeout(8000),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Ordner konnte nicht gelöscht werden (ist er leer?).')
+    if (activeFolder.value === dirPath) activeFolder.value = ''
+    fileActionFeedback.value = { ok: true, message: t('Ordner „{0}“ gelöscht.', [dirPath]) }
+    await loadFiles(activeFolder.value)
+  } catch (err) {
+    fileActionFeedback.value = { ok: false, message: err.message || 'Ordner konnte nicht gelöscht werden.' }
+  } finally {
+    folderBusy.value = false
   }
 }
 
@@ -508,66 +679,90 @@ async function runQueueAction(payload) {
   }
 }
 
-async function uploadGcodeFile(file) {
-  if (!file || !props.canWrite || uploading.value) return
+async function uploadSingleGcode(file, { print = false, index = 0, total = 1 } = {}) {
   if (!/\.(gcode|gco|g)$/i.test(file.name)) {
-    fileActionFeedback.value = { ok: false, message: 'Bitte eine .gcode-, .gco- oder .g-Datei auswählen.' }
-    return
+    throw new Error('Bitte eine .gcode-, .gco- oder .g-Datei auswählen.')
   }
   if (file.size > 100 * 1024 * 1024) {
-    fileActionFeedback.value = { ok: false, message: 'Die G-Code-Datei überschreitet das Limit von 100 MB.' }
-    return
+    throw new Error('Die G-Code-Datei überschreitet das Limit von 100 MB.')
+  }
+  uploadProgress.value = 0
+  fileActionFeedback.value = {
+    ok: true,
+    message:
+      total > 1
+        ? t('Lade {0} ({1}/{2}) hoch …', [file.name, index + 1, total])
+        : print
+          ? t('Lade {0} hoch und starte Druck …', [file.name])
+          : t('Lade {0} hoch …', [file.name]),
   }
 
+  // Buffer in memory first so macOS Safari never aborts on File-backed XHR bodies
+  const arrayBuffer = await file.arrayBuffer()
+  const targetDir = activeFolder.value || ''
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', '/api/print/upload')
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream')
+    xhr.setRequestHeader('X-Cockpit-Request', '1')
+    xhr.setRequestHeader('X-Gcode-Filename', encodeURIComponent(file.name))
+    if (targetDir) xhr.setRequestHeader('X-Gcode-Path', encodeURIComponent(targetDir))
+    if (print) xhr.setRequestHeader('X-Gcode-Print', '1')
+    xhr.timeout = 120_000
+    xhr.upload.onprogress = evt => {
+      if (evt.lengthComputable && evt.total > 0) {
+        uploadProgress.value = Math.min(99, Math.round((evt.loaded / evt.total) * 100))
+      }
+    }
+    xhr.onload = () => {
+      let parsed = {}
+      try {
+        parsed = JSON.parse(xhr.responseText || '{}')
+      } catch {
+        // Ignore malformed JSON
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        uploadProgress.value = 100
+        resolve(parsed)
+      } else {
+        reject(new Error(parsed.error || `Upload fehlgeschlagen (HTTP ${xhr.status}).`))
+      }
+    }
+    xhr.onerror = () => reject(new Error('Verbindungsfehler beim Hochladen.'))
+    xhr.ontimeout = () => reject(new Error('Upload abgebrochen oder Zeitüberschreitung. Bitte erneut versuchen.'))
+    xhr.send(arrayBuffer)
+  })
+}
+
+async function uploadGcodeFiles(fileList, { print = false } = {}) {
+  const list = Array.from(fileList || []).filter(Boolean)
+  if (!list.length || !props.canWrite || uploading.value) return
   uploading.value = true
   uploadProgress.value = 0
-  fileActionFeedback.value = { ok: true, message: t('Lade {0} hoch …', [file.name]) }
-
+  let lastData = null
+  let uploadedCount = 0
   try {
-    // Buffer in memory first so macOS Safari never aborts on File-backed XHR bodies
-    const arrayBuffer = await file.arrayBuffer()
-    const targetDir = activeFolder.value || ''
-    const data = await new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest()
-      xhr.open('POST', '/api/print/upload')
-      xhr.setRequestHeader('Content-Type', 'application/octet-stream')
-      xhr.setRequestHeader('X-Cockpit-Request', '1')
-      xhr.setRequestHeader('X-Gcode-Filename', encodeURIComponent(file.name))
-      if (targetDir) xhr.setRequestHeader('X-Gcode-Path', encodeURIComponent(targetDir))
-      xhr.timeout = 120_000
-      xhr.upload.onprogress = evt => {
-        if (evt.lengthComputable && evt.total > 0) {
-          uploadProgress.value = Math.min(99, Math.round((evt.loaded / evt.total) * 100))
-        }
-      }
-      xhr.onload = () => {
-        let parsed = {}
-        try {
-          parsed = JSON.parse(xhr.responseText || '{}')
-        } catch {
-          // Ignore malformed JSON
-        }
-        if (xhr.status >= 200 && xhr.status < 300) {
-          uploadProgress.value = 100
-          resolve(parsed)
-        } else {
-          reject(new Error(parsed.error || `Upload fehlgeschlagen (HTTP ${xhr.status}).`))
-        }
-      }
-      xhr.onerror = () => reject(new Error('Verbindungsfehler beim Hochladen.'))
-      xhr.ontimeout = () => reject(new Error('Upload abgebrochen oder Zeitüberschreitung. Bitte erneut versuchen.'))
-      xhr.send(arrayBuffer)
-    })
-
+    for (let i = 0; i < list.length; i++) {
+      const startThis = print && i === list.length - 1 && list.length === 1
+      lastData = await uploadSingleGcode(list[i], { print: startThis, index: i, total: list.length })
+      uploadedCount++
+    }
     await loadFiles()
-    if (data?.path) {
-      selectedFile.value = data.path
+    if (lastData?.path) {
+      selectedFile.value = lastData.path
     }
     fileActionFeedback.value = {
       ok: true,
-      message: t('{0} hochgeladen und ausgewählt.', [data?.name || file.name]),
+      message:
+        uploadedCount > 1
+          ? t('{0} Dateien hochgeladen.', [uploadedCount])
+          : print
+            ? t('{0} hochgeladen — Druck startet …', [lastData?.name || list[0].name])
+            : t('{0} hochgeladen und ausgewählt.', [lastData?.name || list[0].name]),
     }
+    if (print) emit('refresh')
   } catch (err) {
+    if (uploadedCount > 0) await loadFiles()
     fileActionFeedback.value = { ok: false, message: err.message || 'Upload fehlgeschlagen.' }
   } finally {
     uploading.value = false
@@ -579,16 +774,26 @@ function triggerUploadPicker() {
   uploadInputEl.value?.click()
 }
 
+function triggerUploadPrintPicker() {
+  if (canUploadAndPrint.value) uploadPrintInputEl.value?.click()
+}
+
 function onUploadInputChange(event) {
+  const list = event.target?.files ? Array.from(event.target.files) : []
+  if (event.target) event.target.value = ''
+  if (list.length) uploadGcodeFiles(list, { print: false })
+}
+
+function onUploadPrintInputChange(event) {
   const file = event.target?.files?.[0]
   if (event.target) event.target.value = ''
-  if (file) uploadGcodeFile(file)
+  if (file) uploadGcodeFiles([file], { print: true })
 }
 
 function onDropGcode(event) {
   dragOver.value = false
-  const file = event.dataTransfer?.files?.[0]
-  if (file) uploadGcodeFile(file)
+  const list = event.dataTransfer?.files ? Array.from(event.dataTransfer.files) : []
+  if (list.length) uploadGcodeFiles(list, { print: false })
 }
 
 function isFileActivePrint(path) {
@@ -693,6 +898,7 @@ watch(selectedFile, filename => {
 
 watch(activeFolder, dir => {
   cancelRename()
+  resetDeleteDirConfirm()
   loadFiles(dir)
 })
 
@@ -727,6 +933,7 @@ onBeforeUnmount(() => {
   fetchAbort?.abort()
   resetStartConfirm()
   resetDeleteConfirm()
+  resetDeleteDirConfirm()
 })
 </script>
 
@@ -766,20 +973,41 @@ onBeforeUnmount(() => {
           class="subtle-button print-bar-btn"
           type="button"
           :disabled="uploading"
-          :title="t('.gcode-Datei auf den Drucker hochladen')"
+          :title="t('.gcode-Dateien auf den Drucker hochladen (Mehrfachauswahl möglich)')"
           @click="triggerUploadPicker"
         >
           <Upload :size="15" />
           <span>{{ uploading ? `${uploadProgress} %` : t('Hochladen') }}</span>
         </button>
+        <button
+          v-if="canWrite && !isPrintActive"
+          class="subtle-button print-bar-btn"
+          type="button"
+          :disabled="!canUploadAndPrint"
+          :title="t('.gcode-Datei hochladen und sofort drucken')"
+          @click="triggerUploadPrintPicker"
+        >
+          <Play :size="14" />
+          <span>{{ t('Hochladen & Drucken') }}</span>
+        </button>
         <input
           ref="uploadInputEl"
           type="file"
+          multiple
           accept=".gcode,.gco,.g,text/plain"
           class="sr-only"
           tabindex="-1"
           aria-hidden="true"
           @change="onUploadInputChange"
+        />
+        <input
+          ref="uploadPrintInputEl"
+          type="file"
+          accept=".gcode,.gco,.g,text/plain"
+          class="sr-only"
+          tabindex="-1"
+          aria-hidden="true"
+          @change="onUploadPrintInputChange"
         />
         <button
           class="icon-button"
@@ -895,6 +1123,22 @@ onBeforeUnmount(() => {
           >
             {{ dir }}
           </button>
+          <button
+            v-if="activeFolder && canWrite"
+            type="button"
+            :class="confirmDeleteDir === activeFolder ? 'confirm-button print-delete-confirm' : 'subtle-button print-dir-delete-btn'"
+            :disabled="folderBusy"
+            :title="
+              confirmDeleteDir === activeFolder
+                ? t('Erneut klicken, um den leeren Ordner endgültig zu löschen')
+                : t('Aktiven leeren Ordner löschen')
+            "
+            @click="requestOrDeleteFolder(activeFolder)"
+            @keydown.esc="resetDeleteDirConfirm"
+          >
+            <Trash2 :size="13" />
+            <span>{{ confirmDeleteDir === activeFolder ? t('Ordner löschen?') : t('Ordner löschen') }}</span>
+          </button>
         </div>
 
         <div v-if="!filteredFiles.length" class="print-browser-empty" role="status">
@@ -922,6 +1166,8 @@ onBeforeUnmount(() => {
                   v-model="renameDraft"
                   type="text"
                   :disabled="renameBusy"
+                  :placeholder="t('name.gcode oder ordner/name.gcode')"
+                  :title="t('Dateiname oder Zielpfad (z. B. ordner/name.gcode oder /name.gcode für Root)')"
                   :aria-label="t('Neuer Dateiname')"
                   @keydown.esc="cancelRename"
                 />
@@ -943,6 +1189,15 @@ onBeforeUnmount(() => {
                 </span>
               </button>
               <div class="print-grid-actions">
+                <a
+                  :href="downloadUrl(file.path)"
+                  :download="file.name"
+                  class="icon-button"
+                  :title="t('G-Code herunterladen')"
+                  :aria-label="t('{0} herunterladen', [file.name])"
+                >
+                  <Download :size="13" />
+                </a>
                 <button
                   v-if="queue.available && canWrite"
                   type="button"
@@ -959,7 +1214,7 @@ onBeforeUnmount(() => {
                   type="button"
                   class="icon-button"
                   :disabled="isFileActivePrint(file.path)"
-                  :title="t('Datei umbenennen')"
+                  :title="t('Datei umbenennen oder verschieben')"
                   :aria-label="t('{0} umbenennen', [file.name])"
                   @click="startRename(file)"
                 >
@@ -999,6 +1254,8 @@ onBeforeUnmount(() => {
                 v-model="renameDraft"
                 type="text"
                 :disabled="renameBusy"
+                :placeholder="t('name.gcode oder ordner/name.gcode')"
+                :title="t('Dateiname oder Zielpfad (z. B. ordner/name.gcode oder /name.gcode für Root)')"
                 :aria-label="t('Neuer Dateiname')"
                 @keydown.esc="cancelRename"
               />
@@ -1028,6 +1285,15 @@ onBeforeUnmount(() => {
             </button>
 
             <div v-if="renamingPath !== file.path" class="print-browser-actions">
+              <a
+                :href="downloadUrl(file.path)"
+                :download="file.name"
+                class="icon-button"
+                :title="t('G-Code herunterladen')"
+                :aria-label="t('{0} herunterladen', [file.name])"
+              >
+                <Download :size="14" />
+              </a>
               <button
                 v-if="queue.available && canWrite"
                 type="button"
@@ -1044,7 +1310,7 @@ onBeforeUnmount(() => {
                 type="button"
                 class="icon-button"
                 :disabled="isFileActivePrint(file.path)"
-                :title="t('Datei umbenennen')"
+                :title="t('Datei umbenennen oder verschieben')"
                 :aria-label="t('{0} umbenennen', [file.name])"
                 @click="startRename(file)"
               >
@@ -1209,9 +1475,28 @@ onBeforeUnmount(() => {
             </p>
           </div>
         </div>
+
+        <div v-if="liveTempPills.length" class="print-live-temps" :aria-label="t('Aktuelle Temperaturen')">
+          <span
+            v-for="item in liveTempPills"
+            :key="item.id"
+            class="print-live-temp-pill"
+            :class="{ heating: item.target != null && item.target > 0 }"
+          >
+            <Flame v-if="item.kind === 'tool'" :size="12" />
+            <Thermometer v-else :size="12" />
+            <small>{{ item.label }}</small>
+            <strong>
+              {{ item.temp != null ? `${Math.round(item.temp)}°` : '—' }}
+              <template v-if="item.target != null && item.target > 0">
+                <span>/ {{ Math.round(item.target) }}°</span>
+              </template>
+            </strong>
+          </span>
+        </div>
       </div>
 
-      <!-- Inline Spoolman Picker + Pre-Print Sanity Warnings (1-Tool) -->
+      <!-- Inline Spoolman Picker (1-Tool) -->
       <div v-if="showInlineSpoolman" class="print-spoolman-block">
         <SpoolmanPicker
           :spoolman="status.spoolman"
@@ -1219,6 +1504,10 @@ onBeforeUnmount(() => {
           :can-write="canWrite"
           @changed="emit('refresh')"
         />
+      </div>
+
+      <!-- Pre-Flight Sanity Warnings (1-Tool Spoolman + Multi-Toolchanger Filament/State) -->
+      <div v-if="prePrintWarnings.length" class="print-preflight-warnings">
         <div
           v-for="warn in prePrintWarnings"
           :key="warn.id"

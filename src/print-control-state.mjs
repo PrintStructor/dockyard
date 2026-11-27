@@ -56,5 +56,17 @@ export function printControlReason(status, action, online = true, pending = fals
     return ''
   }
 
+  if (action === 'pause_next_layer') {
+    if (!status.capabilities?.pauseNextLayer) return 'SET_PAUSE_NEXT_LAYER ist nicht konfiguriert.'
+    if (!isPrintActive) return 'Nur während eines aktiven oder pausierten Drucks verfügbar.'
+    return ''
+  }
+
+  if (action === 'pause_at_layer') {
+    if (!status.capabilities?.pauseAtLayer) return 'SET_PAUSE_AT_LAYER ist nicht konfiguriert.'
+    if (!isPrintActive) return 'Nur während eines aktiven oder pausierten Drucks verfügbar.'
+    return ''
+  }
+
   return 'Unbekannte Aktion.'
 }

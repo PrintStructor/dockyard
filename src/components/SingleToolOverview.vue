@@ -23,6 +23,7 @@ import {
   Sun,
   Trash2,
   X,
+  Camera,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import { heatState } from '../../server/status.mjs'
@@ -35,6 +36,8 @@ import LedControls from './LedControls.vue'
 import SpoolmanPicker from './SpoolmanPicker.vue'
 import TemperatureGraph from './TemperatureGraph.vue'
 import MacroDeck from './MacroDeck.vue'
+import CameraView from './CameraView.vue'
+import LivePrintTuning from './LivePrintTuning.vue'
 
 const PrinterScene = defineAsyncComponent(() => import('./PrinterScene.vue'))
 
@@ -50,6 +53,7 @@ const props = defineProps({
   sceneConfig: { type: Object, default: () => ({ kind: 'none' }) },
   canWrite: { type: Boolean, default: true },
   displayMode: { type: Boolean, default: false },
+  cameras: { type: Array, default: () => [] },
 })
 
 const emit = defineEmits(['command', 'open-settings', 'refresh'])
@@ -150,7 +154,12 @@ const bedPillMode = computed(() => heatPillMode(bedHeat.value))
 const busy = computed(() => props.pending || !!props.status?.control?.job)
 const enabled = computed(() => props.online && props.status?.klipperState === 'ready' && !busy.value)
 const isPrinting = computed(() => props.status?.printState === 'printing')
+const isPrintActive = computed(() => ['printing', 'paused'].includes(props.status?.printState))
 const canCooldown = computed(() => enabled.value && !isPrinting.value)
+const macroEnabled = computed(
+  () => enabled.value && !isPrinting.value && props.status?.idleState !== 'Printing' && !props.status?.loadWatchActive,
+)
+const primaryCamera = computed(() => (Array.isArray(props.cameras) && props.cameras.length > 0 ? props.cameras[0] : null))
 const moving = computed(
   () =>
     ['printing', 'paused'].includes(props.status?.printState) ||
@@ -1518,13 +1527,48 @@ onBeforeUnmount(() => {
         <MacroDeck
           :macros="publicMacros"
           :printer-id="printerId"
-          :enabled="motion"
+          :enabled="macroEnabled"
           @run="emit('command', $event)"
         />
+
+        <details v-if="primaryCamera" class="single-cam-peek" :open="!displayMode">
+          <summary>
+            <span><Camera :size="15" />{{ primaryCamera.name || t('Kamera') }}</span>
+            <ChevronDown :size="15" class="single-graph-chevron" />
+          </summary>
+          <div class="single-cam-peek-body">
+            <CameraView
+              :id="primaryCamera.id"
+              :name="primaryCamera.name"
+              :description="primaryCamera.description"
+              :service="primaryCamera.service"
+              :preferred-mode="primaryCamera.preferredMode"
+              :flip-x="primaryCamera.flipX"
+              :flip-y="primaryCamera.flipY"
+              :rotate="primaryCamera.rotate"
+            />
+          </div>
+        </details>
       </aside>
     </div>
 
-    <!-- Band 4: Collapsible Temperature History Graph -->
+    <!-- Band 4: Collapsible Standby Tuning & Temperature History Graph -->
+    <details v-if="online && !isPrintActive" class="single-graph-disclosure single-standby-tuning">
+      <summary>
+        <span><SlidersHorizontal :size="15" />{{ t('Standby-Tuning · PA & Kinematik') }}</span>
+        <ChevronDown :size="15" class="single-graph-chevron" />
+      </summary>
+      <div class="single-graph-body">
+        <LivePrintTuning
+          allow-standby
+          :status="status"
+          :online="online"
+          :pending="pending"
+          :send="send"
+        />
+      </div>
+    </details>
+
     <details class="single-graph-disclosure" :open="!displayMode">
       <summary>
         <span><ChartNoAxesCombined :size="15" />{{ t('Temperaturverlauf') }}</span>

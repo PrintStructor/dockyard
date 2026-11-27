@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createLiveFeed } from '../server/live.mjs'
+import { createLiveFeed, createPromptParser } from '../server/live.mjs'
 
 async function waitForCondition(predicate, timeoutMs = 600) {
   const deadline = Date.now() + timeoutMs
@@ -489,4 +489,114 @@ test('live feed polls hyphenated sb-leds and skips long >8-LED enclosure strips'
     },
   )
   assert.equal(caselight.ledQueries.length, 0)
+})
+
+test('Paket D2: createPromptParser parses Klipper action:prompt_* protocol and live feed replays open prompt', async () => {
+  const parser = createPromptParser()
+
+  assert.equal(parser.feed('// action:prompt_begin Filamentwechsel'), null)
+  assert.equal(parser.feed('// action:prompt_text Bitte neues Filament einlegen.'), null)
+  assert.equal(parser.feed('// action:prompt_button_group_start'), null)
+  assert.equal(parser.feed('// action:prompt_button Laden|LOAD_FILAMENT|primary'), null)
+  assert.equal(parser.feed('// action:prompt_button Abbrechen|CANCEL_PRINT|error'), null)
+  assert.equal(parser.feed('// action:prompt_button_group_end'), null)
+  assert.equal(parser.feed('// action:prompt_footer_button Fortsetzen|RESUME|warning'), null)
+  assert.equal(parser.getActive(), null)
+
+  const shown = parser.feed('// action:prompt_show')
+  assert.ok(shown)
+  assert.equal(shown.open, true)
+  assert.equal(shown.title, 'Filamentwechsel')
+  assert.equal(shown.items.length, 2)
+  assert.equal(shown.items[0].kind, 'text')
+  assert.equal(shown.items[1].kind, 'group')
+  assert.equal(shown.items[1].buttons.length, 2)
+  assert.equal(shown.items[1].buttons[0].gcode, 'LOAD_FILAMENT')
+  assert.equal(shown.footerButtons[0].gcode, 'RESUME')
+  assert.equal(parser.getActive()?.title, 'Filamentwechsel')
+
+  const closed = parser.feed('// action:prompt_end')
+  assert.deepEqual(closed, { open: false })
+  assert.equal(parser.getActive(), null)
+
+  // End-to-end replay via createLiveFeed SSE
+  let activeSocket = null
+  class PromptWS {
+    constructor() {
+      this.readyState = 1
+      activeSocket = this
+      setImmediate(() => this.onopen?.())
+    }
+    send(payload) {
+      const msg = JSON.parse(payload)
+      if (msg.id === 1) {
+        setImmediate(() =>
+          this.onmessage?.({
+            data: JSON.stringify({ jsonrpc: '2.0', id: 1, result: { objects: ['webhooks'] } }),
+          }),
+        )
+      } else if (msg.id === 2) {
+        setImmediate(() =>
+          this.onmessage?.({
+            data: JSON.stringify({ jsonrpc: '2.0', id: 2, result: { status: { webhooks: { state: 'ready' } } } }),
+          }),
+        )
+      }
+    }
+    close() {
+      this.readyState = 3
+    }
+  }
+
+  const feed = createLiveFeed({
+    printer: 'http://127.0.0.1:1977',
+    baseObjects: ['webhooks'],
+    snapshot: raw => ({ ok: raw.webhooks?.state === 'ready' }),
+    WebSocketImpl: PromptWS,
+    ledPollMs: 500,
+    pingIntervalMs: 500,
+  })
+
+  const mkRes = () => {
+    const events = []
+    return {
+      events,
+      res: {
+        destroyed: false,
+        writableLength: 0,
+        setHeader() {},
+        flushHeaders() {},
+        write(chunk) {
+          const match = chunk.match(/^event: (\w+)\ndata: (.+)\n\n$/s)
+          if (match) events.push({ event: match[1], data: JSON.parse(match[2]) })
+        },
+        end() {},
+        destroy() {},
+        on() {},
+      },
+    }
+  }
+
+  try {
+    const c1 = mkRes()
+    feed.handle({}, c1.res)
+    await waitForCondition(() => c1.events.some(e => e.event === 'status'))
+
+    activeSocket.onmessage?.({
+      data: JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'notify_gcode_response',
+        params: ['// action:prompt_begin Test\n// action:prompt_button OK|M118 OK|primary\n// action:prompt_show'],
+      }),
+    })
+    assert.ok(c1.events.some(e => e.event === 'prompt' && e.data.open === true && e.data.title === 'Test'))
+    assert.equal(feed.getActivePrompt()?.title, 'Test')
+
+    // Second client joining later receives the open prompt immediately!
+    const c2 = mkRes()
+    feed.handle({}, c2.res)
+    assert.ok(c2.events.some(e => e.event === 'prompt' && e.data.open === true && e.data.title === 'Test'))
+  } finally {
+    feed.close()
+  }
 })

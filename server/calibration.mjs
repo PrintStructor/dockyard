@@ -693,6 +693,10 @@ export function normalizeCalibrationData({ rawStatus = {}, configFiles = [] } = 
 
   const extruderMaxRaw = parseNum(settings.extruder?.max_temp)
   const bedMaxRaw = parseNum(settings.heater_bed?.max_temp)
+  const toolMax = Array.from({ length: toolCount }, (_, id) => {
+    const rawMax = parseNum(settings[id ? `extruder${id}` : 'extruder']?.max_temp)
+    return rawMax != null ? Math.max(0, Math.floor(rawMax) - 5) : null
+  })
 
   return {
     isToolchanger: status.isToolchanger,
@@ -703,6 +707,7 @@ export function normalizeCalibrationData({ rawStatus = {}, configFiles = [] } = 
     pidLimits: {
       extruderMax: extruderMaxRaw != null ? Math.max(0, Math.floor(extruderMaxRaw) - 5) : null,
       bedMax: bedMaxRaw != null ? Math.max(0, Math.floor(bedMaxRaw) - 5) : null,
+      toolMax,
     },
     tools,
     nudgeRingClosure,

@@ -24,7 +24,7 @@ function makeRaw(overrides = {}) {
     gcode_move: { speed_factor: 1.0, extrude_factor: 1.0, homing_origin: [0, 0, 0, 0] },
     exclude_object: {
       objects: [
-        { name: 'Part_A', center: [100, 100] },
+        { name: 'Part_A', center: [100, 100], polygon: [[90, 90], [110, 90], [110, 110], [90, 110]] },
         { name: 'Part_B', center: [200, 150] },
       ],
       excluded_objects: ['Part_C'],
@@ -49,8 +49,8 @@ test('normalizeStatus extracts live print tuning (speed, flow, Z offset) and exc
   assert.deepEqual(st.excludeObjects, {
     available: true,
     objects: [
-      { name: 'Part_A', center: [100, 100] },
-      { name: 'Part_B', center: [200, 150] },
+      { name: 'Part_A', center: [100, 100], polygon: [[90, 90], [110, 90], [110, 110], [90, 110]] },
+      { name: 'Part_B', center: [200, 150], polygon: null },
     ],
     excluded: ['Part_C'],
     current: 'Part_A',
@@ -61,6 +61,36 @@ test('normalizeStatus extracts live print tuning (speed, flow, Z offset) and exc
   assert.equal(empty.flowPercent, null)
   assert.equal(empty.zOffset, null)
   assert.deepEqual(empty.excludeObjects, { available: false, objects: [], excluded: [], current: null })
+})
+
+test('Paket D2: displayMessage, printMessage, pauseAtLayer state and pause_next_layer / pause_at_layer commands', () => {
+  const raw = makeRaw({
+    print_stats: { state: 'printing', filename: 'part.gcode', message: 'Heating bed' },
+    display_status: { message: 'Layer 5 / 42' },
+    'gcode_macro SET_PAUSE_NEXT_LAYER': { enable: 1 },
+    'gcode_macro SET_PAUSE_AT_LAYER': { enable: true, layer: 12 },
+  })
+  raw.configfile.settings['gcode_macro set_pause_next_layer'] = { gcode: 'SET_GCODE_VARIABLE ...' }
+  raw.configfile.settings['gcode_macro set_pause_at_layer'] = { gcode: 'SET_GCODE_VARIABLE ...' }
+
+  const st = normalizeStatus(raw)
+  assert.equal(st.displayMessage, 'Layer 5 / 42')
+  assert.equal(st.printMessage, 'Heating bed')
+  assert.deepEqual(st.pauseAtLayer, { nextLayer: true, targetEnabled: true, targetLayer: 12 })
+
+  const caps = capabilities(raw)
+  assert.equal(caps.pauseNextLayer, true)
+  assert.equal(caps.pauseAtLayer, true)
+
+  assert.equal(commandFor({ action: 'pause_next_layer', enable: true }, raw).body.script, 'SET_PAUSE_NEXT_LAYER ENABLE=1')
+  assert.equal(commandFor({ action: 'pause_next_layer', enable: false }, raw).body.script, 'SET_PAUSE_NEXT_LAYER ENABLE=0')
+  assert.equal(commandFor({ action: 'pause_at_layer', enable: true, layer: 25 }, raw).body.script, 'SET_PAUSE_AT_LAYER ENABLE=1 LAYER=25')
+  assert.equal(commandFor({ action: 'pause_at_layer', enable: false }, raw).body.script, 'SET_PAUSE_AT_LAYER ENABLE=0')
+  assert.throws(() => commandFor({ action: 'pause_at_layer', enable: true, layer: 0 }, raw), err => err.status === 400)
+  assert.throws(
+    () => commandFor({ action: 'pause_next_layer', enable: true }, makeRaw()),
+    err => err.status === 409,
+  )
 })
 
 test('print_start validates filenames, allows cold-start unhomed prints, and blocks active prints, conflicts or errors', () => {

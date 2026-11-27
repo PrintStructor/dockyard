@@ -21,6 +21,8 @@ const SENSOR_LABELS = {
   skr_pico: 'SKR Pico',
 }
 
+const ALLOWED_GCODE_MACROS = new Set(['G32', 'M600'])
+
 const INTERNAL_PUBLIC_MACROS = new Set([
   'PAUSE',
   'RESUME',
@@ -425,7 +427,7 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
     .filter(
       name =>
         /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name) &&
-        !/^[GMT]\d+(\.\d+)?$/i.test(name) &&
+        (!/^[GMT]\d+(\.\d+)?$/i.test(name) || ALLOWED_GCODE_MACROS.has(name.toUpperCase())) &&
         !INTERNAL_PUBLIC_MACROS.has(name.toUpperCase()),
     )
     .map(name => {
@@ -533,6 +535,11 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
                   Array.isArray(item.center) && item.center.length >= 2 && finite(item.center[0]) != null && finite(item.center[1]) != null
                     ? [item.center[0], item.center[1]]
                     : null,
+                polygon: Array.isArray(item.polygon)
+                  ? item.polygon
+                      .filter(pt => Array.isArray(pt) && pt.length >= 2 && finite(pt[0]) != null && finite(pt[1]) != null)
+                      .map(pt => [pt[0], pt[1]])
+                  : null,
               }))
           : [],
         excluded: Array.isArray(exObj.excluded_objects)
@@ -541,6 +548,27 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
         current: typeof exObj.current_object === 'string' ? exObj.current_object : null,
       }
     : { available: false, objects: [], excluded: [], current: null }
+
+  const displayMessage =
+    typeof status.display_status?.message === 'string' && status.display_status.message.trim()
+      ? status.display_status.message.trim()
+      : null
+  const printMessage =
+    typeof status.print_stats?.message === 'string' && status.print_stats.message.trim()
+      ? status.print_stats.message.trim()
+      : null
+  const pauseNextMacro = status['gcode_macro SET_PAUSE_NEXT_LAYER'] ?? null
+  const pauseAtMacro = status['gcode_macro SET_PAUSE_AT_LAYER'] ?? null
+  const pauseAtLayer = {
+    nextLayer: pauseNextMacro?.enable === true || pauseNextMacro?.enable === 1,
+    targetEnabled: pauseAtMacro?.enable === true || pauseAtMacro?.enable === 1,
+    targetLayer: Number.isInteger(pauseAtMacro?.layer) ? pauseAtMacro.layer : null,
+  }
+  const idleTimeout = {
+    state: status.idle_timeout?.state ?? null,
+    printingTime: finite(status.idle_timeout?.printing_time),
+    timeout: numeric(config.idle_timeout?.timeout),
+  }
 
   const qglApplied = status.quad_gantry_level?.applied === true
   const zTiltApplied = status.z_tilt?.applied === true
@@ -563,6 +591,10 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
     printState: status.print_stats?.state ?? null,
     filename: status.print_stats?.filename?.split('/').pop() || null,
     printFilename: status.print_stats?.filename || null,
+    displayMessage,
+    printMessage,
+    pauseAtLayer,
+    idleTimeout,
     progress: finite(status.display_status?.progress),
     printDuration: finite(status.print_stats?.print_duration),
     totalDuration: finite(status.print_stats?.total_duration),

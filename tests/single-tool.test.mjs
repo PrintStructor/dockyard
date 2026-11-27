@@ -1214,3 +1214,228 @@ test('Paket D1 safety: multi-tool extrude dock-guard & extruder restore + hardwa
   assert.equal(calibrationCapabilities(tapVirtual.configfile.settings).zEndstopCalibrate, false)
   assert.equal(calibrationCapabilities(tapVirtual.configfile.settings).probeCalibrate, true)
 })
+
+test('Paket D2 unit: G32/M600 macros, macros during pause, multi-tool presets bool fix, and multi-tool pidLimits.toolMax', async () => {
+  const { applyMainsailPresetMutation, normalizePresets } = await import('../server/presets.mjs')
+  const { normalizeCalibrationData } = await import('../server/calibration.mjs')
+
+  // 1. G32 and M600 appear in publicMacros (while G28/M104 stay filtered out), and macros are allowed while paused
+  const rawPaused = singleToolTridentRaw({
+    print_stats: { state: 'paused', filename: 'part.gcode' },
+    configfile: {
+      settings: {
+        extruder: { max_temp: 300 },
+        heater_bed: { max_temp: 120 },
+        'gcode_macro g32': { description: 'QGL & Home', gcode: 'G28\nQUAD_GANTRY_LEVEL' },
+        'gcode_macro m600': { description: 'Filamentwechsel', gcode: 'PAUSE' },
+        'gcode_macro g28': { gcode: 'G28' },
+        'gcode_macro m104': { gcode: 'M104' },
+      },
+    },
+  })
+  const st = normalizeStatus(rawPaused)
+  assert.deepEqual(
+    st.publicMacros.map(m => m.name),
+    ['G32', 'M600'],
+  )
+  assert.equal(commandFor({ action: 'macro', name: 'M600' }, rawPaused).body.script, 'M600')
+  assert.throws(
+    () => commandFor({ action: 'macro', name: 'M600' }, { ...rawPaused, print_stats: { state: 'printing' } }),
+    err => err.status === 409,
+  )
+
+  // 2. applyMainsailPresetMutation handles single-heater (bool: false when 0/null) & multi-tool extruder propagation
+  const dbSingle = applyMainsailPresetMutation({}, { action: 'upsert', name: 'NozzleOnly', extruder: 140, bed: 0, toolCount: 1 })
+  const entrySingle = Object.values(dbSingle.presets ?? dbSingle)[0]
+  assert.equal(entrySingle.values.extruder.bool, true)
+  assert.equal(entrySingle.values.extruder.value, 140)
+  assert.equal(entrySingle.values.heater_bed.bool, false)
+
+  const dbTc = applyMainsailPresetMutation({}, { action: 'upsert', name: 'ASA_TC', extruder: 250, bed: 105, toolCount: 6 })
+  const listTc = normalizePresets({ mainsail: dbTc, toolCount: 6 })
+  const tcPreset = listTc.find(p => p.name === 'ASA_TC')
+  assert.ok(tcPreset)
+  assert.deepEqual(tcPreset.tools, [250, 250, 250, 250, 250, 250])
+  assert.equal(tcPreset.bed, 105)
+
+  // 3. Multi-tool pidLimits.toolMax extracts per-tool safe max (max_temp - 5)
+  const cal = normalizeCalibrationData({
+    rawStatus: {
+      toolchanger: {},
+      configfile: {
+        settings: {
+          toolchanger: {},
+          extruder: { max_temp: 300 },
+          extruder1: { max_temp: 280 },
+          extruder2: { max_temp: 320 },
+          heater_bed: { max_temp: 120 },
+        },
+      },
+    },
+  })
+  assert.deepEqual(cal.pidLimits.toolMax.slice(0, 3), [295, 275, 315])
+})
+
+test('Paket D2 HTTP & runtime: non-blocking side actions during async job, gcode download, delete dir & upload+print guard', async () => {
+  let mockPrintState = 'standby'
+  let mockPrintFile = ''
+  const wsScripts = []
+  let releaseSlowJob = null
+  const deletedDirs = []
+
+  class FakeRuntimeWS {
+    constructor() {
+      this.readyState = 1
+      setImmediate(() => this.onopen?.())
+    }
+    send(payload) {
+      const msg = JSON.parse(payload)
+      if (msg.method === 'printer.gcode.script') {
+        const script = msg.params?.script ?? ''
+        wsScripts.push(script)
+        if (script === 'G28') {
+          // Hold the slow homing job open so a concurrent non-blocking side command can run!
+          releaseSlowJob = () => {
+            this.onmessage?.({ data: JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: 'ok' }) })
+          }
+          return
+        }
+        setImmediate(() => {
+          this.onmessage?.({ data: JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: 'ok' }) })
+        })
+      }
+    }
+    close() {
+      this.readyState = 3
+    }
+  }
+
+  const mockMoonraker = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://127.0.0.1')
+    const chunks = []
+    for await (const c of req) chunks.push(c)
+
+    if (u.pathname === '/printer/objects/list') {
+      res.setHeader('Content-Type', 'application/json')
+      return res.end(JSON.stringify({ result: { objects: ['webhooks', 'print_stats', 'idle_timeout', 'fan', 'toolhead', 'configfile'] } }))
+    }
+    if (u.pathname === '/printer/objects/query') {
+      res.setHeader('Content-Type', 'application/json')
+      return res.end(
+        JSON.stringify({
+          result: {
+            status: {
+              webhooks: { state: 'ready' },
+              print_stats: { state: mockPrintState, filename: mockPrintFile },
+              idle_timeout: { state: 'Idle' },
+              toolhead: { homed_axes: 'xyz' },
+              fan: { speed: 0 },
+              configfile: {
+                settings: {
+                  extruder: { max_temp: 300 },
+                  heater_bed: { max_temp: 120 },
+                  fan: {},
+                },
+              },
+            },
+          },
+        }),
+      )
+    }
+    if (u.pathname === '/server/files/gcodes/benchy.gcode' && req.method === 'GET') {
+      res.setHeader('Content-Type', 'text/plain')
+      return res.end('; GCODE BENCHY\nG28\n')
+    }
+    if (u.pathname === '/server/files/directory' && req.method === 'DELETE') {
+      deletedDirs.push(u.searchParams.get('path'))
+      res.setHeader('Content-Type', 'application/json')
+      return res.end(JSON.stringify({ result: { action: 'delete_dir' } }))
+    }
+    if (u.pathname === '/server/files/upload' && req.method === 'POST') {
+      res.setHeader('Content-Type', 'application/json')
+      return res.end(JSON.stringify({ item: { path: 'new.gcode' } }))
+    }
+    res.statusCode = 404
+    res.end('{}')
+  })
+
+  await new Promise(resolve => mockMoonraker.listen(0, '127.0.0.1', resolve))
+  const mockUrl = `http://127.0.0.1:${mockMoonraker.address().port}`
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'dockyard-d2-http-'))
+  const store = createSettingsStore({
+    filePath: path.join(dir, '.dockyard-settings.json'),
+    env: { PRINTER_URL: mockUrl, PRINTER_NAME: 'V0.1' },
+  })
+  const runtime = createPrinterRuntime({ store })
+  const apiServer = http.createServer((req, res) => runtime.printerMiddleware(req, res, () => res.end('next')))
+  await new Promise(resolve => apiServer.listen(0, '127.0.0.1', resolve))
+  const apiOrigin = `http://127.0.0.1:${apiServer.address().port}`
+
+  try {
+    // 1. Start async home job -> stays active while we execute a non-blocking fan command!
+    const homeRes = await runtime.control(
+      { action: 'home', axis: 'all' },
+      { async: true, WebSocketImpl: FakeRuntimeWS },
+    )
+    assert.equal(homeRes.statusCode, 202)
+
+    // Non-blocking fan succeeds WHILE home is still running!
+    const fanRes = await runtime.control(
+      { action: 'fan', fan: '__part_fan__', percent: 50 },
+      { WebSocketImpl: FakeRuntimeWS },
+    )
+    assert.ok(fanRes.message)
+    assert.ok(wsScripts.some(s => s.startsWith('M106')))
+
+    // Blocking home while home is running still throws 409!
+    await assert.rejects(
+      () => runtime.control({ action: 'home', axis: 'all' }, { WebSocketImpl: FakeRuntimeWS }),
+      err => err.status === 409,
+    )
+
+    // Finish the slow homing job
+    releaseSlowJob?.()
+    await new Promise(resolve => setTimeout(resolve, 40))
+
+    // 2. G-Code Download
+    const dlRes = await fetch(`${apiOrigin}/api/print/download?filename=benchy.gcode`)
+    assert.equal(dlRes.status, 200)
+    assert.ok((dlRes.headers.get('content-disposition') || '').includes('benchy.gcode'))
+    assert.equal(await dlRes.text(), '; GCODE BENCHY\nG28\n')
+
+    // 3. Delete empty folder succeeds, and deleting folder containing active print is blocked 409!
+    const delDirOk = await fetch(`${apiOrigin}/api/print/dir?path=OldPrints`, {
+      method: 'DELETE',
+      headers: { Origin: apiOrigin, 'X-Cockpit-Request': '1' },
+    })
+    assert.equal(delDirOk.status, 200)
+    assert.deepEqual(deletedDirs, ['gcodes/OldPrints'])
+
+    mockPrintState = 'printing'
+    mockPrintFile = 'ActiveDir/part.gcode'
+    const delDirBlocked = await fetch(`${apiOrigin}/api/print/dir?path=ActiveDir`, {
+      method: 'DELETE',
+      headers: { Origin: apiOrigin, 'X-Cockpit-Request': '1' },
+    })
+    assert.equal(delDirBlocked.status, 409)
+
+    // 4. Upload with X-Gcode-Print: 1 is blocked while printing!
+    const upPrintBlocked = await fetch(`${apiOrigin}/api/print/upload`, {
+      method: 'POST',
+      headers: {
+        Origin: apiOrigin,
+        'X-Cockpit-Request': '1',
+        'X-Gcode-Filename': 'new.gcode',
+        'X-Gcode-Print': '1',
+      },
+      body: Buffer.from('; GCODE\n'),
+    })
+    assert.equal(upPrintBlocked.status, 409)
+  } finally {
+    releaseSlowJob?.()
+    runtime.closeLiveFeed()
+    apiServer.close()
+    mockMoonraker.close()
+    await rm(dir, { recursive: true, force: true })
+  }
+})

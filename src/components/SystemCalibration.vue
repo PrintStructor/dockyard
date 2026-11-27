@@ -37,6 +37,7 @@ const shaperAxis = ref('ALL')
 const shakeFilter = ref('all') // 'all' | 'input_shaper' | 'belts' | 'vibrations'
 const hoveredMeshCell = ref(null)
 const meshProfileDraft = ref('')
+const pidTool = ref('0')
 const pidExtruderTarget = ref(220)
 const pidBedTarget = ref(60)
 const endstops = ref([])
@@ -157,7 +158,23 @@ const hasPidOrProbeSection = computed(() =>
       data.value?.capabilities?.probeAccuracy,
   ),
 )
-const pidExtruderMax = computed(() => data.value?.pidLimits?.extruderMax ?? props.status?.capabilities?.toolMax?.[0] ?? 295)
+const pidHeaterName = computed(() => {
+  const idx = isToolchanger.value ? Number(pidTool.value) || 0 : 0
+  return idx > 0 ? `extruder${idx}` : 'extruder'
+})
+const pidExtruderMax = computed(() => {
+  const idx = isToolchanger.value ? Number(pidTool.value) || 0 : 0
+  return (
+    data.value?.pidLimits?.toolMax?.[idx] ??
+    data.value?.pidLimits?.extruderMax ??
+    props.status?.capabilities?.toolMax?.[idx] ??
+    props.status?.capabilities?.toolMax?.[0] ??
+    295
+  )
+})
+watch(pidTool, () => {
+  if (confirmKey.value === 'pid_extruder') cancelConfirm()
+})
 const pidBedMax = computed(() => data.value?.pidLimits?.bedMax ?? props.status?.capabilities?.bedMax ?? 120)
 const validPidExtruder = computed(
   () => Number.isInteger(pidExtruderTarget.value) && pidExtruderTarget.value >= 40 && pidExtruderTarget.value <= pidExtruderMax.value,
@@ -1186,6 +1203,14 @@ onMounted(() => {
             <div class="pid-row-label">
               <Flame :size="14" />
               <strong>{{ t('Extruder PID') }}</strong>
+              <div v-if="isToolchanger && toolCount > 1" class="cal-tool-select">
+                <CockpitSelect
+                  v-model="pidTool"
+                  :options="toolOptions"
+                  :aria-label="t('Werkzeug für PID-Tuning')"
+                  size="compact"
+                />
+              </div>
             </div>
             <label class="pid-input-wrap">
               <input
@@ -1207,12 +1232,16 @@ onMounted(() => {
                   class="confirm-button"
                   @click="
                     runAction(
-                      { action: 'calibrate_pid', heater: 'extruder', target: Math.round(pidExtruderTarget) },
+                      { action: 'calibrate_pid', heater: pidHeaterName, target: Math.round(pidExtruderTarget) },
                       { capKey: 'pidExtruder' },
                     )
                   "
                 >
-                  {{ t('PID bei {0} °C starten?', [Math.round(pidExtruderTarget)]) }}
+                  {{
+                    isToolchanger && toolCount > 1
+                      ? t('PID T{0} bei {1} °C starten?', [pidTool, Math.round(pidExtruderTarget)])
+                      : t('PID bei {0} °C starten?', [Math.round(pidExtruderTarget)])
+                  }}
                 </button>
                 <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
               </template>

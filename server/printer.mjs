@@ -533,6 +533,8 @@ function isDynamicPrinterObject(name) {
     name === 'screws_tilt_adjust' ||
     name === 'manual_probe' ||
     name === 'firmware_retraction' ||
+    name === 'gcode_macro SET_PAUSE_NEXT_LAYER' ||
+    name === 'gcode_macro SET_PAUSE_AT_LAYER' ||
     name === 'fan' ||
     /^fan_generic [A-Za-z0-9_-]+$/.test(name) ||
     /^heater_fan [A-Za-z0-9_-]+$/.test(name) ||
@@ -675,6 +677,57 @@ async function control(input, options = {}) {
 
   const isStop = input.action === 'emergency_stop'
   const isBatchAbort = input.action === 'calibrate_beacon_abort'
+  const isPromptAction = input.action === 'prompt_action'
+  const NON_BLOCKING_ACTIONS = new Set([
+    'fan',
+    'set_led',
+    'led',
+    'output_pin',
+    'temperature_fan',
+    'filament_sensor',
+    'heaters_off',
+    'console',
+  ])
+
+  if (isPromptAction && !uncertainForActive) {
+    if (input.dismiss === true) {
+      await executeGcodeScript({
+        printer: targetPrinterUrl,
+        script: 'RESPOND TYPE=command MSG="action:prompt_end"',
+        timeoutMs: 15_000,
+        WebSocketImpl,
+      }).catch(() => {})
+      live.clearPrompt()
+      return { message: 'Dialog geschlossen.' }
+    }
+    const activePrompt = live.getActivePrompt()
+    if (!activePrompt?.open) {
+      throw new ControlError('Aktuell ist kein Klipper-Dialog geöffnet.', 409)
+    }
+    const gcode = typeof input.gcode === 'string' ? input.gcode.trim() : ''
+    const allowedButtons = [
+      ...(activePrompt.footerButtons ?? []),
+      ...(activePrompt.items ?? []).flatMap(item =>
+        item.kind === 'group' ? item.buttons : item.kind === 'button' ? [item] : [],
+      ),
+    ]
+    const matched = allowedButtons.find(btn => btn.gcode === gcode)
+    if (!matched || !gcode || gcode.length > 500 || /[\r\n\x00-\x1f\x7f]/.test(gcode)) {
+      throw new ControlError('Ungültige Dialog-Aktion.', 400)
+    }
+    live.emitConsole({ time: Date.now() / 1000, type: 'command', message: gcode })
+    await executeGcodeScript({
+      printer: targetPrinterUrl,
+      script: gcode,
+      timeoutMs: 60_000,
+      WebSocketImpl,
+    })
+    const message = `${matched.label}: ausgeführt.`
+    lastResult = { id: ++jobSequence, ok: true, label: matched.label, message, at: new Date().toISOString() }
+    live.notify()
+    return { message }
+  }
+
   if (isBatchAbort && !uncertainForActive) {
     const raw = await query(true)
     const abortCmd = commandFor(input, raw)
@@ -692,6 +745,24 @@ async function control(input, options = {}) {
       message,
       at: new Date().toISOString(),
     }
+    live.notify()
+    return { message }
+  }
+
+  if (currentJob && !uncertainForActive && NON_BLOCKING_ACTIONS.has(input.action)) {
+    const raw = await query(true)
+    const sideCmd = commandFor(input, raw)
+    if (input.action === 'console') {
+      live.emitConsole({ time: Date.now() / 1000, type: 'command', message: sideCmd.body.script })
+    }
+    await executeGcodeScript({
+      printer: targetPrinterUrl,
+      script: sideCmd.body.script,
+      timeoutMs: sideCmd.timeoutMs ?? 60_000,
+      WebSocketImpl,
+    })
+    const message = successMessageFor(input.action, sideCmd.label)
+    lastResult = { id: ++jobSequence, ok: true, label: sideCmd.label, message, at: new Date().toISOString() }
     live.notify()
     return { message }
   }
@@ -910,6 +981,41 @@ function streamCamera(id, res) {
   res.on('close', () => upstream.destroy())
 }
 
+function streamGcodeDownload(relPath, res) {
+  const baseName = relPath.split('/').pop() || 'file.gcode'
+  const safeName = baseName.replace(/["\\\r\n]/g, '_')
+  const upstream = requestStream(`${activeUrl()}/server/files/gcodes/${encodeMoonrakerPath(relPath)}`, response => {
+    if (response.statusCode !== 200) {
+      response.destroy()
+      res.statusCode = response.statusCode === 404 ? 404 : 502
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ error: 'G-Code-Datei nicht verfügbar.' }))
+      return
+    }
+    res.statusCode = 200
+    res.setHeader('Content-Type', 'application/octet-stream')
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"`)
+    if (response.headers['content-length']) {
+      res.setHeader('Content-Length', response.headers['content-length'])
+    }
+    res.flushHeaders?.()
+    response.pipe(res)
+    response.on('error', () => res.destroy())
+    response.on('aborted', () => res.destroy())
+  })
+  upstream.setTimeout(60_000, () => upstream.destroy(new Error('G-Code-Download unterbrochen')))
+  upstream.on('error', () => {
+    if (!res.headersSent) {
+      res.statusCode = 502
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ error: 'G-Code-Datei konnte nicht geladen werden.' }))
+    } else {
+      res.destroy()
+    }
+  })
+  res.on('close', () => upstream.destroy())
+}
+
 function streamLogDownload(relPath, res) {
   const upstream = requestStream(`${activeUrl()}/server/files/logs/${encodeMoonrakerPath(relPath)}`, response => {
     if (response.statusCode !== 200) {
@@ -1034,7 +1140,7 @@ function printerMiddleware(req, res, next) {
   }
 
   const camera = path.match(/^\/api\/camera\/([a-z0-9][a-z0-9_-]{0,31})(?:\/(stream|webrtc))?$/)
-  const printRoute = path.match(/^\/api\/print\/(files|metadata|thumbnail|model|upload|file|queue|mkdir|move)$/)
+  const printRoute = path.match(/^\/api\/print\/(files|metadata|thumbnail|model|upload|file|queue|mkdir|move|download|dir)$/)
   const settingsRoute = path.match(/^\/api\/settings(?:\/(switch|test))?$/)
   const modelRoute = path.match(/^\/api\/models\/([a-z0-9][a-z0-9_-]{0,31})\/(toolhead|printer)$/)
   const spoolmanRoute = path.match(/^\/api\/spoolman\/(spools|active)$/)
@@ -1071,6 +1177,7 @@ function printerMiddleware(req, res, next) {
   const isModelWrite = Boolean(modelRoute) && (req.method === 'POST' || req.method === 'DELETE')
   const isPrintUpload = printSub === 'upload' && req.method === 'POST'
   const isPrintDelete = printSub === 'file' && req.method === 'DELETE'
+  const isPrintDirDelete = printSub === 'dir' && req.method === 'DELETE'
   const isPrintMkdir = printSub === 'mkdir' && req.method === 'POST'
   const isPrintMove = printSub === 'move' && req.method === 'POST'
   const isPrintQueueGet = printSub === 'queue' && req.method === 'GET'
@@ -1094,6 +1201,7 @@ function printerMiddleware(req, res, next) {
       isModelWrite ||
       isPrintUpload ||
       isPrintDelete ||
+      isPrintDirDelete ||
       isPrintMkdir ||
       isPrintMove ||
       isPrintQueueWrite ||
@@ -1113,7 +1221,7 @@ function printerMiddleware(req, res, next) {
     if (!['GET', 'POST', 'DELETE'].includes(req.method)) {
       return json(405, { error: 'Methode nicht erlaubt.' })
     }
-  } else if (printSub === 'file') {
+  } else if (printSub === 'file' || printSub === 'dir') {
     if (req.method !== 'DELETE') return json(405, { error: 'Methode nicht erlaubt.' })
   } else if (systemSub === 'config/file') {
     if (!['GET', 'DELETE'].includes(req.method)) return json(405, { error: 'Methode nicht erlaubt.' })
@@ -1140,7 +1248,7 @@ function printerMiddleware(req, res, next) {
     write &&
     !(isModelWrite
       ? binaryWriteAllowed(['model/gltf-binary', 'application/octet-stream'])
-      : isPrintUpload || isPrintDelete || isConfigFileDelete
+      : isPrintUpload || isPrintDelete || isPrintDirDelete || isConfigFileDelete
         ? binaryWriteAllowed(['application/octet-stream', 'text/plain', 'text/x.gcode'])
         : sameOriginRequest(req, store.getEffectiveAllowedOrigins(), { allowLanOrigins: store.isLanOriginAllowed() }))
   ) {
@@ -1148,6 +1256,11 @@ function printerMiddleware(req, res, next) {
   }
   if (path === '/api/events') return live.handle(req, res)
   if (camera?.[2] === 'stream') return streamCamera(camera[1], res)
+  if (printSub === 'download') {
+    const filename = validateGcodeFilename(parsedUrl.searchParams.get('filename'))
+    if (!filename) return json(400, { error: 'Ungültiger Dateiname.' })
+    return streamGcodeDownload(filename, res)
+  }
   if (systemSub === 'logs/download') {
     const logPath = validateLogPath(parsedUrl.searchParams.get('path'))
     if (!logPath) return json(400, { error: 'Ungültiger Logpfad.' })
@@ -2077,6 +2190,30 @@ function printerMiddleware(req, res, next) {
           return json(200, { ok: true, path: dirPath })
         }
 
+        if (sub === 'dir') {
+          const dirPath = validateGcodeDir(parsedUrl.searchParams.get('path'))
+          if (!dirPath) throw new ControlError('Ungültiger Ordnerpfad.', 400)
+          const liveRaw = await query(false).catch(() => null)
+          const livePrintState = liveRaw?.print_stats?.state
+          const liveFilename = liveRaw?.print_stats?.filename || ''
+          if (['printing', 'paused'].includes(livePrintState) && liveFilename.startsWith(`${dirPath}/`)) {
+            throw new ControlError('Der Ordner enthält die aktuell gedruckte Datei und kann nicht gelöscht werden.', 409)
+          }
+          const delDirRes = await fetchUpstream(
+            `${printer}/server/files/directory?path=${encodeURIComponent(`gcodes/${dirPath}`)}&force=false`,
+            { method: 'DELETE', signal: AbortSignal.timeout(8000) },
+          )
+          if (!delDirRes.ok) {
+            const errJson = await delDirRes.json().catch(() => null)
+            throw new ControlError(
+              errJson?.error?.message || 'Ordner konnte nicht gelöscht werden (ist er leer?).',
+              delDirRes.status >= 400 && delDirRes.status < 500 ? delDirRes.status : 502,
+            )
+          }
+          gcodeFileSetCache = null
+          return json(200, { ok: true, deleted: dirPath })
+        }
+
         if (sub === 'move') {
           const payload = await readJson(req, 4096)
           const source = validateGcodeFilename(payload?.source)
@@ -2140,7 +2277,10 @@ function printerMiddleware(req, res, next) {
           form.append('root', 'gcodes')
           if (cleanDir) form.append('path', cleanDir)
           const wantPrint = req.headers['x-gcode-print'] === '1' || parsedUrl.searchParams.get('print') === '1'
-          if (wantPrint) form.append('print', 'true')
+          if (wantPrint) {
+            await probeMachineWriteGuard(false)
+            form.append('print', 'true')
+          }
 
           const upRes = await fetchUpstream(`${printer}/server/files/upload`, {
             method: 'POST',
@@ -2333,9 +2473,11 @@ function printerMiddleware(req, res, next) {
             signal: AbortSignal.timeout(5000),
           }).catch(() => null)
           const currentDb = currentRes?.ok ? (await currentRes.json().catch(() => null))?.result?.value ?? {} : {}
+          const knownToolCount =
+            capabilityCache?.toolCount ?? liveCapabilityRef.value?.toolCount ?? inferToolCountFromPresets(currentDb, null) ?? 1
           let nextDb
           try {
-            nextDb = applyMainsailPresetMutation(currentDb, payload)
+            nextDb = applyMainsailPresetMutation(currentDb, { ...payload, toolCount: knownToolCount })
           } catch (err) {
             throw new ControlError(err.message || 'Ungültiges Preset.', 400)
           }

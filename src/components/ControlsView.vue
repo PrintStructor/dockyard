@@ -1,11 +1,14 @@
 <script setup>
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
-import { Home, Move, Thermometer, Snowflake, Check } from '@lucide/vue'
+import { Home, Move, Thermometer, Snowflake, Check, SlidersHorizontal, Trash2, X, ChevronDown } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import { quickHomeAxisReason, quickJogReason } from '../aux-action-state.mjs'
 import FanControl from './FanControl.vue'
 import CameraView from './CameraView.vue'
 import TemperatureGraph from './TemperatureGraph.vue'
+import AuxDevicesDeck from './AuxDevicesDeck.vue'
+import MacroDeck from './MacroDeck.vue'
+import LivePrintTuning from './LivePrintTuning.vue'
 
 const props = defineProps({
   status: Object,
@@ -16,6 +19,8 @@ const props = defineProps({
   showCameras: { type: Boolean, default: true },
   cameras: { type: Array, default: () => [] },
   modelPreset: { type: String, default: 'auto' },
+  printerId: { type: String, default: '' },
+  canWrite: { type: Boolean, default: true },
 })
 
 const emit = defineEmits(['command', 'select', 'refresh', 'context'])
@@ -116,7 +121,10 @@ function acknowledgeTargets() {
   }
 }
 
-watch(() => [props.status?.bed?.target, ...(props.status?.tools ?? []).map(tool => tool.target)], acknowledgeTargets)
+watch(
+  () => `${props.status?.bed?.target ?? ''}|${(props.status?.tools ?? []).map(tool => tool.target ?? '').join(',')}`,
+  acknowledgeTargets,
+)
 
 async function applyTarget(id) {
   if (!enabled.value || !valid(id) || !dirty(id)) return
@@ -191,7 +199,74 @@ function releaseMotors() {
 
 const presets = ref([])
 const presetError = ref('')
+const presetEditorOpen = ref(false)
+const presetNameDraft = ref('')
+const presetExtruderDraft = ref(210)
+const presetBedDraft = ref(60)
+const presetSaving = ref(false)
+const presetEditorError = ref('')
 const presetRequest = new AbortController()
+
+function editPresetItem(preset) {
+  presetNameDraft.value = preset.name
+  const ext = preset.tools?.[activeToolId.value] ?? preset.tools?.[0]
+  presetExtruderDraft.value = Number.isFinite(ext) ? Math.round(ext) : 0
+  presetBedDraft.value = Number.isFinite(preset.bed) ? Math.round(preset.bed) : 0
+  presetEditorError.value = ''
+}
+
+async function savePreset() {
+  const name = presetNameDraft.value.trim()
+  if (!name || presetSaving.value || !props.canWrite) return
+  presetSaving.value = true
+  presetEditorError.value = ''
+  try {
+    const extVal =
+      presetExtruderDraft.value !== '' && presetExtruderDraft.value != null
+        ? Math.round(Number(presetExtruderDraft.value))
+        : null
+    const bedVal =
+      presetBedDraft.value !== '' && presetBedDraft.value != null ? Math.round(Number(presetBedDraft.value)) : null
+    const res = await fetch('/api/presets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Cockpit-Request': '1' },
+      body: JSON.stringify({ action: 'upsert', name, extruder: extVal, bed: bedVal }),
+      signal: AbortSignal.timeout(8000),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Preset konnte nicht gespeichert werden.')
+    if (Array.isArray(data.presets)) {
+      presets.value = data.presets
+      if (data.presets.length) presetError.value = ''
+    }
+    presetNameDraft.value = ''
+  } catch (err) {
+    presetEditorError.value = err.message || 'Preset konnte nicht gespeichert werden.'
+  } finally {
+    presetSaving.value = false
+  }
+}
+
+async function deletePreset(name) {
+  if (!name || presetSaving.value || !props.canWrite) return
+  presetSaving.value = true
+  presetEditorError.value = ''
+  try {
+    const res = await fetch('/api/presets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Cockpit-Request': '1' },
+      body: JSON.stringify({ action: 'delete', name }),
+      signal: AbortSignal.timeout(8000),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Preset konnte nicht gelöscht werden.')
+    if (Array.isArray(data.presets)) presets.value = data.presets
+  } catch (err) {
+    presetEditorError.value = err.message || 'Preset konnte nicht gelöscht werden.'
+  } finally {
+    presetSaving.value = false
+  }
+}
 
 onMounted(async () => {
   try {
@@ -215,7 +290,17 @@ onBeforeUnmount(() => {
 const busy = computed(() => props.pending || !!props.status?.control?.job)
 const enabled = computed(() => props.online && props.status?.klipperState === 'ready' && !busy.value)
 const isPrinting = computed(() => props.status?.printState === 'printing')
+const isPrintActive = computed(() => ['printing', 'paused'].includes(props.status?.printState))
 const canCooldown = computed(() => enabled.value && !isPrinting.value)
+const publicMacros = computed(() => props.status?.publicMacros ?? [])
+const macroEnabled = computed(
+  () =>
+    enabled.value &&
+    props.status?.printState !== 'printing' &&
+    props.status?.idleState !== 'Printing' &&
+    !props.status?.loadWatchActive,
+)
+const showStandbyTuning = computed(() => props.online && !isPrintActive.value)
 const moving = computed(
   () => ['printing', 'paused'].includes(props.status?.printState) || props.status?.idleState === 'Printing' || props.status?.loadWatchActive,
 )
@@ -531,6 +616,18 @@ watch(motion, allowed => {
             {{ t('Alle Tools') }}
           </button>
           <button
+            v-if="canWrite"
+            type="button"
+            class="icon-button single-preset-edit-btn"
+            :class="{ active: presetEditorOpen }"
+            :aria-expanded="presetEditorOpen"
+            :title="t('Vorheiz-Presets bearbeiten')"
+            :aria-label="t('Vorheiz-Presets bearbeiten')"
+            @click="presetEditorOpen = !presetEditorOpen"
+          >
+            <SlidersHorizontal :size="14" />
+          </button>
+          <button
             class="subtle-button cooldown-control"
             type="button"
             :disabled="!canCooldown"
@@ -545,6 +642,78 @@ watch(motion, allowed => {
             <Snowflake :size="15" />{{ t('Abkühlen') }}
           </button>
         </div>
+
+        <section
+          v-if="presetEditorOpen && canWrite"
+          class="single-preset-editor"
+          :aria-label="t('Vorheiz-Presets bearbeiten')"
+        >
+          <div class="single-preset-editor-head">
+            <strong>{{ t('Vorheiz-Presets (Moonraker DB)') }}</strong>
+            <button
+              type="button"
+              class="icon-button"
+              :aria-label="t('Schließen')"
+              @click="presetEditorOpen = false"
+            >
+              <X :size="14" />
+            </button>
+          </div>
+          <div class="single-preset-editor-chips">
+            <div v-for="preset in presets" :key="preset.name" class="single-preset-pill-item">
+              <button type="button" class="subtle-button" @click="editPresetItem(preset)">
+                {{ preset.name }} · {{ preset.tools?.[activeToolId] ?? preset.tools?.[0] ?? '—' }}/{{ preset.bed ?? '—' }}°
+              </button>
+              <button
+                v-if="!['ABS', 'PLA', 'PETG'].includes(preset.name.toUpperCase())"
+                type="button"
+                class="icon-button"
+                :disabled="presetSaving"
+                :title="t('Preset löschen')"
+                :aria-label="t('{0} löschen', [preset.name])"
+                @click="deletePreset(preset.name)"
+              >
+                <Trash2 :size="12" />
+              </button>
+            </div>
+          </div>
+          <form class="single-preset-form" @submit.prevent="savePreset">
+            <input
+              v-model="presetNameDraft"
+              type="text"
+              maxlength="32"
+              :placeholder="t('Name (z. B. ASA, TPU)')"
+              :aria-label="t('Preset-Name')"
+              :disabled="presetSaving"
+            />
+            <label class="single-preset-num">
+              <span>{{ t('Düse') }}</span>
+              <input
+                v-model.number="presetExtruderDraft"
+                type="number"
+                min="0"
+                :max="heaterMax ?? 360"
+                step="5"
+                :disabled="presetSaving"
+              />
+            </label>
+            <label class="single-preset-num">
+              <span>{{ t('Bett') }}</span>
+              <input
+                v-model.number="presetBedDraft"
+                type="number"
+                min="0"
+                :max="limitFor('bed') ?? 160"
+                step="5"
+                :disabled="presetSaving"
+              />
+            </label>
+            <button type="submit" class="subtle-button" :disabled="presetSaving || !presetNameDraft.trim()">
+              <Check :size="13" />{{ t('Speichern') }}
+            </button>
+          </form>
+          <p v-if="presetEditorError" class="system-inline-error" style="margin: 0">{{ t(presetEditorError) }}</p>
+        </section>
 
         <p
           v-if="status?.isToolchanger && online && !status?.detectionMismatch && (!status?.hasDetection || status?.detected == null)"
@@ -709,6 +878,38 @@ watch(motion, allowed => {
         <FanControl :status="status" :online="online" :pending="pending" :send="send" />
       </div>
       <TemperatureGraph v-else :online="online" :status="status" />
+
+      <AuxDevicesDeck
+        :status="status"
+        :online="online"
+        :pending="pending"
+        :send="send"
+        @command="emit('command', $event)"
+      />
+
+      <MacroDeck
+        v-if="publicMacros.length"
+        :macros="publicMacros"
+        :printer-id="printerId"
+        :enabled="macroEnabled"
+        @run="emit('command', $event)"
+      />
+
+      <details v-if="showStandbyTuning" class="single-graph-disclosure controls-standby-tuning">
+        <summary>
+          <span><SlidersHorizontal :size="15" />{{ t('Standby-Tuning · PA & Kinematik') }}</span>
+          <ChevronDown :size="15" class="single-graph-chevron" />
+        </summary>
+        <div class="single-graph-body">
+          <LivePrintTuning
+            allow-standby
+            :status="status"
+            :online="online"
+            :pending="pending"
+            :send="send"
+          />
+        </div>
+      </details>
     </div>
 
     <aside v-if="showCameras" class="control-cameras" :aria-label="t('Livekameras während der Bedienung')">

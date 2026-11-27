@@ -402,7 +402,55 @@ def _finalize_grouped_meshes(grouped, min_x, max_x, min_y, max_y, min_z, max_z):
     return mesh_groups
 
 
-def parse_usda_to_mesh_groups(usda_path, min_diag_m=0.0, progress_cb=None):
+def _mat3_mul(a, b):
+    """Multiply two 3x3 column-vector matrices represented as 9-tuples."""
+    return (
+        a[0] * b[0] + a[1] * b[3] + a[2] * b[6],
+        a[0] * b[1] + a[1] * b[4] + a[2] * b[7],
+        a[0] * b[2] + a[1] * b[5] + a[2] * b[8],
+        a[3] * b[0] + a[4] * b[3] + a[5] * b[6],
+        a[3] * b[1] + a[4] * b[4] + a[5] * b[7],
+        a[3] * b[2] + a[4] * b[5] + a[5] * b[8],
+        a[6] * b[0] + a[7] * b[3] + a[8] * b[6],
+        a[6] * b[1] + a[7] * b[4] + a[8] * b[7],
+        a[6] * b[2] + a[7] * b[5] + a[8] * b[8],
+    )
+
+
+def _build_usd_post_transform_row(occ_transform_col=None, doc_up="z", requested_up="z"):
+    """Build a USD row-vector 4x4 rotation/scale matrix that:
+    1. Restores a selected Occurrence's assembly orientation (`occ.transform2`) when Fusion's
+       USD exporter exports `occ.component` in local component space.
+    2. Applies the user's requested `up_axis` ('z' vs 'y') relative to Fusion's document up axis.
+    """
+    # Basis change from Fusion space to USD Y-up space (column-vector 3x3)
+    u_z = (1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0)
+    u_z_inv = (1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0)
+    ident3 = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+
+    u_doc_inv = u_z_inv if str(doc_up or "z").lower() != "y" else ident3
+    u_req = u_z if str(requested_up or "z").lower() != "y" else ident3
+
+    if occ_transform_col and len(occ_transform_col) >= 12:
+        r_occ = (
+            float(occ_transform_col[0]), float(occ_transform_col[1]), float(occ_transform_col[2]),
+            float(occ_transform_col[4]), float(occ_transform_col[5]), float(occ_transform_col[6]),
+            float(occ_transform_col[8]), float(occ_transform_col[9]), float(occ_transform_col[10]),
+        )
+    else:
+        r_occ = ident3
+
+    m_col = _mat3_mul(_mat3_mul(u_req, r_occ), u_doc_inv)
+    # Transpose 3x3 column-vector matrix to USD row-vector 4x4 matrix
+    return (
+        m_col[0], m_col[3], m_col[6], 0.0,
+        m_col[1], m_col[4], m_col[7], 0.0,
+        m_col[2], m_col[5], m_col[8], 0.0,
+        0.0, 0.0, 0.0, 1.0,
+    )
+
+
+def parse_usda_to_mesh_groups(usda_path, min_diag_m=0.0, post_transform_row=None, progress_cb=None):
     """Parse Fusion 360 native USD ASCII (.usda) into glTF-ready mesh groups.
 
     Bypasses Fusion 2706's Python Appearance ID collision ('PrismOpaque') by reading
@@ -723,6 +771,8 @@ def parse_usda_to_mesh_groups(usda_path, min_diag_m=0.0, progress_cb=None):
 
         # Compute composed transform + normal matrix
         m_total = _mat4_mul_row(mesh_dict["transform"], inst_transform)
+        if post_transform_row is not None:
+            m_total = _mat4_mul_row(m_total, post_transform_row)
 
         # Skip sub-millimeter PCB silkscreen / SMD micro-parts when micro-filtering is enabled
         if min_diag_m > 0.0 and mesh_dict["extent_diag"] is not None:
@@ -934,7 +984,7 @@ def parse_usda_to_mesh_groups(usda_path, min_diag_m=0.0, progress_cb=None):
     return mesh_groups, total_tris, seen_mats, skipped_micro
 
 
-def convert_usdz_to_mesh_groups(usdz_path, min_diag_m=0.0, progress_cb=None):
+def convert_usdz_to_mesh_groups(usdz_path, min_diag_m=0.0, post_transform_row=None, progress_cb=None):
     """Extract a Fusion USDZ archive, decode .usdc via usdcat if needed, and return GLB mesh groups."""
     with tempfile.TemporaryDirectory(prefix="dockyard_usd_") as tmpdir:
         usda_file = None
@@ -957,7 +1007,12 @@ def convert_usdz_to_mesh_groups(usdz_path, min_diag_m=0.0, progress_cb=None):
             usda_file = os.path.join(tmpdir, "scene.usda")
             subprocess.run([usdcat, usdc_file, "-o", usda_file], check=True)
 
-        return parse_usda_to_mesh_groups(usda_file, min_diag_m=min_diag_m, progress_cb=progress_cb)
+        return parse_usda_to_mesh_groups(
+            usda_file,
+            min_diag_m=min_diag_m,
+            post_transform_row=post_transform_row,
+            progress_cb=progress_cb,
+        )
 
 
 def _parse_hex_rgba(hex_str):
@@ -987,7 +1042,7 @@ def _parse_3mf_transform(attr):
     )
 
 
-def parse_3mf_to_mesh_groups(tmf_path):
+def parse_3mf_to_mesh_groups(tmf_path, up_axis="z"):
     """Parse Fusion 360 native 3MF (.3mf) with per-object/per-triangle colors into glTF mesh groups.
 
     Pure Python stdlib (zipfile + ElementTree) — works identically on macOS and Windows.
@@ -1108,8 +1163,11 @@ def parse_3mf_to_mesh_groups(tmf_path):
             wx = x * m00 + y * m10 + z * m20 + tx
             wy = x * m01 + y * m11 + z * m21 + ty
             wz = x * m02 + y * m12 + z * m22 + tz
-            # 3MF is Z-up -> glTF Y-up
-            gx, gy, gz = wx, wz, -wy
+            # Convert 3MF coordinates to glTF Y-up according to requested up_axis
+            if str(up_axis or "z").lower() == "y":
+                gx, gy, gz = wx, wy, wz
+            else:
+                gx, gy, gz = wx, wz, -wy
             wpos[k], wpos[k + 1], wpos[k + 2] = gx, gy, gz
             if gx < min_x:
                 min_x = gx
@@ -1537,37 +1595,43 @@ def _reveal_in_finder(path):
 
 
 def _resolve_native_export_targets(design, slot, ui):
-    """Select native ExportManager targets: (usd_component_or_None, tmf_geometry_or_None)."""
+    """Select native ExportManager targets: (usd_component_or_None, usd_occ_transform_or_None, tmf_geometry_or_None)."""
     if slot == "printer":
-        return design.rootComponent, design.rootComponent
+        return design.rootComponent, None, design.rootComponent
     sel_count = ui.activeSelections.count
     if sel_count == 0:
-        return design.rootComponent, design.rootComponent
+        return design.rootComponent, None, design.rootComponent
     if sel_count == 1:
         try:
             ent = ui.activeSelections.item(0).entity
         except Exception:
-            return None, None
+            return None, None, None
         if isinstance(ent, adsk.fusion.Occurrence):
-            return ent.component, ent
+            return ent.component, _safe_transform_array(ent), ent
         if isinstance(ent, adsk.fusion.BRepBody):
-            return None, ent
-    return None, None
+            return None, None, ent
+    return None, None, None
 
 
-def _try_native_export(design, ui, slot, quality_mode, skip_fasteners):
+def _try_native_export(app, design, ui, slot, up_axis, quality_mode, skip_fasteners):
     """Try Fusion's native C++ USDZ / 3MF export engines before falling back to Python BRep traversal.
 
     Native C++ export reads materials directly from Fusion's Prism/MaterialX graphics engine,
     completely bypassing Fusion 2706's Python API Appearance ID collision ('PrismOpaque') and
     preserving per-face multi-color STEP parts (steppers, PCBs, fans) plus real PBR metallic/roughness.
     """
-    usd_comp, tmf_target = _resolve_native_export_targets(design, slot, ui)
+    usd_comp, usd_occ_transform, tmf_target = _resolve_native_export_targets(design, slot, ui)
     export_mgr = getattr(design, "exportManager", None)
     if export_mgr is None:
         return None
 
     min_diag_m = (0.0025 if slot == "printer" else 0.0008) if skip_fasteners else 0.0
+    doc_up = _detect_default_up_axis(app)
+    post_transform_row = _build_usd_post_transform_row(
+        occ_transform_col=usd_occ_transform,
+        doc_up=doc_up,
+        requested_up=up_axis,
+    )
 
     # 1. Preferred: Native USDZ -> GLB (full PBR metallic/roughness, glass opacity, per-face GeomSubsets)
     if usd_comp is not None and _find_usdcat():
@@ -1592,6 +1656,7 @@ def _try_native_export(design, ui, slot, quality_mode, skip_fasteners):
                     mesh_groups, total_tris, seen_mats, skipped_micro = convert_usdz_to_mesh_groups(
                         tmp_usdz,
                         min_diag_m=min_diag_m,
+                        post_transform_row=post_transform_row,
                         progress_cb=on_progress,
                     )
                     if mesh_groups:
@@ -1620,7 +1685,7 @@ def _try_native_export(design, ui, slot, quality_mode, skip_fasteners):
                     progress.message = "Konvertiere 3MF nach GLB …"
                     progress.progressValue = 65
                     adsk.doEvents()
-                    mesh_groups, total_tris = parse_3mf_to_mesh_groups(tmp_3mf)
+                    mesh_groups, total_tris = parse_3mf_to_mesh_groups(tmp_3mf, up_axis=up_axis)
                     if mesh_groups:
                         return mesh_groups, total_tris, 0, {}, "Native 3MF"
         except Exception:
@@ -1644,7 +1709,7 @@ def _execute_export(app, ui, slot, up_axis, quality_mode, skip_fasteners, out_di
     seen_appearances = {}
     engine_label = "BRep Mesh"
 
-    native_result = _try_native_export(design, ui, slot, quality_mode, skip_fasteners)
+    native_result = _try_native_export(app, design, ui, slot, up_axis, quality_mode, skip_fasteners)
     if native_result is not None:
         mesh_groups, total_tris, skipped, seen_appearances, engine_label = native_result
     else:

@@ -509,9 +509,63 @@ over Xform "MeshPrimDef_Micro"
     with zipfile.ZipFile(tmf_path, 'w') as zf:
         zf.writestr('3D/3dmodel.model', model_xml)
 
-    g3, t3 = mod.parse_3mf_to_mesh_groups(tmf_path)
+    g3, t3 = mod.parse_3mf_to_mesh_groups(tmf_path, up_axis='z')
     assert t3 == 2 and len(g3) == 2, (t3, len(g3))
     glb_3mf = mod.build_glb_bytes(g3, source_name='3MF Sample')
+
+    # Verify 3MF respects up_axis='y' vs up_axis='z'
+    g3_y, _ = mod.parse_3mf_to_mesh_groups(tmf_path, up_axis='y')
+    max_y_z = max(max(g['positions'][1::3]) for g in g3)
+    max_y_y = max(max(g['positions'][1::3]) for g in g3_y)
+    assert abs(max_y_z - 0.01) < 1e-4 and abs(max_y_y - 0.02) < 1e-4, (max_y_z, max_y_y)
+
+    # Verify USD post-transform restores a 90-deg X-rotated Occurrence (lying toolhead -> upright!)
+    # and respects requested_up='y' override relative to Fusion's Z-up doc.
+    # Occurrence rotates +Y_local (length 110mm) -> +Z_root (upright in Fusion Z-up assembly).
+    occ_rot_x90 = [
+        1.0, 0.0, 0.0, 12.0,
+        0.0, 0.0, -1.0, 5.0,
+        0.0, 1.0, 0.0, 20.0,
+        0.0, 0.0, 0.0, 1.0,
+    ]
+    post_occ = mod._build_usd_post_transform_row(occ_rot_x90, doc_up='z', requested_up='z')
+    post_yup = mod._build_usd_post_transform_row(None, doc_up='z', requested_up='y')
+    # Lying-down toolhead in USD space: X=50mm, Y=60mm, Z=110mm (points along -Z_usd)
+    lying_usda = os.path.join(tmp, 'lying.usda')
+    open(lying_usda, 'w', encoding='utf-8').write("""#usda 1.0
+(
+    defaultPrim = "tool"
+    metersPerUnit = 0.001
+    upAxis = "Y"
+)
+def Xform "tool"
+{
+    def Material "XID_White" { def Shader "s" { color3f inputs:diffuseColor = (0.9, 0.9, 0.9) } }
+    def Xform "MeshInstance_0" ( prepend references = </MeshPrimDef_0> )
+    {
+        rel material:binding = </tool/XID_White>
+        matrix4d xformOp:transform = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1) )
+    }
+}
+over Xform "MeshPrimDef_0"
+{
+    def Mesh "Body1"
+    {
+        float3[] extent = [(0, 0, -11), (5, 6, 0)]
+        int[] faceVertexCounts = [3]
+        int[] faceVertexIndices = [0, 1, 2]
+        normal3f[] normals = [(0, 1, 0), (0, 1, 0), (0, 1, 0)]
+        point3f[] points = [(0, 0, 0), (5, 0, 0), (0, 6, -11)]
+        matrix4d xformOp:transform = ( (10, 0, 0, 0), (0, 10, 0, 0), (0, 0, 10, 0), (0, 0, 0, 1) )
+    }
+}
+""")
+    g_occ, _, _, _ = mod.parse_usda_to_mesh_groups(lying_usda, post_transform_row=post_occ)
+    g_yup, _, _, _ = mod.parse_usda_to_mesh_groups(lying_usda, post_transform_row=post_yup)
+    occ_height = max(g_occ[0]['positions'][1::3]) - min(g_occ[0]['positions'][1::3])
+    yup_height = max(g_yup[0]['positions'][1::3]) - min(g_yup[0]['positions'][1::3])
+    assert abs(occ_height - 0.11) < 1e-4, f'expected upright 0.11m via occ transform, got {occ_height}'
+    assert abs(yup_height - 0.11) < 1e-4, f'expected upright 0.11m via Y-up override, got {yup_height}'
 
     sys.stdout.write(json.dumps({
         'usd': base64.b64encode(glb_usd).decode('ascii'),

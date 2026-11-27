@@ -689,7 +689,11 @@ function teardownWebGL() {
 watch(language, updateCanvasLabels)
 
 watch(
-  () => [props.sceneConfig?.views?.toolhead?.url, props.sceneConfig?.views?.printer?.url, props.sceneConfig?.emptyCustom],
+  [
+    () => props.sceneConfig?.views?.toolhead?.url,
+    () => props.sceneConfig?.views?.printer?.url,
+    () => props.sceneConfig?.emptyCustom,
+  ],
   async () => {
     const views = props.sceneConfig?.views ?? {}
     if (activeView.value === 'printer' && !views.printer && views.toolhead) {

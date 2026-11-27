@@ -273,7 +273,7 @@ async function applyAxisTarget(axis) {
 }
 
 watch(
-  () => [props.online, moving.value, props.status?.homedAxes],
+  [() => props.online, () => moving.value, () => props.status?.homedAxes],
   ([isOnline, isMoving, homedAxes]) => {
     if (!isOnline || isMoving) {
       axisDrafts.value = {}

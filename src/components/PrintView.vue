@@ -602,7 +602,7 @@ watch(
 )
 
 watch(
-  () => [props.status?.printState, props.status?.printFilename],
+  [() => props.status?.printState, () => props.status?.printFilename],
   ([printState, filename]) => {
     if (['printing', 'paused'].includes(printState)) {
       resetStartConfirm()

@@ -590,7 +590,7 @@ function fitBox(box, animate = true, padding = 1.45, dirOverride = null) {
   const dir = (dirOverride ? dirOverride.clone() : new THREE.Vector3(0.68, 0.58, 1.0)).normalize()
   const toPosition = center.clone().addScaledVector(dir, Math.max(45, dist))
 
-  controls.minDistance = Math.max(12, radius * 0.35)
+  controls.minDistance = Math.max(8, radius * 0.25)
   controls.maxDistance = Math.max(750, radius * 6)
   camera.near = 0.5
   camera.far = Math.max(2000, dist * 5)
@@ -811,16 +811,41 @@ onMounted(() => {
 watch(language, updateCanvasLabels)
 watch(() => props.model, rebuildMesh)
 watch(
-  () => [props.bedSize?.originX, props.bedSize?.originY, props.bedSize?.width, props.bedSize?.depth, props.printerLabel],
+  [
+    () => props.bedSize?.originX,
+    () => props.bedSize?.originY,
+    () => props.bedSize?.width,
+    () => props.bedSize?.depth,
+    () => props.printerLabel,
+  ],
   rebuildBedGeometry,
 )
 watch(
-  () => [props.toolColors, props.colorMode, props.clipLayer, props.showGhost, props.showSupport],
+  [
+    () => props.toolColors,
+    () => props.colorMode,
+    () => props.clipLayer,
+    () => props.showGhost,
+    () => props.showSupport,
+  ],
   updateUniforms,
   { deep: true },
 )
-watch(() => [props.isLiveJob, props.livePosition, props.activeTool], updateNozzle, { deep: true })
-watch(() => [props.isLiveJob, props.excludeObjects], updateExcludeDatums, { deep: true })
+watch(
+  [
+    () => props.isLiveJob,
+    () => props.livePosition?.[0],
+    () => props.livePosition?.[1],
+    () => props.livePosition?.[2],
+    () => props.activeTool,
+  ],
+  updateNozzle,
+)
+watch(
+  [() => props.isLiveJob, () => props.excludeObjects],
+  updateExcludeDatums,
+  { deep: true },
+)
 
 onBeforeUnmount(() => {
   disposed = true

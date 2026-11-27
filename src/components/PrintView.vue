@@ -17,6 +17,11 @@ import {
   Search,
   Trash2,
   FolderOpen,
+  FolderPlus,
+  LayoutGrid,
+  List,
+  Pencil,
+  Check,
   ListPlus,
   AlertTriangle,
   ListOrdered,
@@ -43,6 +48,7 @@ const props = defineProps({
 const emit = defineEmits(['refresh'])
 
 const files = ref([])
+const serverDirs = ref([])
 const recentJobs = ref([])
 const filesError = ref('')
 const loadingFiles = ref(false)
@@ -51,6 +57,15 @@ const fileDrawerOpen = ref(false)
 const fileSearch = ref('')
 const activeFolder = ref('')
 const fileSort = ref('modified') // 'modified' | 'name'
+const fileViewMode = ref('list') // 'list' | 'grid'
+
+const showNewFolder = ref(false)
+const newFolderName = ref('')
+const folderBusy = ref(false)
+
+const renamingPath = ref('')
+const renameDraft = ref('')
+const renameBusy = ref(false)
 
 const uploadInputEl = ref(null)
 const dragOver = ref(false)
@@ -228,6 +243,9 @@ const folders = computed(() => {
   for (const file of files.value) {
     if (file.dir) set.add(file.dir)
   }
+  for (const dir of serverDirs.value) {
+    if (dir?.path) set.add(dir.path)
+  }
   return [...set].sort((a, b) => a.localeCompare(b))
 })
 
@@ -334,14 +352,22 @@ function decodeModelBinary(buffer) {
   return { header, segments }
 }
 
-async function loadFiles() {
+async function loadFiles(dirOverride = activeFolder.value) {
   loadingFiles.value = true
   filesError.value = ''
   try {
-    const response = await fetch('/api/print/files', { signal: AbortSignal.timeout(8000) })
+    const query = dirOverride ? `?dir=${encodeURIComponent(dirOverride)}` : ''
+    const response = await fetch(`/api/print/files${query}`, { signal: AbortSignal.timeout(8000) })
     const data = await response.json()
     if (!response.ok) throw new Error(data.error)
     files.value = data.files ?? []
+    if (!dirOverride) {
+      serverDirs.value = Array.isArray(data.dirs) ? data.dirs : []
+    } else if (Array.isArray(data.dirs) && data.dirs.length) {
+      const merged = new Map(serverDirs.value.map(d => [d.path, d]))
+      for (const d of data.dirs) merged.set(d.path, d)
+      serverDirs.value = [...merged.values()]
+    }
     recentJobs.value = data.recentJobs ?? []
 
     if (activeFolder.value && !folders.value.includes(activeFolder.value)) {
@@ -367,6 +393,78 @@ async function loadFiles() {
   } finally {
     loadingFiles.value = false
   }
+}
+
+async function createFolder() {
+  const raw = newFolderName.value.trim().replace(/^\/+|\/+$/g, '')
+  if (!raw || !props.canWrite || folderBusy.value) return
+  const targetPath = activeFolder.value ? `${activeFolder.value}/${raw}` : raw
+  folderBusy.value = true
+  fileActionFeedback.value = null
+  try {
+    const res = await fetch('/api/print/mkdir', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Cockpit-Request': '1' },
+      body: JSON.stringify({ path: targetPath }),
+      signal: AbortSignal.timeout(8000),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Ordner konnte nicht erstellt werden.')
+    newFolderName.value = ''
+    showNewFolder.value = false
+    fileActionFeedback.value = { ok: true, message: t('Ordner „{0}“ erstellt.', [data.path || targetPath]) }
+    await loadFiles(activeFolder.value)
+  } catch (err) {
+    fileActionFeedback.value = { ok: false, message: err.message || 'Ordner konnte nicht erstellt werden.' }
+  } finally {
+    folderBusy.value = false
+  }
+}
+
+function startRename(file) {
+  if (!props.canWrite || isFileActivePrint(file.path)) return
+  renamingPath.value = file.path
+  renameDraft.value = file.name
+}
+
+function cancelRename() {
+  renamingPath.value = ''
+  renameDraft.value = ''
+}
+
+async function submitRename(file) {
+  const nextName = renameDraft.value.trim()
+  if (!nextName || !props.canWrite || renameBusy.value) return
+  const dest = file.dir ? `${file.dir}/${nextName}` : nextName
+  if (dest === file.path) {
+    cancelRename()
+    return
+  }
+  renameBusy.value = true
+  fileActionFeedback.value = null
+  try {
+    const res = await fetch('/api/print/move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Cockpit-Request': '1' },
+      body: JSON.stringify({ source: file.path, dest }),
+      signal: AbortSignal.timeout(8000),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Datei konnte nicht umbenannt werden.')
+    const wasSelected = selectedFile.value === file.path
+    cancelRename()
+    fileActionFeedback.value = { ok: true, message: t('Umbenannt in {0}.', [nextName]) }
+    await loadFiles(activeFolder.value)
+    if (wasSelected) selectedFile.value = dest
+  } catch (err) {
+    fileActionFeedback.value = { ok: false, message: err.message || 'Datei konnte nicht umbenannt werden.' }
+  } finally {
+    renameBusy.value = false
+  }
+}
+
+function fileThumbUrl(file) {
+  return file?.thumbnail ? `/api/print/thumbnail?path=${encodeURIComponent(file.thumbnail)}` : ''
 }
 
 async function loadQueue() {
@@ -593,6 +691,11 @@ watch(selectedFile, filename => {
   loadSelectedFile(filename)
 })
 
+watch(activeFolder, dir => {
+  cancelRename()
+  loadFiles(dir)
+})
+
 watch(
   () => props.requestedFile,
   filename => {
@@ -705,7 +808,7 @@ onBeforeUnmount(() => {
 
       <p v-if="filesError" class="print-inline-error" role="alert">{{ t(filesError) }}</p>
 
-      <!-- Expandable G-Code File Browser (Search, Subfolders, Upload Dropzone, Delete, Queue) -->
+      <!-- Expandable G-Code File Browser (Search, Subfolders, Grid/List, Mkdir, Rename, Upload Dropzone, Delete, Queue) -->
       <section v-if="fileDrawerOpen" class="print-browser-panel" :aria-label="t('G-Code-Dateimanager')">
         <div class="print-browser-controls">
           <label class="spoolman-search print-browser-search">
@@ -725,7 +828,53 @@ onBeforeUnmount(() => {
               {{ t('Name') }}
             </button>
           </div>
+          <div class="segmented" role="group" :aria-label="t('Ansicht')">
+            <button
+              type="button"
+              :aria-pressed="fileViewMode === 'list'"
+              :title="t('Listenansicht')"
+              :aria-label="t('Listenansicht')"
+              @click="fileViewMode = 'list'"
+            >
+              <List :size="14" />
+            </button>
+            <button
+              type="button"
+              :aria-pressed="fileViewMode === 'grid'"
+              :title="t('Kachelansicht mit Vorschaubildern')"
+              :aria-label="t('Kachelansicht mit Vorschaubildern')"
+              @click="fileViewMode = 'grid'"
+            >
+              <LayoutGrid :size="14" />
+            </button>
+          </div>
+          <button
+            v-if="canWrite"
+            type="button"
+            class="subtle-button print-mkdir-btn"
+            :class="{ active: showNewFolder }"
+            :title="t('Neuen Ordner anlegen')"
+            @click="showNewFolder = !showNewFolder"
+          >
+            <FolderPlus :size="14" />{{ t('Ordner') }}
+          </button>
         </div>
+
+        <form v-if="showNewFolder && canWrite" class="print-inline-form" @submit.prevent="createFolder">
+          <input
+            v-model="newFolderName"
+            type="text"
+            :placeholder="activeFolder ? t('Unterordner in {0} …', [activeFolder]) : t('Neuer Ordnername …')"
+            :aria-label="t('Neuer Ordnername')"
+            :disabled="folderBusy"
+          />
+          <button type="submit" class="subtle-button" :disabled="folderBusy || !newFolderName.trim()">
+            <Check :size="13" />{{ t('Anlegen') }}
+          </button>
+          <button type="button" class="icon-button" :aria-label="t('Abbrechen')" @click="showNewFolder = false">
+            <X :size="14" />
+          </button>
+        </form>
 
         <div v-if="folders.length" class="print-folder-chips" role="group" :aria-label="t('Ordner filtern')">
           <button
@@ -752,6 +901,88 @@ onBeforeUnmount(() => {
           {{ files.length ? t('Keine passende G-Code-Datei gefunden.') : t('Noch keine G-Code-Dateien vorhanden. Einfach per Drag & Drop ablegen.') }}
         </div>
 
+        <div v-else-if="fileViewMode === 'grid'" class="print-browser-grid">
+          <article
+            v-for="file in filteredFiles"
+            :key="file.path"
+            class="print-grid-card"
+            :class="{ selected: selectedFile === file.path }"
+          >
+            <button type="button" class="print-grid-thumb" @click="selectedFile = file.path">
+              <img v-if="fileThumbUrl(file)" :src="fileThumbUrl(file)" :alt="file.name" loading="lazy" />
+              <FileCode2 v-else :size="28" class="print-grid-placeholder" />
+            </button>
+            <div class="print-grid-body">
+              <form
+                v-if="renamingPath === file.path"
+                class="print-rename-inline"
+                @submit.prevent="submitRename(file)"
+              >
+                <input
+                  v-model="renameDraft"
+                  type="text"
+                  :disabled="renameBusy"
+                  :aria-label="t('Neuer Dateiname')"
+                  @keydown.esc="cancelRename"
+                />
+                <button type="submit" class="icon-button" :disabled="renameBusy" :aria-label="t('Speichern')">
+                  <Check :size="13" />
+                </button>
+                <button type="button" class="icon-button" :aria-label="t('Abbrechen')" @click="cancelRename">
+                  <X :size="13" />
+                </button>
+              </form>
+              <button v-else type="button" class="print-grid-title" @click="selectedFile = file.path">
+                <strong :title="file.name">{{ file.name }}</strong>
+                <span class="print-browser-meta">
+                  <template v-if="file.estimatedTime != null">{{ formatDuration(file.estimatedTime) }}</template>
+                  <template v-if="file.filamentWeight != null"> · {{ formatNumber(file.filamentWeight, 1) }} g</template>
+                  <template v-if="file.estimatedTime == null && file.filamentWeight == null">
+                    {{ formatFileSize(file.size) }}
+                  </template>
+                </span>
+              </button>
+              <div class="print-grid-actions">
+                <button
+                  v-if="queue.available && canWrite"
+                  type="button"
+                  class="icon-button"
+                  :disabled="queueBusy"
+                  :title="t('Zur Druck-Warteschlange hinzufügen')"
+                  :aria-label="t('{0} zur Warteschlange hinzufügen', [file.name])"
+                  @click="runQueueAction({ action: 'add', filename: file.path })"
+                >
+                  <ListPlus :size="14" />
+                </button>
+                <button
+                  v-if="canWrite"
+                  type="button"
+                  class="icon-button"
+                  :disabled="isFileActivePrint(file.path)"
+                  :title="t('Datei umbenennen')"
+                  :aria-label="t('{0} umbenennen', [file.name])"
+                  @click="startRename(file)"
+                >
+                  <Pencil :size="13" />
+                </button>
+                <button
+                  v-if="canWrite"
+                  type="button"
+                  :class="confirmDeletePath === file.path ? 'confirm-button print-delete-confirm' : 'icon-button'"
+                  :disabled="isFileActivePrint(file.path)"
+                  :title="confirmDeletePath === file.path ? t('Erneut klicken, um endgültig zu löschen') : t('Datei löschen')"
+                  :aria-label="t('{0} löschen', [file.name])"
+                  @click="requestOrDeleteFile(file)"
+                  @keydown.esc="resetDeleteConfirm"
+                >
+                  <Trash2 :size="13" />
+                  <span v-if="confirmDeletePath === file.path">{{ t('Löschen?') }}</span>
+                </button>
+              </div>
+            </div>
+          </article>
+        </div>
+
         <ul v-else class="print-browser-list">
           <li
             v-for="file in filteredFiles"
@@ -759,7 +990,27 @@ onBeforeUnmount(() => {
             class="print-browser-row"
             :class="{ selected: selectedFile === file.path }"
           >
+            <form
+              v-if="renamingPath === file.path"
+              class="print-rename-inline"
+              @submit.prevent="submitRename(file)"
+            >
+              <input
+                v-model="renameDraft"
+                type="text"
+                :disabled="renameBusy"
+                :aria-label="t('Neuer Dateiname')"
+                @keydown.esc="cancelRename"
+              />
+              <button type="submit" class="subtle-button" :disabled="renameBusy">
+                <Check :size="13" />{{ t('Speichern') }}
+              </button>
+              <button type="button" class="icon-button" :aria-label="t('Abbrechen')" @click="cancelRename">
+                <X :size="14" />
+              </button>
+            </form>
             <button
+              v-else
               type="button"
               class="print-browser-select"
               @click="selectedFile = file.path"
@@ -769,12 +1020,14 @@ onBeforeUnmount(() => {
                 <span v-if="file.dir" class="print-dir-badge">{{ file.dir }}</span>
               </span>
               <span class="print-browser-meta">
+                <template v-if="file.estimatedTime != null">{{ formatDuration(file.estimatedTime) }} · </template>
+                <template v-if="file.filamentWeight != null">{{ formatNumber(file.filamentWeight, 1) }} g · </template>
                 {{ formatFileSize(file.size) }}
                 <template v-if="file.modified"> · {{ formatShortDate(file.modified) }}</template>
               </span>
             </button>
 
-            <div class="print-browser-actions">
+            <div v-if="renamingPath !== file.path" class="print-browser-actions">
               <button
                 v-if="queue.available && canWrite"
                 type="button"
@@ -785,6 +1038,17 @@ onBeforeUnmount(() => {
                 @click="runQueueAction({ action: 'add', filename: file.path })"
               >
                 <ListPlus :size="15" />
+              </button>
+              <button
+                v-if="canWrite"
+                type="button"
+                class="icon-button"
+                :disabled="isFileActivePrint(file.path)"
+                :title="t('Datei umbenennen')"
+                :aria-label="t('{0} umbenennen', [file.name])"
+                @click="startRename(file)"
+              >
+                <Pencil :size="14" />
               </button>
               <button
                 v-if="canWrite"

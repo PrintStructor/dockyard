@@ -40,7 +40,7 @@ import {
   encodeMoonrakerPath,
 } from './machine.mjs'
 import { validateShakeTuneImagePath, normalizeCalibrationData } from './calibration.mjs'
-import { normalizePresets, inferToolCountFromPresets } from './presets.mjs'
+import { normalizePresets, inferToolCountFromPresets, applyMainsailPresetMutation } from './presets.mjs'
 import { serverHost, serverPort } from './config.mjs'
 import {
   settingsStore as defaultSettingsStore,
@@ -531,6 +531,8 @@ function isDynamicPrinterObject(name) {
     name === 'quad_gantry_level' ||
     name === 'bed_screws' ||
     name === 'screws_tilt_adjust' ||
+    name === 'manual_probe' ||
+    name === 'firmware_retraction' ||
     name === 'fan' ||
     /^fan_generic [A-Za-z0-9_-]+$/.test(name) ||
     /^heater_fan [A-Za-z0-9_-]+$/.test(name) ||
@@ -541,9 +543,34 @@ function isDynamicPrinterObject(name) {
     /^temperature_fan .+$/.test(name) ||
     /^filament_(?:switch|motion)_sensor .+$/.test(name) ||
     /^neopixel [A-Za-z0-9_-]+$/.test(name) ||
+    /^led [A-Za-z0-9_-]+$/.test(name) ||
     /^led_effect .+$/.test(name)
   )
 }
+
+function validateGcodeDir(raw) {
+  if (raw == null || raw === '') return ''
+  if (typeof raw !== 'string') return null
+  const trimmed = raw.trim().replace(/^\/+|\/+$/g, '')
+  if (!trimmed) return ''
+  if (trimmed.length > 200 || /[\x00-\x1f\x7f\\]/.test(trimmed) || /%2e|%2f|%5c|%00/i.test(trimmed)) {
+    return null
+  }
+  const segments = trimmed.split('/')
+  for (const seg of segments) {
+    if (!seg || seg === '.' || seg === '..' || seg.startsWith('.')) return null
+    if (!/^[A-Za-z0-9 _.-]+$/.test(seg)) return null
+  }
+  return segments.join('/')
+}
+
+const PROTECTED_CONFIG_FILES = new Set([
+  'printer.cfg',
+  'moonraker.conf',
+  'mainsail.cfg',
+  'fluidd.cfg',
+  'crowsnest.conf',
+])
 
 async function query(withConfig = false) {
   const epoch = runtimeEpoch
@@ -568,7 +595,9 @@ async function query(withConfig = false) {
       ? Array.from(new Set([...nextDiscovered, ...effectObjects]))
       : [...objects, ...effectObjects, ...nextFanObjects]
   const queryNames = queryList.map(encodeURIComponent).join('&')
-  const configParam = withConfig ? '&configfile=settings,save_config_pending' : '&configfile=save_config_pending'
+  const configParam = withConfig
+    ? '&configfile=settings,save_config_pending,warnings'
+    : '&configfile=save_config_pending,warnings'
   const response = await fetchUpstream(
     `${base}/printer/objects/query?${queryNames}${configParam}`,
     { signal: AbortSignal.timeout(5000) },
@@ -590,6 +619,9 @@ async function query(withConfig = false) {
         ...configCache,
         ...(data.result.status.configfile?.save_config_pending !== undefined
           ? { save_config_pending: data.result.status.configfile.save_config_pending }
+          : {}),
+        ...(Array.isArray(data.result.status.configfile?.warnings)
+          ? { warnings: data.result.status.configfile.warnings }
           : {}),
       }
     : (data.result.status.configfile ?? null)
@@ -1002,12 +1034,12 @@ function printerMiddleware(req, res, next) {
   }
 
   const camera = path.match(/^\/api\/camera\/([a-z0-9][a-z0-9_-]{0,31})(?:\/(stream|webrtc))?$/)
-  const printRoute = path.match(/^\/api\/print\/(files|metadata|thumbnail|model|upload|file|queue)$/)
+  const printRoute = path.match(/^\/api\/print\/(files|metadata|thumbnail|model|upload|file|queue|mkdir|move)$/)
   const settingsRoute = path.match(/^\/api\/settings(?:\/(switch|test))?$/)
   const modelRoute = path.match(/^\/api\/models\/([a-z0-9][a-z0-9_-]{0,31})\/(toolhead|printer)$/)
   const spoolmanRoute = path.match(/^\/api\/spoolman\/(spools|active)$/)
   const systemRoute = path.match(
-    /^\/api\/system\/(overview|calibration|calibration\/shaketune-image|config\/list|config\/file|config\/save|service\/restart|host\/reboot|host\/shutdown|power|updates|updates\/refresh|updates\/notes|updates\/upgrade|updates\/recover|logs\/list|logs\/tail|logs\/download)$/,
+    /^\/api\/system\/(overview|calibration|calibration\/shaketune-image|endstops|config\/list|config\/file|config\/save|config\/create|service\/restart|host\/reboot|host\/shutdown|power|updates|updates\/refresh|updates\/notes|updates\/upgrade|updates\/recover|logs\/list|logs\/tail|logs\/download)$/,
   )
   if (
     path !== '/api/status' &&
@@ -1033,31 +1065,44 @@ function printerMiddleware(req, res, next) {
   const spoolmanSub = spoolmanRoute?.[1]
   const printSub = printRoute?.[1]
   const isSettingsGet = path === '/api/settings' && req.method === 'GET'
+  const isPresetsGet = path === '/api/presets' && req.method === 'GET'
+  const isPresetsWrite = path === '/api/presets' && req.method === 'POST'
   const isModelGet = Boolean(modelRoute) && req.method === 'GET'
   const isModelWrite = Boolean(modelRoute) && (req.method === 'POST' || req.method === 'DELETE')
   const isPrintUpload = printSub === 'upload' && req.method === 'POST'
   const isPrintDelete = printSub === 'file' && req.method === 'DELETE'
+  const isPrintMkdir = printSub === 'mkdir' && req.method === 'POST'
+  const isPrintMove = printSub === 'move' && req.method === 'POST'
   const isPrintQueueGet = printSub === 'queue' && req.method === 'GET'
   const isPrintQueueWrite = printSub === 'queue' && req.method === 'POST'
   const isSystemPowerGet = systemSub === 'power' && req.method === 'GET'
   const isSystemPowerWrite = systemSub === 'power' && req.method === 'POST'
+  const isConfigFileGet = systemSub === 'config/file' && req.method === 'GET'
+  const isConfigFileDelete = systemSub === 'config/file' && req.method === 'DELETE'
   const write =
     !isSettingsGet &&
+    !isPresetsGet &&
     !isModelGet &&
     !isPrintQueueGet &&
     !isSystemPowerGet &&
+    !isConfigFileGet &&
     (path === '/api/control' ||
       path === '/api/settings' ||
+      isPresetsWrite ||
       settingsSub === 'switch' ||
       settingsSub === 'test' ||
       isModelWrite ||
       isPrintUpload ||
       isPrintDelete ||
+      isPrintMkdir ||
+      isPrintMove ||
       isPrintQueueWrite ||
       isSystemPowerWrite ||
       spoolmanSub === 'active' ||
       camera?.[2] === 'webrtc' ||
       systemSub === 'config/save' ||
+      systemSub === 'config/create' ||
+      isConfigFileDelete ||
       systemSub === 'service/restart' ||
       systemSub === 'host/reboot' ||
       systemSub === 'host/shutdown' ||
@@ -1070,7 +1115,9 @@ function printerMiddleware(req, res, next) {
     }
   } else if (printSub === 'file') {
     if (req.method !== 'DELETE') return json(405, { error: 'Methode nicht erlaubt.' })
-  } else if (printSub === 'queue' || systemSub === 'power') {
+  } else if (systemSub === 'config/file') {
+    if (!['GET', 'DELETE'].includes(req.method)) return json(405, { error: 'Methode nicht erlaubt.' })
+  } else if (printSub === 'queue' || systemSub === 'power' || path === '/api/presets') {
     if (!['GET', 'POST'].includes(req.method)) return json(405, { error: 'Methode nicht erlaubt.' })
   } else if (!isSettingsGet && req.method !== (write ? 'POST' : 'GET')) {
     return json(405, { error: 'Methode nicht erlaubt.' })
@@ -1093,7 +1140,7 @@ function printerMiddleware(req, res, next) {
     write &&
     !(isModelWrite
       ? binaryWriteAllowed(['model/gltf-binary', 'application/octet-stream'])
-      : isPrintUpload || isPrintDelete
+      : isPrintUpload || isPrintDelete || isConfigFileDelete
         ? binaryWriteAllowed(['application/octet-stream', 'text/plain', 'text/x.gcode'])
         : sameOriginRequest(req, store.getEffectiveAllowedOrigins(), { allowLanOrigins: store.isLanOriginAllowed() }))
   ) {
@@ -1307,6 +1354,7 @@ function printerMiddleware(req, res, next) {
             'z_tilt',
             'bed_screws',
             'screws_tilt_adjust',
+            'manual_probe',
             'probe',
             'bltouch',
             'scanner',
@@ -1353,6 +1401,30 @@ function printerMiddleware(req, res, next) {
           return
         }
 
+        if (systemSub === 'endstops') {
+          const eRes = await fetchUpstream(`${printer}/printer/query_endstops/status`, {
+            signal: AbortSignal.timeout(6000),
+          })
+          if (!eRes.ok) {
+            const errJson = await eRes.json().catch(() => null)
+            throw new ControlError(
+              errJson?.error?.message || `Endschalter konnten nicht abgefragt werden (HTTP ${eRes.status}).`,
+              eRes.status === 400 ? 409 : 502,
+            )
+          }
+          const eJson = await eRes.json().catch(() => ({}))
+          const rawMap = eJson?.result && typeof eJson.result === 'object' ? eJson.result : {}
+          const endstops = Object.entries(rawMap)
+            .filter(([name]) => typeof name === 'string' && name.trim())
+            .map(([name, state]) => ({
+              name,
+              state: String(state ?? 'unknown').toLowerCase(),
+              triggered: String(state ?? '').toUpperCase() === 'TRIGGERED',
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name))
+          return json(200, { endstops, queriedAt: new Date().toISOString() })
+        }
+
         if (systemSub === 'config/list') {
           const response = await fetchUpstream(`${printer}/server/files/list?root=config`, {
             signal: AbortSignal.timeout(7000),
@@ -1365,6 +1437,31 @@ function printerMiddleware(req, res, next) {
         if (systemSub === 'config/file') {
           const relPath = validateConfigPath(parsedUrl.searchParams.get('path'))
           if (!relPath) throw new ControlError('Ungültiger Konfigurationspfad.', 400)
+          if (req.method === 'DELETE') {
+            if (PROTECTED_CONFIG_FILES.has(relPath.toLowerCase())) {
+              throw new ControlError('Zentrale Systemkonfigurationen können nicht gelöscht werden.', 403)
+            }
+            await probeMachineWriteGuard(true)
+            const listRes = await fetchUpstream(`${printer}/server/files/list?root=config`, {
+              signal: AbortSignal.timeout(6000),
+            })
+            if (!listRes.ok) throw new Error('Konfigurationsliste nicht erreichbar.')
+            const listJson = await listRes.json()
+            const entry = (listJson?.result ?? []).find(item => item?.path === relPath) ?? null
+            const { path: validPath } = validateWritableConfigPath(relPath, entry)
+            const delRes = await fetchUpstream(`${printer}/server/files/config/${encodeMoonrakerPath(validPath)}`, {
+              method: 'DELETE',
+              signal: AbortSignal.timeout(8000),
+            })
+            if (!delRes.ok) {
+              const errJson = await delRes.json().catch(() => null)
+              throw new ControlError(
+                errJson?.error?.message || 'Konfigurationsdatei konnte nicht gelöscht werden.',
+                delRes.status === 404 ? 404 : 502,
+              )
+            }
+            return json(200, { ok: true, deleted: validPath })
+          }
           const [listRes, fileRes] = await Promise.all([
             fetchUpstream(`${printer}/server/files/list?root=config`, { signal: AbortSignal.timeout(6000) }),
             fetchUpstream(`${printer}/server/files/config/${encodeMoonrakerPath(relPath)}`, {
@@ -1399,6 +1496,42 @@ function printerMiddleware(req, res, next) {
             isBackup: meta?.isBackup ?? false,
             isScript: meta?.isScript ?? false,
           })
+        }
+
+        if (systemSub === 'config/create') {
+          const payload = await readJson(req, MAX_CONFIG_BYTES + 80_000)
+          const relPath = validateConfigPath(payload?.path)
+          if (!relPath) throw new ControlError('Ungültiger Konfigurationspfad.', 400)
+          const classified = classifyConfigFile({ path: relPath, permissions: 'rw' })
+          if (!classified || classified.readonly) {
+            throw new ControlError('Nur Textdateien (.cfg, .conf, .md, .txt, .json) außerhalb von Backups erlaubt.', 403)
+          }
+          await probeMachineWriteGuard(true)
+          const listRes = await fetchUpstream(`${printer}/server/files/list?root=config`, {
+            signal: AbortSignal.timeout(6000),
+          })
+          if (!listRes.ok) throw new Error('Konfigurationsliste nicht erreichbar.')
+          const listJson = await listRes.json()
+          const exists = (listJson?.result ?? []).some(item => item?.path === classified.path)
+          if (exists) {
+            throw new ControlError('Eine Konfigurationsdatei mit diesem Pfad existiert bereits.', 409)
+          }
+          const content = validateConfigContent(
+            typeof payload?.content === 'string' ? payload.content : `# ${classified.path}\n`,
+          )
+          const uploadRes = await fetchUpstream(`${printer}/server/files/upload`, {
+            method: 'POST',
+            body: buildConfigUploadFormData(classified.path, content),
+            signal: AbortSignal.timeout(10_000),
+          })
+          if (!uploadRes.ok) {
+            const errJson = await uploadRes.json().catch(() => null)
+            throw new ControlError(
+              errJson?.error?.message ?? `Datei konnte nicht erstellt werden (HTTP ${uploadRes.status}).`,
+              502,
+            )
+          }
+          return json(200, { ok: true, created: classified.path })
         }
 
         if (systemSub === 'config/save') {
@@ -1822,8 +1955,15 @@ function printerMiddleware(req, res, next) {
       if (printRoute) {
         const sub = printRoute[1]
         if (sub === 'files') {
-          const [filesRes, historyRes] = await Promise.all([
+          const currentDir = validateGcodeDir(parsedUrl.searchParams.get('dir') ?? '')
+          if (currentDir === null) throw new ControlError('Ungültiger Ordnerpfad.', 400)
+          const dirParam = currentDir ? `gcodes/${currentDir}` : 'gcodes'
+          const [filesRes, dirRes, historyRes] = await Promise.all([
             fetchUpstream(`${printer}/server/files/list?root=gcodes`, { signal: AbortSignal.timeout(7000) }),
+            fetchUpstream(
+              `${printer}/server/files/directory?path=${encodeURIComponent(dirParam)}&extended=true`,
+              { signal: AbortSignal.timeout(6000) },
+            ).catch(() => null),
             fetchUpstream(`${printer}/server/history/list?limit=10`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
           ])
           if (!filesRes.ok) throw new Error('Druckdateien nicht erreichbar.')
@@ -1834,17 +1974,65 @@ function printerMiddleware(req, res, next) {
           const existingSet = new Set(validRaw.map(item => item.path))
           gcodeFileSetCache = existingSet
           gcodeFileSetAt = Date.now()
+
+          const metaByPath = new Map()
+          const dirs = []
+          if (dirRes?.ok) {
+            const dirJson = await dirRes.json().catch(() => null)
+            const rawDirs = Array.isArray(dirJson?.result?.dirs) ? dirJson.result.dirs : []
+            for (const entry of rawDirs) {
+              const dirname = typeof entry?.dirname === 'string' ? entry.dirname.trim() : ''
+              if (!dirname || dirname.startsWith('.')) continue
+              const relDir = currentDir ? `${currentDir}/${dirname}` : dirname
+              if (validateGcodeDir(relDir) === null) continue
+              dirs.push({
+                name: dirname,
+                path: relDir,
+                modified: Number.isFinite(entry.modified) ? entry.modified : null,
+              })
+            }
+            const rawDirFiles = Array.isArray(dirJson?.result?.files) ? dirJson.result.files : []
+            for (const entry of rawDirFiles) {
+              if (!entry || typeof entry.filename !== 'string') continue
+              const relPath = currentDir ? `${currentDir}/${entry.filename}` : entry.filename
+              let thumbPath = null
+              if (Array.isArray(entry.thumbnails) && entry.thumbnails.length > 0) {
+                const sorted = [...entry.thumbnails]
+                  .filter(t => typeof t?.relative_path === 'string')
+                  .sort((a, b) => (b.width ?? 0) - (a.width ?? 0))
+                const preferred = sorted.find(t => (t.width ?? 0) <= 400 && (t.width ?? 0) >= 96) ?? sorted[0]
+                if (preferred) {
+                  const candidate = currentDir
+                    ? `${currentDir}/${preferred.relative_path}`
+                    : preferred.relative_path
+                  thumbPath = validateThumbnailPath(candidate)
+                }
+              }
+              metaByPath.set(relPath, {
+                estimatedTime: Number.isFinite(entry.estimated_time) ? entry.estimated_time : null,
+                filamentWeight: Number.isFinite(entry.filament_weight_total) ? entry.filament_weight_total : null,
+                layerHeight: Number.isFinite(entry.layer_height) ? entry.layer_height : null,
+                thumbnail: thumbPath,
+              })
+            }
+          }
+
           const files = validRaw
             .sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0))
             .slice(0, 500)
             .map(item => {
               const idx = item.path.lastIndexOf('/')
+              const ext = metaByPath.get(item.path)
               return {
                 path: item.path,
                 name: idx >= 0 ? item.path.slice(idx + 1) : item.path,
                 dir: idx >= 0 ? item.path.slice(0, idx) : '',
                 size: Number.isFinite(item.size) ? item.size : null,
                 modified: Number.isFinite(item.modified) ? item.modified : null,
+                estimatedTime: ext?.estimatedTime ?? null,
+                filamentWeight: ext?.filamentWeight ?? null,
+                layerHeight: ext?.layerHeight ?? null,
+                thumbnail: ext?.thumbnail ?? null,
               }
             })
 
@@ -1866,7 +2054,56 @@ function printerMiddleware(req, res, next) {
                 fileExists: existingSet.has(job.filename),
               }))
           }
-          return json(200, { files, recentJobs })
+          return json(200, { files, dirs, currentDir, recentJobs })
+        }
+
+        if (sub === 'mkdir') {
+          const payload = await readJson(req, 4096)
+          const dirPath = validateGcodeDir(payload?.path)
+          if (!dirPath) throw new ControlError('Ungültiger Ordnername.', 400)
+          const mkRes = await fetchUpstream(`${printer}/server/files/directory`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: `gcodes/${dirPath}` }),
+            signal: AbortSignal.timeout(8000),
+          })
+          if (!mkRes.ok) {
+            const errJson = await mkRes.json().catch(() => null)
+            throw new ControlError(
+              errJson?.error?.message || 'Ordner konnte nicht erstellt werden.',
+              mkRes.status >= 400 && mkRes.status < 500 ? mkRes.status : 502,
+            )
+          }
+          return json(200, { ok: true, path: dirPath })
+        }
+
+        if (sub === 'move') {
+          const payload = await readJson(req, 4096)
+          const source = validateGcodeFilename(payload?.source)
+          const dest = validateGcodeFilename(payload?.dest)
+          if (!source || !dest) throw new ControlError('Ungültiger Quell- oder Zielpfad.', 400)
+          if (source === dest) throw new ControlError('Quell- und Zielname sind identisch.', 400)
+          const liveRaw = await query(false).catch(() => null)
+          const livePrintState = liveRaw?.print_stats?.state
+          const liveFilename = liveRaw?.print_stats?.filename
+          if (['printing', 'paused'].includes(livePrintState) && liveFilename === source) {
+            throw new ControlError('Die aktuell gedruckte Datei kann nicht umbenannt werden.', 409)
+          }
+          const mvRes = await fetchUpstream(`${printer}/server/files/move`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source: `gcodes/${source}`, dest: `gcodes/${dest}` }),
+            signal: AbortSignal.timeout(8000),
+          })
+          if (!mvRes.ok) {
+            const errJson = await mvRes.json().catch(() => null)
+            throw new ControlError(
+              errJson?.error?.message || 'Datei konnte nicht verschoben oder umbenannt werden.',
+              mvRes.status >= 400 && mvRes.status < 500 ? mvRes.status : 502,
+            )
+          }
+          gcodeFileSetCache = null
+          return json(200, { ok: true, source, dest })
         }
 
         if (sub === 'upload') {
@@ -2090,6 +2327,38 @@ function printerMiddleware(req, res, next) {
       }
 
       if (path === '/api/presets') {
+        if (req.method === 'POST') {
+          const payload = await readJson(req, 8192)
+          const currentRes = await fetchUpstream(`${printer}/server/database/item?namespace=mainsail&key=presets`, {
+            signal: AbortSignal.timeout(5000),
+          }).catch(() => null)
+          const currentDb = currentRes?.ok ? (await currentRes.json().catch(() => null))?.result?.value ?? {} : {}
+          let nextDb
+          try {
+            nextDb = applyMainsailPresetMutation(currentDb, payload)
+          } catch (err) {
+            throw new ControlError(err.message || 'Ungültiges Preset.', 400)
+          }
+          const saveRes = await fetchUpstream(`${printer}/server/database/item`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ namespace: 'mainsail', key: 'presets', value: nextDb }),
+            signal: AbortSignal.timeout(6000),
+          })
+          if (!saveRes.ok) {
+            const errJson = await saveRes.json().catch(() => null)
+            throw new ControlError(
+              errJson?.error?.message || `Presets konnten nicht gespeichert werden (HTTP ${saveRes.status}).`,
+              502,
+            )
+          }
+          const toolCount =
+            capabilityCache?.toolCount ??
+            liveCapabilityRef.value?.toolCount ??
+            inferToolCountFromPresets(nextDb, null) ??
+            1
+          return json(200, { ok: true, presets: normalizePresets({ mainsail: nextDb, toolCount }) })
+        }
         const [mainsailRes, legacyRes] = await Promise.all([
           fetchUpstream(`${printer}/server/database/item?namespace=mainsail&key=presets`, {
             signal: AbortSignal.timeout(5000),

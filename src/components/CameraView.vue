@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
-import { Camera, RefreshCw, Expand, X } from '@lucide/vue'
+import { Camera, RefreshCw, Expand, X, Download } from '@lucide/vue'
 import { t } from '../i18n.mjs'
 import { useCameras } from '../useCameras.js'
 
@@ -10,18 +10,84 @@ const props = defineProps({
   description: String,
   service: { type: String, default: 'camera-streamer' },
   preferredMode: { type: String, default: 'webrtc' },
+  flipX: { type: Boolean, default: false },
+  flipY: { type: Boolean, default: false },
+  rotate: { type: Number, default: 0 },
 })
 
 const cameras = useCameras()
 const camera = cameras.getCamera(props.id)
 
 watch(
-  () => [props.service, props.preferredMode],
+  [() => props.service, () => props.preferredMode],
   ([service, preferredMode]) => {
     cameras.configureCamera(props.id, { service, preferredMode })
   },
   { immediate: true },
 )
+
+const mediaStyle = computed(() => {
+  const parts = []
+  if (props.flipX) parts.push('scaleX(-1)')
+  if (props.flipY) parts.push('scaleY(-1)')
+  const rot = [0, 90, 180, 270].includes(Number(props.rotate)) ? Number(props.rotate) : 0
+  if (rot) parts.push(`rotate(${rot}deg)`)
+  return parts.length ? { transform: parts.join(' ') } : undefined
+})
+
+const capturing = ref(false)
+
+async function captureSnapshot() {
+  if (capturing.value || !hasMedia.value) return
+  capturing.value = true
+  try {
+    const safeName = (props.name || props.id || 'camera').replace(/[^a-z0-9_-]+/gi, '_').toLowerCase()
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const videoEl = expanded.value ? modalVideo.value : inlineVideo.value
+    if (isWebRtc.value && videoEl && videoEl.videoWidth > 0 && videoEl.videoHeight > 0) {
+      const rot = [0, 90, 180, 270].includes(Number(props.rotate)) ? Number(props.rotate) : 0
+      const swapped = rot === 90 || rot === 270
+      const canvas = document.createElement('canvas')
+      canvas.width = swapped ? videoEl.videoHeight : videoEl.videoWidth
+      canvas.height = swapped ? videoEl.videoWidth : videoEl.videoHeight
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.translate(canvas.width / 2, canvas.height / 2)
+        if (rot) ctx.rotate((rot * Math.PI) / 180)
+        ctx.scale(props.flipX ? -1 : 1, props.flipY ? -1 : 1)
+        ctx.drawImage(videoEl, -videoEl.videoWidth / 2, -videoEl.videoHeight / 2)
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.92))
+        if (blob) {
+          const url = URL.createObjectURL(blob)
+          const link = document.createElement('a')
+          link.href = url
+          link.download = `${safeName}-${stamp}.jpg`
+          document.body.appendChild(link)
+          link.click()
+          link.remove()
+          URL.revokeObjectURL(url)
+          return
+        }
+      }
+    }
+    const res = await fetch(`/api/camera/${encodeURIComponent(props.id)}`, { signal: AbortSignal.timeout(8000) })
+    if (!res.ok) return
+    const blob = await res.blob()
+    const ext = blob.type.includes('png') ? 'png' : 'jpg'
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${safeName}-${stamp}.${ext}`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  } catch {
+    // Ignore transient snapshot failures
+  } finally {
+    capturing.value = false
+  }
+}
 
 const expanded = ref(false)
 const dialog = ref(null)
@@ -111,6 +177,16 @@ onBeforeUnmount(() => {
         <button
           class="icon-button"
           type="button"
+          :disabled="!hasMedia || capturing"
+          :title="t('Schnappschuss speichern')"
+          :aria-label="t('Schnappschuss von {0} speichern', [t(name)])"
+          @click="captureSnapshot"
+        >
+          <Download :size="15" />
+        </button>
+        <button
+          class="icon-button"
+          type="button"
           :disabled="!hasMedia"
           :aria-label="t('{0} vergrößern', [t(name)])"
           @click="open"
@@ -124,6 +200,7 @@ onBeforeUnmount(() => {
       <video
         v-if="isWebRtc"
         ref="inlineVideo"
+        :style="mediaStyle"
         :class="{ 'camera-stale': !isLive }"
         muted
         autoplay
@@ -133,6 +210,7 @@ onBeforeUnmount(() => {
       <img
         v-else-if="isMjpeg"
         :src="camera.frameUrl"
+        :style="mediaStyle"
         :class="{ 'camera-stale': !isLive }"
         :alt="t('{0} Livestream', [t(name)])"
       />
@@ -156,14 +234,27 @@ onBeforeUnmount(() => {
     >
       <header>
         <h2>{{ t(name) }}</h2>
-        <button class="icon-button" type="button" :aria-label="t('Kamerabild schließen')" @click="close">
-          <X :size="20" />
-        </button>
+        <div class="camera-controls">
+          <button
+            class="icon-button"
+            type="button"
+            :disabled="!hasMedia || capturing"
+            :title="t('Schnappschuss speichern')"
+            :aria-label="t('Schnappschuss von {0} speichern', [t(name)])"
+            @click="captureSnapshot"
+          >
+            <Download :size="16" />
+          </button>
+          <button class="icon-button" type="button" :aria-label="t('Kamerabild schließen')" @click="close">
+            <X :size="20" />
+          </button>
+        </div>
       </header>
       <div class="camera-expanded-image">
         <video
           v-if="expanded && isWebRtc"
           ref="modalVideo"
+          :style="mediaStyle"
           :class="{ 'camera-stale': !isLive }"
           muted
           autoplay
@@ -173,6 +264,7 @@ onBeforeUnmount(() => {
         <img
           v-else-if="expanded && isMjpeg"
           :src="camera.frameUrl"
+          :style="mediaStyle"
           :class="{ 'camera-stale': !isLive }"
           :alt="t('{0} Livestream', [t(name)])"
         />

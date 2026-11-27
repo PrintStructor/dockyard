@@ -143,3 +143,57 @@ export function normalizePresets({ mainsail = null, legacy = null, toolCount = 6
 
   return [...result, ...extras].slice(0, 12)
 }
+
+export function applyMainsailPresetMutation(currentDb, payload) {
+  const action = payload?.action
+  if (!['upsert', 'delete'].includes(action)) {
+    throw new Error('Ungültige Preset-Aktion (erlaubt: upsert oder delete).')
+  }
+  const existingMap =
+    currentDb?.presets && typeof currentDb.presets === 'object'
+      ? { ...currentDb.presets }
+      : currentDb && typeof currentDb === 'object' && !Array.isArray(currentDb)
+        ? { ...currentDb }
+        : {}
+
+  const name = String(payload?.name ?? '').trim()
+  if (!name || name.length > 32 || /[\r\n\x00-\x1f\x7f]/.test(name)) {
+    throw new Error('Preset-Name muss zwischen 1 und 32 Zeichen lang sein.')
+  }
+  const upper = name.toUpperCase()
+  const existingKey = Object.keys(existingMap).find(
+    k => typeof existingMap[k]?.name === 'string' && existingMap[k].name.trim().toUpperCase() === upper,
+  )
+
+  if (action === 'delete') {
+    if (!existingKey) throw new Error('Preset wurde nicht gefunden.')
+    delete existingMap[existingKey]
+    return currentDb?.presets ? { ...currentDb, presets: existingMap } : { presets: existingMap }
+  }
+
+  const extruder = payload?.extruder != null && payload.extruder !== '' ? Number(payload.extruder) : null
+  const bed = payload?.bed != null && payload.bed !== '' ? Number(payload.bed) : null
+  if (extruder == null && bed == null) {
+    throw new Error('Mindestens Extruder- oder Betttemperatur angeben.')
+  }
+  if (extruder != null && (!Number.isInteger(extruder) || extruder < 0 || extruder > 360)) {
+    throw new Error('Extruder-Preset muss zwischen 0 und 360 °C liegen.')
+  }
+  if (bed != null && (!Number.isInteger(bed) || bed < 0 || bed > 160)) {
+    throw new Error('Bett-Preset muss zwischen 0 und 160 °C liegen.')
+  }
+
+  const id = existingKey ?? `dockyard_${name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || Date.now()}`
+  const prevValues = existingMap[id]?.values && typeof existingMap[id].values === 'object' ? existingMap[id].values : {}
+  existingMap[id] = {
+    ...(existingMap[id] ?? {}),
+    name,
+    gcode: typeof existingMap[id]?.gcode === 'string' ? existingMap[id].gcode : '',
+    values: {
+      ...prevValues,
+      extruder: { bool: extruder != null, type: 'heater', value: extruder ?? 0 },
+      heater_bed: { bool: bed != null, type: 'heater', value: bed ?? 0 },
+    },
+  }
+  return currentDb?.presets ? { ...currentDb, presets: existingMap } : { presets: existingMap }
+}

@@ -31,6 +31,11 @@ export const calibrationActions = [
   'shaketune_belts',
   'shaketune_vibrations',
   'probe_accuracy',
+  'probe_calibrate_start',
+  'z_endstop_calibrate_start',
+  'manual_probe_testz',
+  'manual_probe_accept',
+  'manual_probe_abort',
 ]
 
 export const calibrationActionKeys = {
@@ -43,6 +48,7 @@ export const calibrationActionKeys = {
   mesh_profile_remove: ['action', 'profile'],
   calibrate_pid: ['action', 'heater', 'target'],
   calibrate_shaper: ['action', 'axis'],
+  manual_probe_testz: ['action', 'delta'],
 }
 
 export function calibrationCapabilities(config = {}) {
@@ -75,6 +81,8 @@ export function calibrationCapabilities(config = {}) {
     shaketuneBelts: has('COMPARE_BELTS_RESPONSES'),
     shaketuneVibrations: has('CREATE_VIBRATIONS_PROFILE'),
     probeAccuracy: hasProbe,
+    probeCalibrate: hasProbe,
+    zEndstopCalibrate: keys.has('stepper_z'),
     pidExtruder: keys.has('extruder'),
     pidBed: keys.has('heater_bed'),
   }
@@ -137,6 +145,38 @@ export function calibrationCommand(input, raw, caps) {
       endpoint: '/printer/gcode/script',
       body: { script: map[action].script },
       label: map[action].label,
+      async: true,
+      timeoutMs: 60_000,
+    }
+  }
+
+  if (['manual_probe_testz', 'manual_probe_accept', 'manual_probe_abort'].includes(action)) {
+    if (raw?.manual_probe?.is_active !== true) {
+      throw new ControlError('Aktuell läuft keine manuelle Z-Offset-Kalibrierung (PROBE_CALIBRATE / Z_ENDSTOP_CALIBRATE).', 409)
+    }
+    if (action === 'manual_probe_testz') {
+      const allowedDeltas = [-5, -1, -0.5, -0.1, -0.05, -0.025, -0.01, -0.005, 0.005, 0.01, 0.025, 0.05, 0.1, 0.5, 1, 5]
+      const rawDelta = input.delta
+      let zArg = null
+      if (rawDelta === '+' || rawDelta === '-') {
+        zArg = rawDelta
+      } else if (typeof rawDelta === 'number' && Number.isFinite(rawDelta)) {
+        const matched = allowedDeltas.find(v => Math.abs(v - rawDelta) < 1e-6)
+        if (matched != null) zArg = `${matched > 0 ? '+' : ''}${matched}`
+      }
+      if (!zArg) throw new ControlError('Ungültiger TESTZ-Schritt.', 400)
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script: `TESTZ Z=${zArg}` },
+        label: `TESTZ Z=${zArg}`,
+        async: true,
+        timeoutMs: 60_000,
+      }
+    }
+    return {
+      endpoint: '/printer/gcode/script',
+      body: { script: action === 'manual_probe_accept' ? 'ACCEPT' : 'ABORT' },
+      label: action === 'manual_probe_accept' ? 'Z-Offset übernehmen (ACCEPT)' : 'Z-Kalibrierung abbrechen',
       async: true,
       timeoutMs: 60_000,
     }
@@ -437,6 +477,28 @@ export function calibrationCommand(input, raw, caps) {
         timeoutMs: 300_000,
       }
 
+    case 'probe_calibrate_start':
+      requireCap('probeCalibrate', 'PROBE_CALIBRATE')
+      assertHomedXyz(raw)
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script: 'PROBE_CALIBRATE' },
+        label: 'Probe-Z-Offset kalibrieren',
+        async: true,
+        timeoutMs: 120_000,
+      }
+
+    case 'z_endstop_calibrate_start':
+      requireCap('zEndstopCalibrate', 'Z_ENDSTOP_CALIBRATE')
+      assertHomedXyz(raw)
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script: 'Z_ENDSTOP_CALIBRATE' },
+        label: 'Z-Endstop kalibrieren',
+        async: true,
+        timeoutMs: 120_000,
+      }
+
     default:
       throw new ControlError('Unbekannte Kalibrierungsaktion.', 400)
   }
@@ -662,6 +724,12 @@ export function normalizeCalibrationData({ rawStatus = {}, configFiles = [] } = 
         rawStatus?.screws_tilt_adjust?.results && typeof rawStatus.screws_tilt_adjust.results === 'object'
           ? rawStatus.screws_tilt_adjust.results
           : null,
+    },
+    manualProbe: {
+      isActive: rawStatus?.manual_probe?.is_active === true,
+      zPosition: finite(rawStatus?.manual_probe?.z_position),
+      zPositionLower: finite(rawStatus?.manual_probe?.z_position_lower),
+      zPositionUpper: finite(rawStatus?.manual_probe?.z_position_upper),
     },
     qgl: {
       configured: !!settings.quad_gantry_level,

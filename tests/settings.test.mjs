@@ -72,11 +72,18 @@ test('normalizeCamera validates camera-streamer and mjpeg (ustreamer) cameras', 
     url: '/webcam/?action=stream',
     snapshotUrl: '/webcam/?action=snapshot',
     preferredMode: 'webrtc',
+    flipX: true,
+    flipY: false,
+    rotate: 90,
   })
   assert.equal(mjpeg.service, 'mjpeg')
   assert.equal(mjpeg.url, '/webcam/?action=stream')
   assert.equal(mjpeg.snapshotUrl, '/webcam/?action=snapshot')
   assert.equal(mjpeg.preferredMode, 'mjpeg')
+  assert.equal(mjpeg.flipX, true)
+  assert.equal(mjpeg.flipY, false)
+  assert.equal(mjpeg.rotate, 90)
+  assert.equal(normalizeCamera({ id: 'rot', name: 'R', url: '/webcam', rotate: 45 }).rotate, 0)
 
   for (const badUrl of ['../etc/passwd', '/webcam/../secret', 'http://169.254.169.254/latest', 'javascript:alert(1)']) {
     assert.throws(() => normalizeCamera({ id: 'x', name: 'X', service: 'mjpeg', url: badUrl }))

@@ -67,6 +67,7 @@ export function commandFor(input, raw) {
     'temperature_all',
     'temperature_fan',
     'output_pin',
+    'set_led',
     'macro',
     'save_config',
     'preheat',
@@ -98,6 +99,7 @@ export function commandFor(input, raw) {
         temperature_all: ['action', 'target'],
         temperature_fan: ['action', 'fan', 'target'],
         output_pin: ['action', 'pin', 'value'],
+        set_led: ['action', 'led', 'red', 'green', 'blue', 'white'],
         macro: ['action', 'name', 'params'],
         save_config: ['action'],
         preheat: ['action', 'extruder', 'bed'],
@@ -209,6 +211,42 @@ export function commandFor(input, raw) {
       endpoint: '/printer/gcode/script',
       body: { script: `SET_PIN PIN=${input.pin} VALUE=${formatted}` },
       label: `${input.pin} auf ${formatted}`,
+    }
+  }
+
+  if (action === 'set_led') {
+    if (typeof input.led !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(input.led)) {
+      fail('Ungültiger LED-Name.')
+    }
+    const cfg = raw.configfile?.settings ?? raw.configfile?.config ?? {}
+    const neoKey = `neopixel ${input.led}`
+    const ledKey = `led ${input.led}`
+    const exists = Boolean(
+      raw[neoKey] || raw[ledKey] || cfg[neoKey.toLowerCase()] || cfg[ledKey.toLowerCase()],
+    )
+    if (!exists) fail('LED / Neopixel ist auf diesem Drucker nicht konfiguriert.', 409)
+    const chan = (val, name) => {
+      if (val === undefined) return null
+      if (!finite(val) || val < 0 || val > 1) fail(`${name}-Wert muss zwischen 0 und 1 liegen.`)
+      return Number(val.toFixed(3))
+    }
+    const r = chan(input.red, 'Rot')
+    const g = chan(input.green, 'Grün')
+    const b = chan(input.blue, 'Blau')
+    const w = chan(input.white, 'Weiß')
+    if (r == null && g == null && b == null && w == null) {
+      fail('Mindestens einen Farbkanal angeben.')
+    }
+    const parts = [`LED=${input.led}`]
+    if (r != null) parts.push(`RED=${r}`)
+    if (g != null) parts.push(`GREEN=${g}`)
+    if (b != null) parts.push(`BLUE=${b}`)
+    if (w != null) parts.push(`WHITE=${w}`)
+    parts.push('SYNC=0', 'TRANSMIT=1')
+    return {
+      endpoint: '/printer/gcode/script',
+      body: { script: `SET_LED ${parts.join(' ')}` },
+      label: `LED ${input.led} aktualisiert`,
     }
   }
 

@@ -52,6 +52,7 @@ function slugifyProfileId(raw, fallback = 'printer') {
 function cloneCamera(cam, idx) {
   const id = slugifyProfileId(cam?.id || cam?.name, `cam_${idx + 1}`)
   const service = cam?.service === 'mjpeg' ? 'mjpeg' : 'camera-streamer'
+  const rawRot = Number(cam?.rotate)
   const out = {
     id,
     name: String(cam?.name ?? '').trim().slice(0, 40) || id,
@@ -60,6 +61,9 @@ function cloneCamera(cam, idx) {
     url: String(cam?.url ?? '').trim(),
     preferredMode: service === 'mjpeg' ? 'mjpeg' : cam?.preferredMode === 'mjpeg' ? 'mjpeg' : 'webrtc',
     enabled: cam?.enabled !== false,
+    flipX: cam?.flipX === true,
+    flipY: cam?.flipY === true,
+    rotate: [0, 90, 180, 270].includes(rawRot) ? rawRot : 0,
   }
   if (service === 'mjpeg' && typeof cam?.snapshotUrl === 'string' && cam.snapshotUrl.trim()) {
     out.snapshotUrl = cam.snapshotUrl.trim()
@@ -107,6 +111,9 @@ export function createNewPrinterDraft(id, name) {
         snapshotUrl: '',
         preferredMode: 'webrtc',
         enabled: true,
+        flipX: false,
+        flipY: false,
+        rotate: 0,
       },
     ],
   }

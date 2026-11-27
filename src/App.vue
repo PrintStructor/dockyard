@@ -1185,6 +1185,27 @@ async function acknowledgeUncertain() {
         </div>
       </div>
 
+      <details
+        v-if="online && status?.configWarnings?.length"
+        class="config-warnings-banner"
+        role="status"
+      >
+        <summary>
+          <AlertTriangle :size="15" />
+          <strong>
+            {{
+              status.configWarnings.length === 1
+                ? t('1 Klipper-Konfigurationswarnung')
+                : t('{0} Klipper-Konfigurationswarnungen', [status.configWarnings.length])
+            }}
+          </strong>
+          <ChevronRight :size="14" class="config-warnings-chevron" />
+        </summary>
+        <ul>
+          <li v-for="(warn, idx) in status.configWarnings" :key="idx">{{ warn }}</li>
+        </ul>
+      </details>
+
       <div v-if="status?.detectionMismatch && !status?.homingCanInitialize" class="notice" role="alert">
         <AlertTriangle :size="18" />
         <span>
@@ -1675,6 +1696,9 @@ async function acknowledgeUncertain() {
             :description="cam.description"
             :service="cam.service"
             :preferred-mode="cam.preferredMode"
+            :flip-x="cam.flipX"
+            :flip-y="cam.flipY"
+            :rotate="cam.rotate"
           />
         </div>
         <div v-else class="settings-empty">

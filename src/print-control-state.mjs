@@ -35,6 +35,15 @@ export function printControlReason(status, action, online = true, pending = fals
     return ''
   }
 
+  if (['tune_pressure_advance', 'tune_velocity_limits'].includes(action)) {
+    return ''
+  }
+
+  if (action === 'tune_retraction') {
+    if (!status.capabilities?.firmwareRetraction) return 'Firmware Retraction ist nicht konfiguriert.'
+    return ''
+  }
+
   if (action === 'save_z_offset') {
     if (!status.capabilities?.zOffsetSaveTarget) return 'Z-Offset-Übernahme ist nicht konfiguriert.'
     if (status.zOffset == null || Math.abs(status.zOffset) <= 1e-5) return 'Kein aktiver Z-Offset zum Übernehmen vorhanden.'

@@ -1511,3 +1511,98 @@ input[type=range],input[type=checkbox]{accent-color:var(--accent)}
 .app-shell.display-mode .temp-fan-edit-trigger{min-height:44px}
 .app-shell.display-mode .macro-pin-btn{flex-basis:40px}
 .app-shell.display-mode .temp-fan-edit-trigger{min-width:44px;width:44px}
+
+/* Paket C2: Advanced Live Tuning, Calibration Paper-Test & Endstops, G-Code Grid/Folder/Rename, Preset Editor, RGBW LEDs, Camera Flip/Rotate, Config Create/Warnings */
+.tuning-advanced-wrap{margin-top:10px;border-top:1px solid var(--line-subtle);padding-top:10px}
+.tuning-advanced-toggle{display:flex;align-items:center;justify-content:space-between;width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface-deep);color:var(--muted);font-size:12px;transition:border-color .15s,color .15s}
+.tuning-advanced-toggle:hover{color:var(--text);border-color:var(--line-strong)}
+.tuning-advanced-label{display:inline-flex;align-items:center;gap:7px;font-weight:500}
+.tuning-chevron{transition:transform .15s ease}
+.tuning-chevron.open{transform:rotate(180deg)}
+.tuning-advanced-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:10px}
+.tuning-adv-card{padding:11px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface-deep);display:flex;flex-direction:column;gap:8px}
+.tuning-adv-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;align-items:end}
+.tuning-adv-fields label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--muted)}
+.tuning-adv-fields input{min-height:32px;height:32px;padding:4px 7px;font-size:12px;font-variant-numeric:tabular-nums;width:100%}
+.tuning-adv-apply{grid-column:1/-1;justify-content:center;min-height:32px;font-size:12px}
+
+.manual-probe-panel{display:flex;flex-direction:column;gap:12px;padding:12px;border:1px solid var(--amber-line);border-radius:var(--radius-sm);background:var(--amber-tint)}
+.manual-probe-steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.manual-probe-steps button{justify-content:center;font-variant-numeric:tabular-nums;min-height:36px}
+.endstop-pill-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.endstop-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface-deep);font-size:12px}
+.endstop-item.triggered{border-color:var(--amber-line);background:var(--amber-tint)}
+.endstop-name{font-family:var(--font-mono);font-size:11.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.print-mkdir-btn.active{border-color:var(--accent-line);background:var(--accent-tint);color:var(--accent)}
+.print-inline-form{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface-deep)}
+.print-inline-form input{flex:1;min-width:0;min-height:34px;height:34px;padding:5px 9px;font-size:12.5px}
+.print-rename-inline{display:flex;align-items:center;gap:6px;flex:1;min-width:0;width:100%}
+.print-rename-inline input{flex:1;min-width:0;min-height:32px;height:32px;padding:4px 8px;font-size:12px}
+.print-browser-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;max-height:340px;overflow-y:auto;padding-right:2px}
+.print-grid-card{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface-deep);overflow:hidden;transition:border-color .15s,background-color .15s}
+.print-grid-card:hover{border-color:var(--line-strong)}
+.print-grid-card.selected{border-color:var(--accent);background:var(--accent-tint)}
+.print-grid-thumb{display:flex;align-items:center;justify-content:center;width:100%;aspect-ratio:16/10;background:var(--bg);border-bottom:1px solid var(--line-subtle);overflow:hidden;padding:6px}
+.print-grid-thumb img{width:100%;height:100%;object-fit:contain}
+.print-grid-placeholder{color:var(--muted);opacity:.5}
+.print-grid-body{padding:9px 10px;display:flex;flex-direction:column;gap:6px;flex:1}
+.print-grid-title{display:flex;flex-direction:column;gap:3px;text-align:left;min-width:0;width:100%}
+.print-grid-title strong{font-size:12px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.print-grid-actions{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:auto;padding-top:4px;border-top:1px solid var(--line-subtle)}
+.print-grid-actions .icon-button{width:28px;height:28px}
+
+.single-preheat-end-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.single-preset-edit-btn{border:1px solid var(--line);background:var(--surface-deep)}
+.single-preset-edit-btn.active{border-color:var(--accent-line);background:var(--accent-tint);color:var(--accent)}
+.single-preset-editor{display:flex;flex-direction:column;gap:10px;padding:12px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface-deep)}
+.single-preset-editor-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:var(--text)}
+.single-preset-editor-chips{display:flex;flex-wrap:wrap;gap:6px}
+.single-preset-pill-item{display:inline-flex;align-items:center;gap:2px}
+.single-preset-pill-item .subtle-button{padding:5px 8px;font-size:11.5px}
+.single-preset-pill-item .icon-button{width:26px;height:26px}
+.single-preset-form{display:grid;grid-template-columns:minmax(100px,1fr) auto auto auto;gap:8px;align-items:center}
+.single-preset-form>input{min-height:34px;height:34px;padding:5px 8px;font-size:12px;min-width:0}
+.single-preset-num{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--muted)}
+.single-preset-num input{width:64px;min-height:34px;height:34px;padding:4px 6px;font-size:12px;text-align:right;font-variant-numeric:tabular-nums}
+@media(max-width:640px){.single-preset-form{grid-template-columns:1fr 1fr}.single-preset-form>input,.single-preset-form>button{grid-column:1/-1}}
+
+.rgb-led-list{display:flex;flex-direction:column;gap:12px}
+.rgb-led-item{display:flex;flex-direction:column;gap:8px;padding-top:10px;border-top:1px solid var(--line-subtle)}
+.rgb-led-item:first-child{padding-top:0;border-top:0}
+.rgb-led-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.rgb-led-title{display:inline-flex;align-items:center;gap:7px;font-size:12.5px}
+.rgb-quick-btns{display:flex;gap:4px}
+.rgb-quick-btns button{padding:4px 8px;font-size:11px;min-height:28px}
+.rgb-led-controls{display:flex;align-items:center;gap:8px}
+.rgb-color-field input[type=color]{width:34px;height:34px;min-height:34px;padding:2px;border:1px solid var(--line);border-radius:6px;background:var(--surface-deep);cursor:pointer}
+.rgb-sliders{display:flex;flex-direction:column;gap:5px;flex:1;min-width:0}
+.rgb-slider-row{display:grid;grid-template-columns:56px 1fr 38px;align-items:center;gap:6px;font-size:11px;color:var(--muted)}
+.rgb-slider-row input[type=range]{min-height:22px;padding:0;accent-color:var(--accent);width:100%}
+.rgb-slider-row output{text-align:right;font-variant-numeric:tabular-nums;color:var(--text)}
+
+.settings-cam-flips{display:flex;flex-wrap:wrap;gap:12px;align-items:center;min-height:42px}
+.settings-cam-flip-check{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--text);cursor:pointer}
+
+.config-create-form{display:flex;gap:6px;margin-top:8px}
+.config-create-form input{flex:1;min-width:0;min-height:34px;height:34px;padding:5px 8px;font-size:12px;font-family:var(--font-mono)}
+
+.config-warnings-banner{margin-bottom:16px;border:1px solid var(--amber-line);border-radius:10px;background:var(--amber-tint);color:var(--amber);font-size:12px}
+.config-warnings-banner summary{display:flex;align-items:center;gap:9px;padding:10px 14px;cursor:pointer;list-style:none}
+.config-warnings-banner summary::-webkit-details-marker{display:none}
+.config-warnings-chevron{margin-left:auto;transition:transform .15s ease}
+.config-warnings-banner[open] .config-warnings-chevron{transform:rotate(90deg)}
+.config-warnings-banner ul{margin:0;padding:0 14px 12px 32px;display:flex;flex-direction:column;gap:5px;color:var(--text);line-height:1.5;font-family:var(--font-mono);font-size:11.5px}
+
+.app-shell.display-mode .tuning-advanced-toggle,
+.app-shell.display-mode .tuning-adv-fields input,
+.app-shell.display-mode .tuning-adv-apply,
+.app-shell.display-mode .manual-probe-steps button,
+.app-shell.display-mode .print-mkdir-btn,
+.app-shell.display-mode .print-inline-form input,
+.app-shell.display-mode .single-preset-edit-btn,
+.app-shell.display-mode .single-preset-form>input,
+.app-shell.display-mode .single-preset-num input,
+.app-shell.display-mode .rgb-quick-btns button,
+.app-shell.display-mode .config-create-form input{min-height:44px}
+.app-shell.display-mode .single-preset-edit-btn{width:44px}

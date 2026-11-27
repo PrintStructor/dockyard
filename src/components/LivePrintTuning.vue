@@ -12,6 +12,8 @@ import {
   Check,
   Ban,
   Save,
+  SlidersHorizontal,
+  ChevronDown,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import { auxActionReason } from '../aux-action-state.mjs'
@@ -30,6 +32,17 @@ const zStep = ref(0.01)
 
 const speedDraft = ref(null)
 const flowDraft = ref(null)
+const showAdvanced = ref(false)
+const paAdvanceDraft = ref(null)
+const paSmoothDraft = ref(null)
+const velDraft = ref(null)
+const accelDraft = ref(null)
+const cruiseDraft = ref(null)
+const scvDraft = ref(null)
+const retractLenDraft = ref(null)
+const retractSpdDraft = ref(null)
+const unretractExtraDraft = ref(null)
+const unretractSpdDraft = ref(null)
 
 const confirmCancel = ref(false)
 const confirmExclude = ref('')
@@ -60,6 +73,16 @@ watch(isPrintActive, active => {
     resetExcludeConfirm()
     speedDraft.value = null
     flowDraft.value = null
+    paAdvanceDraft.value = null
+    paSmoothDraft.value = null
+    velDraft.value = null
+    accelDraft.value = null
+    cruiseDraft.value = null
+    scvDraft.value = null
+    retractLenDraft.value = null
+    retractSpdDraft.value = null
+    unretractExtraDraft.value = null
+    unretractSpdDraft.value = null
   }
 })
 
@@ -70,7 +93,50 @@ const speedReason = computed(() => printControlReason(props.status, 'tune_speed'
 const flowReason = computed(() => printControlReason(props.status, 'tune_flow', props.online, props.pending))
 const zReason = computed(() => printControlReason(props.status, 'tune_z_offset', props.online, props.pending))
 const saveZReason = computed(() => printControlReason(props.status, 'save_z_offset', props.online, props.pending))
+const paReason = computed(() => printControlReason(props.status, 'tune_pressure_advance', props.online, props.pending))
+const velReason = computed(() => printControlReason(props.status, 'tune_velocity_limits', props.online, props.pending))
+const retractReason = computed(() => printControlReason(props.status, 'tune_retraction', props.online, props.pending))
 const excludeReason = computed(() => printControlReason(props.status, 'exclude_object', props.online, props.pending))
+
+const activeToolIdx = computed(() => {
+  const idx = props.status?.active
+  return Number.isInteger(idx) && idx >= 0 && idx < (props.status?.tools?.length ?? 1) ? idx : 0
+})
+const activeToolObj = computed(() => props.status?.tools?.[activeToolIdx.value] ?? null)
+const paAdvanceValue = computed(() =>
+  paAdvanceDraft.value !== null ? paAdvanceDraft.value : (activeToolObj.value?.pressureAdvance ?? 0),
+)
+const paSmoothValue = computed(() =>
+  paSmoothDraft.value !== null ? paSmoothDraft.value : (activeToolObj.value?.pressureAdvanceSmoothTime ?? 0.04),
+)
+
+const motionLimits = computed(() => props.status?.motionLimits ?? null)
+const velValue = computed(() => (velDraft.value !== null ? velDraft.value : (motionLimits.value?.maxVelocity ?? 300)))
+const accelValue = computed(() => (accelDraft.value !== null ? accelDraft.value : (motionLimits.value?.maxAccel ?? 3000)))
+const cruiseValue = computed(() =>
+  cruiseDraft.value !== null ? cruiseDraft.value : (motionLimits.value?.minCruiseRatio ?? 0.5),
+)
+const scvValue = computed(() =>
+  scvDraft.value !== null ? scvDraft.value : (motionLimits.value?.squareCornerVelocity ?? 5),
+)
+
+const hasRetraction = computed(() => Boolean(props.status?.capabilities?.firmwareRetraction && props.status?.firmwareRetraction))
+const retractLenValue = computed(() =>
+  retractLenDraft.value !== null ? retractLenDraft.value : (props.status?.firmwareRetraction?.retractLength ?? 0.5),
+)
+const retractSpdValue = computed(() =>
+  retractSpdDraft.value !== null ? retractSpdDraft.value : (props.status?.firmwareRetraction?.retractSpeed ?? 35),
+)
+const unretractExtraValue = computed(() =>
+  unretractExtraDraft.value !== null
+    ? unretractExtraDraft.value
+    : (props.status?.firmwareRetraction?.unretractExtraLength ?? 0),
+)
+const unretractSpdValue = computed(() =>
+  unretractSpdDraft.value !== null
+    ? unretractSpdDraft.value
+    : (props.status?.firmwareRetraction?.unretractSpeed ?? 35),
+)
 
 const actualSpeed = computed(() => props.status?.speedPercent ?? null)
 const speedValue = computed(() => (speedDraft.value != null ? speedDraft.value : actualSpeed.value))
@@ -145,6 +211,55 @@ async function applyFlow(percent) {
   const prior = flowDraft.value
   if ((await props.send({ action: 'tune_flow', percent })) && flowDraft.value === prior) {
     flowDraft.value = null
+  }
+}
+
+async function applyPressureAdvance() {
+  if (paReason.value) return
+  const advance = Number(paAdvanceValue.value)
+  const smoothTime = Number(paSmoothValue.value)
+  if (!Number.isFinite(advance) || !Number.isFinite(smoothTime)) return
+  const payload = { action: 'tune_pressure_advance', advance, smoothTime }
+  if ((props.status?.toolCount ?? 1) > 1) payload.tool = activeToolIdx.value
+  if (await props.send(payload)) {
+    paAdvanceDraft.value = null
+    paSmoothDraft.value = null
+  }
+}
+
+async function applyVelocityLimits() {
+  if (velReason.value) return
+  const payload = { action: 'tune_velocity_limits' }
+  const v = Number(velValue.value)
+  const a = Number(accelValue.value)
+  const c = Number(cruiseValue.value)
+  const s = Number(scvValue.value)
+  if (Number.isFinite(v)) payload.velocity = v
+  if (Number.isFinite(a)) payload.accel = a
+  if (Number.isFinite(c) && motionLimits.value?.minCruiseRatio != null) payload.minCruiseRatio = c
+  if (Number.isFinite(s)) payload.squareCornerVelocity = s
+  if (await props.send(payload)) {
+    velDraft.value = null
+    accelDraft.value = null
+    cruiseDraft.value = null
+    scvDraft.value = null
+  }
+}
+
+async function applyRetraction() {
+  if (retractReason.value || !hasRetraction.value) return
+  const payload = {
+    action: 'tune_retraction',
+    retractLength: Number(retractLenValue.value),
+    retractSpeed: Number(retractSpdValue.value),
+    unretractExtraLength: Number(unretractExtraValue.value),
+    unretractSpeed: Number(unretractSpdValue.value),
+  }
+  if (await props.send(payload)) {
+    retractLenDraft.value = null
+    retractSpdDraft.value = null
+    unretractExtraDraft.value = null
+    unretractSpdDraft.value = null
   }
 }
 
@@ -352,6 +467,177 @@ async function requestOrRunExclude(name) {
               :aria-label="t('Fluss übernehmen')"
             >
               <Check :size="13" />
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div class="tuning-advanced-wrap">
+      <button
+        type="button"
+        class="tuning-advanced-toggle"
+        :aria-expanded="showAdvanced"
+        @click="showAdvanced = !showAdvanced"
+      >
+        <span class="tuning-advanced-label">
+          <SlidersHorizontal :size="13" />
+          {{ t('Erweitert · PA & Kinematik') }}
+        </span>
+        <ChevronDown :size="14" class="tuning-chevron" :class="{ open: showAdvanced }" />
+      </button>
+
+      <div v-if="showAdvanced" class="tuning-advanced-grid">
+        <form class="tuning-adv-card" @submit.prevent="applyPressureAdvance">
+          <div class="tuning-block-head">
+            <span>{{ t('Pressure Advance') }}</span>
+            <small v-if="(status?.toolCount ?? 1) > 1" class="tuning-tool-tag">T{{ activeToolIdx }}</small>
+          </div>
+          <div class="tuning-adv-fields">
+            <label>
+              <span>PA</span>
+              <input
+                type="number"
+                min="0"
+                max="2"
+                step="0.005"
+                :value="paAdvanceValue"
+                :disabled="!!paReason"
+                @input="paAdvanceDraft = Number($event.target.value)"
+              />
+            </label>
+            <label>
+              <span>{{ t('Smooth Time') }} (s)</span>
+              <input
+                type="number"
+                min="0.005"
+                max="0.2"
+                step="0.005"
+                :value="paSmoothValue"
+                :disabled="!!paReason"
+                @input="paSmoothDraft = Number($event.target.value)"
+              />
+            </label>
+            <button type="submit" class="subtle-button tuning-adv-apply" :disabled="!!paReason">
+              <Check :size="13" />{{ t('Übernehmen') }}
+            </button>
+          </div>
+        </form>
+
+        <form v-if="motionLimits" class="tuning-adv-card" @submit.prevent="applyVelocityLimits">
+          <div class="tuning-block-head">
+            <span>{{ t('Bewegungslimits') }}</span>
+          </div>
+          <div class="tuning-adv-fields">
+            <label>
+              <span>{{ t('Max. Speed') }} (mm/s)</span>
+              <input
+                type="number"
+                min="1"
+                :max="motionLimits.configMaxVelocity ?? 1000"
+                step="10"
+                :value="velValue"
+                :disabled="!!velReason"
+                @input="velDraft = Number($event.target.value)"
+              />
+            </label>
+            <label>
+              <span>{{ t('Beschleunigung') }}</span>
+              <input
+                type="number"
+                min="50"
+                :max="motionLimits.configMaxAccel ?? 50000"
+                step="250"
+                :value="accelValue"
+                :disabled="!!velReason"
+                @input="accelDraft = Number($event.target.value)"
+              />
+            </label>
+            <label v-if="motionLimits.minCruiseRatio != null">
+              <span>Cruise Ratio</span>
+              <input
+                type="number"
+                min="0"
+                max="0.99"
+                step="0.05"
+                :value="cruiseValue"
+                :disabled="!!velReason"
+                @input="cruiseDraft = Number($event.target.value)"
+              />
+            </label>
+            <label>
+              <span>SCV (mm/s)</span>
+              <input
+                type="number"
+                min="0.5"
+                max="50"
+                step="0.5"
+                :value="scvValue"
+                :disabled="!!velReason"
+                @input="scvDraft = Number($event.target.value)"
+              />
+            </label>
+            <button type="submit" class="subtle-button tuning-adv-apply" :disabled="!!velReason">
+              <Check :size="13" />{{ t('Übernehmen') }}
+            </button>
+          </div>
+        </form>
+
+        <form v-if="hasRetraction" class="tuning-adv-card" @submit.prevent="applyRetraction">
+          <div class="tuning-block-head">
+            <span>{{ t('Firmware Retraction') }}</span>
+          </div>
+          <div class="tuning-adv-fields">
+            <label>
+              <span>{{ t('Einzug') }} (mm)</span>
+              <input
+                type="number"
+                min="0"
+                max="15"
+                step="0.05"
+                :value="retractLenValue"
+                :disabled="!!retractReason"
+                @input="retractLenDraft = Number($event.target.value)"
+              />
+            </label>
+            <label>
+              <span>{{ t('Einzugsgeschw.') }}</span>
+              <input
+                type="number"
+                min="1"
+                max="200"
+                step="1"
+                :value="retractSpdValue"
+                :disabled="!!retractReason"
+                @input="retractSpdDraft = Number($event.target.value)"
+              />
+            </label>
+            <label>
+              <span>{{ t('Extra-Länge') }} (mm)</span>
+              <input
+                type="number"
+                min="0"
+                max="5"
+                step="0.05"
+                :value="unretractExtraValue"
+                :disabled="!!retractReason"
+                @input="unretractExtraDraft = Number($event.target.value)"
+              />
+            </label>
+            <label>
+              <span>{{ t('Vorschubgeschw.') }}</span>
+              <input
+                type="number"
+                min="1"
+                max="200"
+                step="1"
+                :value="unretractSpdValue"
+                :disabled="!!retractReason"
+                @input="unretractSpdDraft = Number($event.target.value)"
+              />
+            </label>
+            <button type="submit" class="subtle-button tuning-adv-apply" :disabled="!!retractReason">
+              <Check :size="13" />{{ t('Übernehmen') }}
             </button>
           </div>
         </form>

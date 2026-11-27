@@ -252,6 +252,67 @@ async function saveFile({ restart = 'none', force = false } = {}) {
   }
 }
 
+async function createFile(relPath, initialContent = '') {
+  const clean = String(relPath ?? '').trim()
+  if (!clean) return { ok: false, error: 'Bitte einen Dateinamen angeben.' }
+  saving.value = true
+  fileError.value = ''
+  saveFeedback.value = null
+  try {
+    const response = await fetch('/api/system/config/create', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Cockpit-Request': '1',
+      },
+      body: JSON.stringify({
+        path: clean,
+        content: initialContent || `# ${clean}\n`,
+      }),
+      signal: AbortSignal.timeout(12_000),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.error || 'Datei konnte nicht erstellt werden.')
+    await loadFileList()
+    const createdPath = data.created || clean
+    await openFile(createdPath)
+    saveFeedback.value = { ok: true, message: `${createdPath} erstellt.` }
+    return { ok: true, path: createdPath }
+  } catch (cause) {
+    const message = cause.message || 'Datei konnte nicht erstellt werden.'
+    saveFeedback.value = { ok: false, message }
+    return { ok: false, error: message }
+  } finally {
+    saving.value = false
+  }
+}
+
+async function deleteFile(relPath = currentPath.value) {
+  if (!relPath || saving.value) return { ok: false }
+  saving.value = true
+  fileError.value = ''
+  saveFeedback.value = null
+  try {
+    const response = await fetch(`/api/system/config/file?path=${encodeURIComponent(relPath)}`, {
+      method: 'DELETE',
+      headers: { 'X-Cockpit-Request': '1' },
+      signal: AbortSignal.timeout(12_000),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.error || 'Konfigurationsdatei konnte nicht gelöscht werden.')
+    if (currentPath.value === relPath) resetBuffer()
+    await loadFileList()
+    saveFeedback.value = { ok: true, message: `${relPath} gelöscht.` }
+    return { ok: true }
+  } catch (cause) {
+    const message = cause.message || 'Konfigurationsdatei konnte nicht gelöscht werden.'
+    saveFeedback.value = { ok: false, message }
+    return { ok: false, error: message }
+  } finally {
+    saving.value = false
+  }
+}
+
 export function useConfigEditor() {
   ensureUnloadGuard()
   return {
@@ -282,6 +343,8 @@ export function useConfigEditor() {
     setContent,
     discardChanges,
     saveFile,
+    createFile,
+    deleteFile,
     clearConflict,
     handlePrinterSwitch,
     acknowledgePrinterMismatchAndReload,

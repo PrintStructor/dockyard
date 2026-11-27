@@ -20,6 +20,9 @@ import {
   Disc,
   Power,
   SlidersHorizontal,
+  Sun,
+  Trash2,
+  X,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import { heatState } from '../../server/status.mjs'
@@ -61,6 +64,12 @@ const EXTRUDE_LENGTHS = [5, 10, 25, 50, 100]
 const EXTRUDE_SPEEDS = [2, 5, 10]
 
 const presets = ref(DEFAULT_FALLBACK_PRESETS)
+const presetEditorOpen = ref(false)
+const presetNameDraft = ref('')
+const presetExtruderDraft = ref(210)
+const presetBedDraft = ref(60)
+const presetSaving = ref(false)
+const presetError = ref('')
 const extrudeLength = ref(10)
 const extrudeSpeed = ref(5)
 const axisDrafts = ref({})
@@ -236,6 +245,59 @@ function cooldownAll() {
   emit('command', { action: 'heaters_off' })
 }
 
+function editPresetItem(preset) {
+  presetNameDraft.value = preset.name
+  presetExtruderDraft.value = presetExtruderTemp(preset) ?? 0
+  presetBedDraft.value = Number.isFinite(preset?.bed) ? Math.round(preset.bed) : 0
+  presetError.value = ''
+}
+
+async function savePreset() {
+  const name = presetNameDraft.value.trim()
+  if (!name || presetSaving.value || !props.canWrite) return
+  presetSaving.value = true
+  presetError.value = ''
+  try {
+    const extVal = presetExtruderDraft.value !== '' && presetExtruderDraft.value != null ? Math.round(Number(presetExtruderDraft.value)) : null
+    const bedVal = presetBedDraft.value !== '' && presetBedDraft.value != null ? Math.round(Number(presetBedDraft.value)) : null
+    const res = await fetch('/api/presets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Cockpit-Request': '1' },
+      body: JSON.stringify({ action: 'upsert', name, extruder: extVal, bed: bedVal }),
+      signal: AbortSignal.timeout(8000),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Preset konnte nicht gespeichert werden.')
+    if (Array.isArray(data.presets) && data.presets.length) presets.value = data.presets
+    presetNameDraft.value = ''
+  } catch (err) {
+    presetError.value = err.message || 'Preset konnte nicht gespeichert werden.'
+  } finally {
+    presetSaving.value = false
+  }
+}
+
+async function deletePreset(name) {
+  if (!name || presetSaving.value || !props.canWrite) return
+  presetSaving.value = true
+  presetError.value = ''
+  try {
+    const res = await fetch('/api/presets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Cockpit-Request': '1' },
+      body: JSON.stringify({ action: 'delete', name }),
+      signal: AbortSignal.timeout(8000),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Preset konnte nicht gelöscht werden.')
+    if (Array.isArray(data.presets) && data.presets.length) presets.value = data.presets
+  } catch (err) {
+    presetError.value = err.message || 'Preset konnte nicht gelöscht werden.'
+  } finally {
+    presetSaving.value = false
+  }
+}
+
 const levelingKind = computed(() => {
   if (props.status?.capabilities?.qgl) return 'qgl'
   if (props.status?.capabilities?.zTilt) return 'z_tilt'
@@ -398,7 +460,92 @@ const activityLabel = computed(() => {
 const sensors = computed(() => props.status?.sensors ?? [])
 const genericHeaters = computed(() => props.status?.genericHeaters ?? [])
 const outputPins = computed(() => props.status?.outputPins ?? [])
+const neopixels = computed(() => props.status?.neopixels ?? [])
 const publicMacros = computed(() => props.status?.publicMacros ?? [])
+
+const ledDrafts = ref({})
+
+function rgbFloatToHex(r, g, b) {
+  const toHex = v =>
+    Math.max(0, Math.min(255, Math.round(v * 255)))
+      .toString(16)
+      .padStart(2, '0')
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`
+}
+
+function hexToRgbFloat(hex) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim())
+  if (!m) return [1, 1, 1]
+  const n = parseInt(m[1], 16)
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]
+}
+
+function ledStateFor(neo) {
+  const draft = ledDrafts.value[neo.name]
+  if (draft) return draft
+  const c = Array.isArray(neo.color) ? neo.color : [0, 0, 0, 0]
+  const maxRgb = Math.max(c[0] ?? 0, c[1] ?? 0, c[2] ?? 0)
+  const brightness = Math.round(maxRgb * 100)
+  const hex = maxRgb > 0.001 ? rgbFloatToHex(c[0] / maxRgb, c[1] / maxRgb, c[2] / maxRgb) : '#ffffff'
+  const white = Math.round((c[3] ?? 0) * 100)
+  return { hex, brightness, white }
+}
+
+function updateLedDraft(neo, patch) {
+  ledDrafts.value = {
+    ...ledDrafts.value,
+    [neo.name]: { ...ledStateFor(neo), ...patch },
+  }
+}
+
+function applyLed(neo, override = null) {
+  if (!enabled.value) return
+  const st = override ?? ledStateFor(neo)
+  const [r, g, b] = hexToRgbFloat(st.hex)
+  const scale = Math.max(0, Math.min(1, Number(st.brightness ?? 100) / 100))
+  const payload = {
+    action: 'set_led',
+    led: neo.name,
+    red: Number((r * scale).toFixed(3)),
+    green: Number((g * scale).toFixed(3)),
+    blue: Number((b * scale).toFixed(3)),
+  }
+  if (neo.hasWhite) {
+    payload.white = Number(Math.max(0, Math.min(1, Number(st.white ?? 0) / 100)).toFixed(3))
+  }
+  emit('command', payload)
+  const next = { ...ledDrafts.value }
+  delete next[neo.name]
+  ledDrafts.value = next
+}
+
+function quickLed(neo, kind) {
+  if (!enabled.value) return
+  if (kind === 'off') {
+    emit('command', { action: 'set_led', led: neo.name, red: 0, green: 0, blue: 0, ...(neo.hasWhite ? { white: 0 } : {}) })
+  } else if (kind === 'white') {
+    emit('command', {
+      action: 'set_led',
+      led: neo.name,
+      red: neo.hasWhite ? 0 : 1,
+      green: neo.hasWhite ? 0 : 1,
+      blue: neo.hasWhite ? 0 : 1,
+      ...(neo.hasWhite ? { white: 1 } : {}),
+    })
+  } else if (kind === 'warm') {
+    emit('command', {
+      action: 'set_led',
+      led: neo.name,
+      red: 1,
+      green: 0.72,
+      blue: 0.35,
+      ...(neo.hasWhite ? { white: 0.4 } : {}),
+    })
+  }
+  const next = { ...ledDrafts.value }
+  delete next[neo.name]
+  ledDrafts.value = next
+}
 
 const tempFanEditing = ref('')
 const tempFanDraft = ref(0)
@@ -581,21 +728,109 @@ onBeforeUnmount(() => {
               <small>{{ t('Düse') }}</small>
             </button>
           </div>
-          <button
-            type="button"
-            class="subtle-button single-cooldown-btn"
-            :disabled="!canCooldown"
-            :aria-label="t('Alle Heizungen ausschalten')"
-            :title="
-              isPrinting
-                ? t('Cooldown ist während eines laufenden Drucks gesperrt. Bei einer Druckpause ist Cooldown verfügbar.')
-                : t('Alle Heizungen ausschalten')
-            "
-            @click="cooldownAll"
-          >
-            <Snowflake :size="14" />{{ t('Abkühlen') }}
-          </button>
+          <div class="single-preheat-end-actions">
+            <button
+              v-if="canWrite"
+              type="button"
+              class="icon-button single-preset-edit-btn"
+              :class="{ active: presetEditorOpen }"
+              :aria-expanded="presetEditorOpen"
+              :title="t('Vorheiz-Presets bearbeiten')"
+              :aria-label="t('Vorheiz-Presets bearbeiten')"
+              @click="presetEditorOpen = !presetEditorOpen"
+            >
+              <SlidersHorizontal :size="14" />
+            </button>
+            <button
+              type="button"
+              class="subtle-button single-cooldown-btn"
+              :disabled="!canCooldown"
+              :aria-label="t('Alle Heizungen ausschalten')"
+              :title="
+                isPrinting
+                  ? t('Cooldown ist während eines laufenden Drucks gesperrt. Bei einer Druckpause ist Cooldown verfügbar.')
+                  : t('Alle Heizungen ausschalten')
+              "
+              @click="cooldownAll"
+            >
+              <Snowflake :size="14" />{{ t('Abkühlen') }}
+            </button>
+          </div>
         </div>
+
+        <section
+          v-if="presetEditorOpen && canWrite"
+          class="single-preset-editor"
+          :aria-label="t('Vorheiz-Presets bearbeiten')"
+        >
+          <div class="single-preset-editor-head">
+            <strong>{{ t('Vorheiz-Presets (Moonraker DB)') }}</strong>
+            <button
+              type="button"
+              class="icon-button"
+              :aria-label="t('Schließen')"
+              @click="presetEditorOpen = false"
+            >
+              <X :size="14" />
+            </button>
+          </div>
+
+          <div class="single-preset-editor-chips">
+            <div v-for="preset in presets" :key="preset.name" class="single-preset-pill-item">
+              <button type="button" class="subtle-button" @click="editPresetItem(preset)">
+                {{ preset.name }} · {{ presetExtruderTemp(preset) ?? '—' }}/{{ preset.bed ?? '—' }}°
+              </button>
+              <button
+                v-if="!['ABS', 'PLA', 'PETG'].includes(preset.name.toUpperCase())"
+                type="button"
+                class="icon-button"
+                :disabled="presetSaving"
+                :title="t('Preset löschen')"
+                :aria-label="t('{0} löschen', [preset.name])"
+                @click="deletePreset(preset.name)"
+              >
+                <Trash2 :size="12" />
+              </button>
+            </div>
+          </div>
+
+          <form class="single-preset-form" @submit.prevent="savePreset">
+            <input
+              v-model="presetNameDraft"
+              type="text"
+              maxlength="32"
+              :placeholder="t('Name (z. B. ASA, TPU)')"
+              :aria-label="t('Preset-Name')"
+              :disabled="presetSaving"
+            />
+            <label class="single-preset-num">
+              <span>{{ t('Düse') }}</span>
+              <input
+                v-model.number="presetExtruderDraft"
+                type="number"
+                min="0"
+                :max="extruderMax ?? 360"
+                step="5"
+                :disabled="presetSaving"
+              />
+            </label>
+            <label class="single-preset-num">
+              <span>{{ t('Bett') }}</span>
+              <input
+                v-model.number="presetBedDraft"
+                type="number"
+                min="0"
+                :max="bedMax ?? 160"
+                step="5"
+                :disabled="presetSaving"
+              />
+            </label>
+            <button type="submit" class="subtle-button" :disabled="presetSaving || !presetNameDraft.trim()">
+              <Check :size="13" />{{ t('Speichern') }}
+            </button>
+          </form>
+          <p v-if="presetError" class="system-inline-error" style="margin: 0">{{ t(presetError) }}</p>
+        </section>
 
         <div class="single-thermal-stack" :class="{ horizontal: !has3dScene }">
           <!-- Extruder Card -->
@@ -1193,6 +1428,79 @@ onBeforeUnmount(() => {
                   <Power :size="13" />{{ online && (pin.value ?? 0) > 0 ? t('An') : t('Aus') }}
                 </button>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <section v-if="neopixels.length" class="control-panel single-rgb-card" :aria-label="t('Beleuchtung & LEDs')">
+          <div class="fan-heading">
+            <h2><Sun :size="17" />{{ t('Beleuchtung & LEDs') }}</h2>
+          </div>
+          <div class="rgb-led-list">
+            <div v-for="neo in neopixels" :key="neo.id" class="rgb-led-item">
+              <div class="rgb-led-head">
+                <span class="rgb-led-title">
+                  <span
+                    class="led-swatch"
+                    :style="{ background: ledColor(neo.color) }"
+                    aria-hidden="true"
+                  />
+                  <strong>{{ t(neo.label) }}</strong>
+                </span>
+                <div class="rgb-quick-btns">
+                  <button type="button" class="subtle-button" :disabled="!enabled" @click="quickLed(neo, 'white')">
+                    {{ t('Weiß') }}
+                  </button>
+                  <button type="button" class="subtle-button" :disabled="!enabled" @click="quickLed(neo, 'warm')">
+                    {{ t('Warm') }}
+                  </button>
+                  <button type="button" class="subtle-button" :disabled="!enabled" @click="quickLed(neo, 'off')">
+                    {{ t('Aus') }}
+                  </button>
+                </div>
+              </div>
+              <form class="rgb-led-controls" @submit.prevent="applyLed(neo)">
+                <label class="rgb-color-field" :title="t('Farbe wählen')">
+                  <input
+                    type="color"
+                    :value="ledStateFor(neo).hex"
+                    :disabled="!enabled"
+                    :aria-label="t('LED-Farbe für {0}', [t(neo.label)])"
+                    @input="updateLedDraft(neo, { hex: $event.target.value, brightness: ledStateFor(neo).brightness || 100 })"
+                  />
+                </label>
+                <div class="rgb-sliders">
+                  <label class="rgb-slider-row">
+                    <span>{{ t('Helligkeit') }}</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="5"
+                      :value="ledStateFor(neo).brightness"
+                      :disabled="!enabled"
+                      @input="updateLedDraft(neo, { brightness: Number($event.target.value) })"
+                    />
+                    <output>{{ ledStateFor(neo).brightness }} %</output>
+                  </label>
+                  <label v-if="neo.hasWhite" class="rgb-slider-row">
+                    <span>W</span>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="5"
+                      :value="ledStateFor(neo).white"
+                      :disabled="!enabled"
+                      @input="updateLedDraft(neo, { white: Number($event.target.value) })"
+                    />
+                    <output>{{ ledStateFor(neo).white }} %</output>
+                  </label>
+                </div>
+                <button type="submit" class="apply-temperature" :disabled="!enabled" :title="t('Farbe anwenden')" :aria-label="t('Farbe anwenden')">
+                  <Check :size="13" />
+                </button>
+              </form>
             </div>
           </div>
         </section>

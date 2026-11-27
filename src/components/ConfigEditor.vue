@@ -11,6 +11,8 @@ import {
   Folder,
   FolderOpen,
   FileCode2,
+  FilePlus2,
+  Trash2,
   Save,
   RotateCcw,
   AlertTriangle,
@@ -39,6 +41,52 @@ const mobileTreeCollapsed = ref(false)
 const openDirs = ref(new Set(['']))
 const copiedMismatch = ref(false)
 const copyMismatchError = ref(false)
+const showCreateFile = ref(false)
+const newFilePath = ref('')
+const confirmDeleteFile = ref(false)
+let deleteFileTimer = null
+
+const PROTECTED_CONFIG_FILES = new Set([
+  'printer.cfg',
+  'moonraker.conf',
+  'mainsail.cfg',
+  'fluidd.cfg',
+  'crowsnest.conf',
+])
+
+const canDeleteCurrentFile = computed(() => {
+  const path = store.currentPath.value
+  if (!path || effectiveReadonly.value || store.isBackup.value || store.isScript.value) return false
+  return !PROTECTED_CONFIG_FILES.has(path.toLowerCase())
+})
+
+function resetDeleteFileConfirm() {
+  confirmDeleteFile.value = false
+  clearTimeout(deleteFileTimer)
+  deleteFileTimer = null
+}
+
+async function handleCreateFile() {
+  const clean = newFilePath.value.trim()
+  if (!clean || store.saving.value || props.printLocked || !props.moonrakerOnline) return
+  const res = await store.createFile(clean)
+  if (res.ok) {
+    newFilePath.value = ''
+    showCreateFile.value = false
+  }
+}
+
+async function handleDeleteCurrentFile() {
+  if (!canDeleteCurrentFile.value || store.saving.value) return
+  if (!confirmDeleteFile.value) {
+    confirmDeleteFile.value = true
+    clearTimeout(deleteFileTimer)
+    deleteFileTimer = setTimeout(resetDeleteFileConfirm, 6000)
+    return
+  }
+  resetDeleteFileConfirm()
+  await store.deleteFile(store.currentPath.value)
+}
 
 let editorView = null
 let applyingExternal = false
@@ -257,8 +305,9 @@ watch(effectiveReadonly, isRo => {
 })
 
 watch(
-  () => [store.currentPath.value, store.loadingFile.value],
+  [() => store.currentPath.value, () => store.loadingFile.value],
   async ([path, loading]) => {
+    resetDeleteFileConfirm()
     if (!path) {
       destroyEditor()
       return
@@ -331,6 +380,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  resetDeleteFileConfirm()
   destroyEditor()
 })
 </script>
@@ -366,6 +416,17 @@ onBeforeUnmount(() => {
             <button
               type="button"
               class="icon-button"
+              :class="{ active: showCreateFile }"
+              :disabled="props.printLocked || !props.moonrakerOnline || store.saving.value"
+              :title="t('Neue Konfigurationsdatei anlegen')"
+              :aria-label="t('Neue Konfigurationsdatei anlegen')"
+              @click="showCreateFile = !showCreateFile"
+            >
+              <FilePlus2 :size="14" />
+            </button>
+            <button
+              type="button"
+              class="icon-button"
               :disabled="store.loadingList.value"
               :title="t('Dateiliste aktualisieren')"
               :aria-label="t('Dateiliste aktualisieren')"
@@ -385,6 +446,23 @@ onBeforeUnmount(() => {
             </button>
           </div>
         </div>
+        <form
+          v-if="showCreateFile"
+          class="config-create-form"
+          @submit.prevent="handleCreateFile"
+          @keydown.esc="showCreateFile = false"
+        >
+          <input
+            v-model="newFilePath"
+            type="text"
+            :placeholder="t('z. B. macros.cfg')"
+            :aria-label="t('Neuer Konfigurationsdateiname')"
+            :disabled="store.saving.value"
+          />
+          <button type="submit" class="subtle-button" :disabled="store.saving.value || !newFilePath.trim()">
+            <Check :size="13" />{{ t('Anlegen') }}
+          </button>
+        </form>
       </div>
 
       <div class="config-tree-scroll">
@@ -456,6 +534,22 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="config-editor-actions">
+            <button
+              v-if="canDeleteCurrentFile"
+              type="button"
+              :class="confirmDeleteFile ? 'danger-button' : 'subtle-button'"
+              :disabled="store.saving.value"
+              :title="
+                confirmDeleteFile
+                  ? t('Erneut klicken, um diese Konfigurationsdatei dauerhaft zu löschen')
+                  : t('Konfigurationsdatei löschen')
+              "
+              @click="handleDeleteCurrentFile"
+              @blur="resetDeleteFileConfirm"
+              @keydown.esc="resetDeleteFileConfirm"
+            >
+              <Trash2 :size="14" />{{ confirmDeleteFile ? t('Wirklich löschen?') : t('Löschen') }}
+            </button>
             <button
               type="button"
               class="subtle-button"
@@ -570,10 +664,22 @@ onBeforeUnmount(() => {
         <div v-else ref="cmHost" class="config-cm-host" />
       </template>
 
-      <div v-else class="config-empty-pane">
-        <FileCode2 :size="24" />
-        <p>{{ t('Wähle links eine Konfigurationsdatei aus, um sie anzusehen oder zu bearbeiten.') }}</p>
-      </div>
+      <template v-else>
+        <div
+          v-if="store.saveFeedback.value"
+          class="config-editor-notice"
+          :class="store.saveFeedback.value.ok ? 'lime' : 'amber'"
+          role="status"
+        >
+          <Check v-if="store.saveFeedback.value.ok" :size="15" />
+          <AlertTriangle v-else :size="15" />
+          <span>{{ t(store.saveFeedback.value.message) }}</span>
+        </div>
+        <div class="config-empty-pane">
+          <FileCode2 :size="24" />
+          <p>{{ t('Wähle links eine Konfigurationsdatei aus, um sie anzusehen oder zu bearbeiten.') }}</p>
+        </div>
+      </template>
     </section>
   </div>
 </template>

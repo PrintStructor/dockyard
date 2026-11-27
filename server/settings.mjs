@@ -273,8 +273,12 @@ export function normalizeCamera(raw, index = 0) {
       : ''
   const preferredMode = service === 'mjpeg' ? 'mjpeg' : raw.preferredMode === 'mjpeg' ? 'mjpeg' : 'webrtc'
   const enabled = raw.enabled !== false
+  const flipX = raw.flipX === true
+  const flipY = raw.flipY === true
+  const rawRot = Number(raw.rotate)
+  const rotate = [0, 90, 180, 270].includes(rawRot) ? rawRot : 0
 
-  return { id, name, description, service, url, snapshotUrl, enabled, preferredMode }
+  return { id, name, description, service, url, snapshotUrl, enabled, preferredMode, flipX, flipY, rotate }
 }
 
 export function normalizeModelSetting(raw) {

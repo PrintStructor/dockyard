@@ -855,3 +855,274 @@ test('Paket C1: macro parameter parsing & safe execution + WCAG-safe per-printer
   // Acid Lime stays exact signature color
   assert.equal(computePrinterTheme('#c5f76b').accent, '#c5f76b')
 })
+
+test('Paket C2: live PA/velocity/retraction tuning, RGBW set_led, presets mutation, and status fields', async () => {
+  const { applyMainsailPresetMutation, normalizePresets } = await import('../server/presets.mjs')
+
+  const raw = singleToolTridentRaw({
+    print_stats: { state: 'printing', filename: 'benchy.gcode', print_duration: 120 },
+    toolhead: {
+      homed_axes: 'xyz',
+      position: [60, 60, 10, 0],
+      max_velocity: 300,
+      max_accel: 4000,
+      minimum_cruise_ratio: 0.5,
+      square_corner_velocity: 5,
+    },
+    extruder: {
+      temperature: 215,
+      target: 215,
+      power: 0.4,
+      can_extrude: true,
+      pressure_advance: 0.042,
+      smooth_time: 0.04,
+    },
+    firmware_retraction: {
+      retract_length: 0.6,
+      retract_speed: 35,
+      unretract_extra_length: 0,
+      unretract_speed: 35,
+    },
+    manual_probe: { is_active: true, z_position: 0.15, z_position_lower: 0.1, z_position_upper: 0.2 },
+    'neopixel chamber_leds': { color_data: [[0.5, 0.25, 0.1, 0.8]] },
+    configfile: {
+      save_config_pending: false,
+      warnings: [{ message: 'Deprecated option in [stepper_z]' }],
+      settings: {
+        printer: { max_velocity: 500, max_accel: 10000 },
+        extruder: { max_temp: 300 },
+        heater_bed: { max_temp: 120 },
+        firmware_retraction: { retract_length: 0.5 },
+        'neopixel chamber_leds': { color_order: 'GRBW' },
+      },
+    },
+  })
+
+  const status = normalizeStatus(raw)
+  assert.equal(status.tools[0].pressureAdvanceSmoothTime, 0.04)
+  assert.equal(status.motionLimits.maxVelocity, 300)
+  assert.equal(status.motionLimits.maxAccel, 4000)
+  assert.equal(status.firmwareRetraction.retractLength, 0.6)
+  assert.equal(status.manualProbe.isActive, true)
+  assert.deepEqual(status.configWarnings, ['Deprecated option in [stepper_z]'])
+  assert.equal(status.neopixels.length, 1)
+  assert.equal(status.neopixels[0].name, 'chamber_leds')
+  assert.equal(status.neopixels[0].hasWhite, true)
+
+  // Live print tuning commands
+  assert.equal(
+    commandFor({ action: 'tune_pressure_advance', advance: 0.055, smoothTime: 0.03 }, raw).body.script,
+    'SET_PRESSURE_ADVANCE ADVANCE=0.055 SMOOTH_TIME=0.03',
+  )
+  assert.equal(
+    commandFor(
+      { action: 'tune_velocity_limits', velocity: 250, accel: 3500, minCruiseRatio: 0.4, squareCornerVelocity: 6 },
+      raw,
+    ).body.script,
+    'SET_VELOCITY_LIMIT VELOCITY=250 ACCEL=3500 MINIMUM_CRUISE_RATIO=0.4 SQUARE_CORNER_VELOCITY=6',
+  )
+  assert.equal(
+    commandFor(
+      { action: 'tune_retraction', retractLength: 0.8, retractSpeed: 40, unretractExtraLength: 0.1, unretractSpeed: 30 },
+      raw,
+    ).body.script,
+    'SET_RETRACTION RETRACT_LENGTH=0.8 RETRACT_SPEED=40 UNRETRACT_EXTRA_LENGTH=0.1 UNRETRACT_SPEED=30',
+  )
+  assert.throws(() => commandFor({ action: 'tune_velocity_limits', accel: 99999 }, raw), err => err.status === 400)
+
+  // Direct RGBW LED command
+  const ledCmd = commandFor(
+    { action: 'set_led', led: 'chamber_leds', red: 1, green: 0.5, blue: 0, white: 0.25 },
+    raw,
+  )
+  assert.equal(ledCmd.body.script, 'SET_LED LED=chamber_leds RED=1 GREEN=0.5 BLUE=0 WHITE=0.25 SYNC=0 TRANSMIT=1')
+  assert.throws(() => commandFor({ action: 'set_led', led: 'unknown_led', red: 1 }, raw), err => err.status === 409)
+
+  // Mainsail preset DB upsert + delete
+  const db1 = applyMainsailPresetMutation({}, { action: 'upsert', name: 'ASA', extruder: 255, bed: 105 })
+  const list1 = normalizePresets({ mainsail: db1, toolCount: 1 })
+  assert.ok(list1.some(p => p.name === 'ASA' && p.bed === 105 && p.tools[0] === 255))
+  const db2 = applyMainsailPresetMutation(db1, { action: 'delete', name: 'ASA' })
+  const list2 = normalizePresets({ mainsail: db2, toolCount: 1 })
+  assert.ok(!list2.some(p => p.name === 'ASA'))
+})
+
+test('Paket C2 HTTP: endstops, gcode dir metadata/mkdir/move, presets POST, config create & protected delete', async () => {
+  const gcodeFiles = [{ path: 'benchy.gcode', size: 102400, modified: 2000 }]
+  const configFiles = [
+    { path: 'printer.cfg', size: 512, modified: 1000, permissions: 'rw' },
+    { path: 'custom.cfg', size: 64, modified: 1000, permissions: 'rw' },
+  ]
+  let presetsDb = {}
+  const calls = []
+
+  const mockMoonraker = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://127.0.0.1')
+    res.setHeader('Content-Type', 'application/json')
+    const chunks = []
+    for await (const c of req) chunks.push(c)
+    const rawBody = Buffer.concat(chunks).toString('utf8')
+
+    if (u.pathname === '/printer/query_endstops/status') {
+      return res.end(JSON.stringify({ result: { x: 'open', y: 'TRIGGERED', z: 'open' } }))
+    }
+    if (u.pathname === '/printer/objects/list') {
+      return res.end(JSON.stringify({ result: { objects: ['webhooks', 'print_stats', 'idle_timeout'] } }))
+    }
+    if (u.pathname === '/printer/objects/query') {
+      return res.end(
+        JSON.stringify({
+          result: {
+            status: {
+              webhooks: { state: 'ready' },
+              print_stats: { state: 'standby', filename: '' },
+              idle_timeout: { state: 'Idle' },
+            },
+          },
+        }),
+      )
+    }
+    if (u.pathname === '/server/files/list' && u.searchParams.get('root') === 'gcodes') {
+      return res.end(JSON.stringify({ result: gcodeFiles }))
+    }
+    if (u.pathname === '/server/files/list' && u.searchParams.get('root') === 'config') {
+      return res.end(JSON.stringify({ result: configFiles }))
+    }
+    if (u.pathname === '/server/files/directory' && req.method === 'GET') {
+      return res.end(
+        JSON.stringify({
+          result: {
+            dirs: [{ dirname: 'VORON', modified: 1900 }],
+            files: [
+              {
+                filename: 'benchy.gcode',
+                estimated_time: 1800,
+                filament_weight_total: 14.5,
+                layer_height: 0.2,
+                thumbnails: [{ width: 300, height: 300, relative_path: '.thumbs/benchy-300x300.png' }],
+              },
+            ],
+          },
+        }),
+      )
+    }
+    if (u.pathname === '/server/files/directory' && req.method === 'POST') {
+      calls.push({ kind: 'mkdir', body: JSON.parse(rawBody) })
+      return res.end(JSON.stringify({ result: { action: 'create_dir' } }))
+    }
+    if (u.pathname === '/server/files/move' && req.method === 'POST') {
+      calls.push({ kind: 'move', body: JSON.parse(rawBody) })
+      return res.end(JSON.stringify({ result: { action: 'move_item' } }))
+    }
+    if (u.pathname === '/server/history/list') {
+      return res.end(JSON.stringify({ result: { jobs: [] } }))
+    }
+    if (u.pathname === '/server/database/item' && req.method === 'GET') {
+      return res.end(JSON.stringify({ result: { value: presetsDb } }))
+    }
+    if (u.pathname === '/server/database/item' && req.method === 'POST') {
+      const parsed = JSON.parse(rawBody)
+      presetsDb = parsed.value
+      calls.push({ kind: 'presets_save', namespace: parsed.namespace, key: parsed.key })
+      return res.end(JSON.stringify({ result: { value: presetsDb } }))
+    }
+    if (u.pathname === '/server/files/upload' && req.method === 'POST') {
+      calls.push({ kind: 'config_upload', raw: rawBody })
+      configFiles.push({ path: 'macros.cfg', size: 20, modified: 2000, permissions: 'rw' })
+      return res.end(JSON.stringify({ item: { path: 'macros.cfg', modified: 2000 } }))
+    }
+    if (u.pathname.startsWith('/server/files/config/') && req.method === 'DELETE') {
+      calls.push({ kind: 'config_delete', path: decodeURIComponent(u.pathname.slice('/server/files/config/'.length)) })
+      return res.end(JSON.stringify({ result: { item: { path: 'custom.cfg' } } }))
+    }
+    res.statusCode = 404
+    res.end('{}')
+  })
+
+  await new Promise(resolve => mockMoonraker.listen(0, '127.0.0.1', resolve))
+  const mockUrl = `http://127.0.0.1:${mockMoonraker.address().port}`
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'dockyard-c2-http-'))
+  const store = createSettingsStore({
+    filePath: path.join(dir, '.dockyard-settings.json'),
+    env: { PRINTER_URL: mockUrl, PRINTER_NAME: 'V0.1' },
+  })
+  const runtime = createPrinterRuntime({ store })
+  const apiServer = http.createServer((req, res) => runtime.printerMiddleware(req, res, () => res.end('next')))
+  await new Promise(resolve => apiServer.listen(0, '127.0.0.1', resolve))
+  const apiOrigin = `http://127.0.0.1:${apiServer.address().port}`
+  const writeHeaders = { Origin: apiOrigin, 'X-Cockpit-Request': '1', 'Content-Type': 'application/json' }
+
+  try {
+    // 1. Endstops
+    const esRes = await fetch(`${apiOrigin}/api/system/endstops`)
+    assert.equal(esRes.status, 200)
+    const esData = await esRes.json()
+    assert.equal(esData.endstops.length, 3)
+    assert.equal(esData.endstops.find(e => e.name === 'y').triggered, true)
+
+    // 2. G-Code files with extended metadata & dirs
+    const filesRes = await fetch(`${apiOrigin}/api/print/files`)
+    assert.equal(filesRes.status, 200)
+    const filesData = await filesRes.json()
+    assert.equal(filesData.dirs[0].name, 'VORON')
+    assert.equal(filesData.files[0].estimatedTime, 1800)
+    assert.equal(filesData.files[0].filamentWeight, 14.5)
+    assert.equal(filesData.files[0].thumbnail, '.thumbs/benchy-300x300.png')
+
+    // 3. Mkdir & Move
+    const mkRes = await fetch(`${apiOrigin}/api/print/mkdir`, {
+      method: 'POST',
+      headers: writeHeaders,
+      body: JSON.stringify({ path: 'TestParts' }),
+    })
+    assert.equal(mkRes.status, 200)
+    assert.equal(calls.find(c => c.kind === 'mkdir').body.path, 'gcodes/TestParts')
+
+    const mvRes = await fetch(`${apiOrigin}/api/print/move`, {
+      method: 'POST',
+      headers: writeHeaders,
+      body: JSON.stringify({ source: 'benchy.gcode', dest: 'benchy_v2.gcode' }),
+    })
+    assert.equal(mvRes.status, 200)
+    assert.deepEqual(calls.find(c => c.kind === 'move').body, {
+      source: 'gcodes/benchy.gcode',
+      dest: 'gcodes/benchy_v2.gcode',
+    })
+
+    // 4. Presets POST
+    const preRes = await fetch(`${apiOrigin}/api/presets`, {
+      method: 'POST',
+      headers: writeHeaders,
+      body: JSON.stringify({ action: 'upsert', name: 'TPU', extruder: 225, bed: 45 }),
+    })
+    assert.equal(preRes.status, 200)
+    const preData = await preRes.json()
+    assert.ok(preData.presets.some(p => p.name === 'TPU' && p.bed === 45))
+
+    // 5. Config create + protected delete (printer.cfg blocked 403, custom.cfg deleted 200)
+    const crRes = await fetch(`${apiOrigin}/api/system/config/create`, {
+      method: 'POST',
+      headers: writeHeaders,
+      body: JSON.stringify({ path: 'macros.cfg' }),
+    })
+    assert.equal(crRes.status, 200)
+
+    const delCore = await fetch(`${apiOrigin}/api/system/config/file?path=printer.cfg`, {
+      method: 'DELETE',
+      headers: { Origin: apiOrigin, 'X-Cockpit-Request': '1' },
+    })
+    assert.equal(delCore.status, 403)
+
+    const delCustom = await fetch(`${apiOrigin}/api/system/config/file?path=custom.cfg`, {
+      method: 'DELETE',
+      headers: { Origin: apiOrigin, 'X-Cockpit-Request': '1' },
+    })
+    assert.equal(delCustom.status, 200)
+    assert.equal(calls.find(c => c.kind === 'config_delete').path, 'custom.cfg')
+  } finally {
+    runtime.closeLiveFeed()
+    apiServer.close()
+    mockMoonraker.close()
+    await rm(dir, { recursive: true, force: true })
+  }
+})

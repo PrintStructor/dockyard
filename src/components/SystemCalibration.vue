@@ -39,6 +39,12 @@ const hoveredMeshCell = ref(null)
 const meshProfileDraft = ref('')
 const pidExtruderTarget = ref(220)
 const pidBedTarget = ref(60)
+const endstops = ref([])
+const endstopsLoading = ref(false)
+const endstopsError = ref('')
+const endstopsQueriedAt = ref('')
+
+const manualProbeStepList = [-1, -0.1, -0.05, -0.01, 0.01, 0.05, 0.1, 1]
 
 const lightboxChart = ref(null)
 const lightboxDialog = ref(null)
@@ -117,6 +123,30 @@ const hasActiveJob = computed(() => Boolean(props.status?.control?.job))
 
 const liveBedScrews = computed(() => props.status?.bedScrews ?? data.value?.bedScrews ?? null)
 const bedScrewsActive = computed(() => liveBedScrews.value?.isActive === true)
+const liveManualProbe = computed(() => props.status?.manualProbe ?? data.value?.manualProbe ?? null)
+const manualProbeActive = computed(() => liveManualProbe.value?.isActive === true)
+const hasManualProbeSection = computed(() =>
+  Boolean(data.value?.capabilities?.probeCalibrate || data.value?.capabilities?.zEndstopCalibrate || manualProbeActive.value),
+)
+
+async function queryEndstops() {
+  if (!props.online || endstopsLoading.value) return
+  endstopsLoading.value = true
+  endstopsError.value = ''
+  try {
+    const res = await fetch('/api/system/endstops', { signal: AbortSignal.timeout(7000) })
+    const json = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(json.error || 'Endschalter konnten nicht abgefragt werden.')
+    endstops.value = Array.isArray(json.endstops) ? json.endstops : []
+    endstopsQueriedAt.value = json.queriedAt
+      ? new Date(json.queriedAt).toLocaleTimeString(locale.value, { timeStyle: 'medium' })
+      : ''
+  } catch (err) {
+    endstopsError.value = err.message || 'Endschalter konnten nicht abgefragt werden.'
+  } finally {
+    endstopsLoading.value = false
+  }
+}
 const hasBedScrewsSection = computed(() =>
   Boolean(data.value?.bedScrews?.configured || data.value?.screwsTilt?.configured || props.status?.bedScrews?.configured),
 )
@@ -1278,6 +1308,170 @@ onMounted(() => {
         <p class="muted" style="margin: 0">
           {{ t('Nach PID- oder Shaper-Läufen erscheint oben automatisch das SAVE_CONFIG-Banner.') }}
         </p>
+      </section>
+    </div>
+
+    <div class="cal-two-col" :class="{ 'cal-single-col': !hasManualProbeSection }">
+      <section v-if="hasManualProbeSection" class="cal-section" :aria-label="t('Z-Offset-Assistent (Papier-Test)')">
+        <div class="system-panel-head" style="margin-bottom: 0">
+          <div>
+            <h2>{{ t('Z-Offset-Assistent (Papier-Test)') }}</h2>
+            <p>{{ t('Interaktive Z-Höhen-Kalibrierung per PROBE_CALIBRATE oder Z_ENDSTOP_CALIBRATE.') }}</p>
+          </div>
+          <span v-if="manualProbeActive" class="status-pill amber">{{ t('Aktiv') }}</span>
+        </div>
+
+        <div v-if="manualProbeActive" class="manual-probe-panel" role="region" :aria-label="t('Papier-Test Steuerung')">
+          <dl class="measurements" style="margin-top: 0">
+            <div>
+              <dt>{{ t('Aktuelles Z') }}</dt>
+              <dd>{{ number(liveManualProbe?.zPosition, 3) }} mm</dd>
+            </div>
+            <div v-if="liveManualProbe?.zPositionLower != null || liveManualProbe?.zPositionUpper != null">
+              <dt>{{ t('Grenzen (Unten / Oben)') }}</dt>
+              <dd>
+                {{ liveManualProbe?.zPositionLower != null ? number(liveManualProbe.zPositionLower, 3) : '—' }} /
+                {{ liveManualProbe?.zPositionUpper != null ? number(liveManualProbe.zPositionUpper, 3) : '—' }} mm
+              </dd>
+            </div>
+          </dl>
+
+          <div class="manual-probe-steps">
+            <button
+              v-for="step in manualProbeStepList"
+              :key="step"
+              type="button"
+              class="subtle-button"
+              :disabled="!!blockReason()"
+              @click="runAction({ action: 'manual_probe_testz', delta: step })"
+            >
+              {{ step > 0 ? `+${step}` : step }}
+            </button>
+          </div>
+
+          <div class="cal-action-row">
+            <button
+              type="button"
+              class="subtle-button"
+              :disabled="!!blockReason()"
+              :title="t('Halbieren nach unten (TESTZ Z=-)')"
+              @click="runAction({ action: 'manual_probe_testz', delta: '-' })"
+            >
+              {{ t('Halbieren (−)') }}
+            </button>
+            <button
+              type="button"
+              class="subtle-button"
+              :disabled="!!blockReason()"
+              :title="t('Halbieren nach oben (TESTZ Z=+)')"
+              @click="runAction({ action: 'manual_probe_testz', delta: '+' })"
+            >
+              {{ t('Halbieren (+)') }}
+            </button>
+            <button
+              type="button"
+              class="confirm-button"
+              :disabled="!!blockReason()"
+              @click="runAction({ action: 'manual_probe_accept' })"
+            >
+              <Check :size="13" />{{ t('Übernehmen (ACCEPT)') }}
+            </button>
+            <button
+              type="button"
+              class="subtle-button"
+              :disabled="!!blockReason()"
+              @click="runAction({ action: 'manual_probe_abort' })"
+            >
+              <X :size="13" />{{ t('Abbrechen (ABORT)') }}
+            </button>
+          </div>
+        </div>
+
+        <div v-else class="cal-action-row">
+          <template v-if="data?.capabilities?.probeCalibrate">
+            <template v-if="confirmKey === 'probe_calibrate'">
+              <button
+                type="button"
+                class="confirm-button"
+                @click="runAction({ action: 'probe_calibrate_start' }, { capKey: 'probeCalibrate', requireHomed: true })"
+              >
+                {{ t('PROBE_CALIBRATE starten?') }}
+              </button>
+              <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+            </template>
+            <button
+              v-else
+              type="button"
+              class="subtle-button"
+              :disabled="!!blockReason({ capKey: 'probeCalibrate', requireHomed: true })"
+              :title="t(blockReason({ capKey: 'probeCalibrate', requireHomed: true }) || 'PROBE_CALIBRATE starten')"
+              @click="requestConfirm('probe_calibrate', { capKey: 'probeCalibrate', requireHomed: true })"
+            >
+              <Crosshair :size="13" />{{ t('Probe-Z-Offset (Papier-Test)') }}
+            </button>
+          </template>
+
+          <template v-if="data?.capabilities?.zEndstopCalibrate">
+            <template v-if="confirmKey === 'z_endstop_calibrate'">
+              <button
+                type="button"
+                class="confirm-button"
+                @click="runAction({ action: 'z_endstop_calibrate_start' }, { capKey: 'zEndstopCalibrate', requireHomed: true })"
+              >
+                {{ t('Z_ENDSTOP_CALIBRATE starten?') }}
+              </button>
+              <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+            </template>
+            <button
+              v-else
+              type="button"
+              class="subtle-button"
+              :disabled="!!blockReason({ capKey: 'zEndstopCalibrate', requireHomed: true })"
+              :title="t(blockReason({ capKey: 'zEndstopCalibrate', requireHomed: true }) || 'Z_ENDSTOP_CALIBRATE starten')"
+              @click="requestConfirm('z_endstop_calibrate', { capKey: 'zEndstopCalibrate', requireHomed: true })"
+            >
+              <SlidersHorizontal :size="13" />{{ t('Z-Endstop kalibrieren') }}
+            </button>
+          </template>
+        </div>
+      </section>
+
+      <section class="cal-section" :aria-label="t('Endschalter-Status')">
+        <div class="system-panel-head" style="margin-bottom: 0">
+          <div>
+            <h2>{{ t('Endschalter-Status') }}</h2>
+            <p>{{ t('Aktuellen Zustand aller konfigurierten Endstops per QUERY_ENDSTOPS prüfen.') }}</p>
+          </div>
+          <button
+            type="button"
+            class="subtle-button"
+            :disabled="!online || endstopsLoading"
+            @click="queryEndstops"
+          >
+            <RefreshCw :size="13" :class="{ spinning: endstopsLoading }" />{{ t('Endschalter prüfen') }}
+          </button>
+        </div>
+
+        <p v-if="endstopsError" class="system-inline-error">{{ t(endstopsError) }}</p>
+        <div v-else-if="endstops.length" class="endstop-pill-grid">
+          <div
+            v-for="es in endstops"
+            :key="es.name"
+            class="endstop-item"
+            :class="{ triggered: es.triggered }"
+          >
+            <span class="endstop-name">{{ es.name.toUpperCase() }}</span>
+            <span class="status-pill" :class="es.triggered ? 'amber' : 'muted'">
+              {{ es.triggered ? t('AUSGELÖST') : t('offen') }}
+            </span>
+          </div>
+        </div>
+        <p v-else class="muted" style="margin: 0">
+          {{ t('Noch nicht abgefragt — klicke auf „Endschalter prüfen“.') }}
+        </p>
+        <small v-if="endstopsQueriedAt" class="muted">
+          {{ t('Zuletzt geprüft: {0}', [endstopsQueriedAt]) }}
+        </small>
       </section>
     </div>
 

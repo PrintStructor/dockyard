@@ -129,6 +129,13 @@ const cameraTransportOptions = computed(() => [
   { value: 'mjpeg', label: t('MJPEG-Stream') },
 ])
 
+const cameraRotateOptions = [
+  { value: 0, label: '0°' },
+  { value: 90, label: '90°' },
+  { value: 180, label: '180°' },
+  { value: 270, label: '270°' },
+]
+
 const modelPresetOptions = computed(() => [
   { value: 'auto', label: t('Automatisch (empfohlen)') },
   { value: 'stealthburner', label: t('StealthBurner (VORON 2.4 / Trident)') },
@@ -439,6 +446,9 @@ function cloneDraftFromStore() {
       snapshotUrl: c.snapshotUrl ?? '',
       preferredMode: c.service === 'mjpeg' ? 'mjpeg' : c.preferredMode === 'mjpeg' ? 'mjpeg' : 'webrtc',
       enabled: c.enabled !== false,
+      flipX: c.flipX === true,
+      flipY: c.flipY === true,
+      rotate: [0, 90, 180, 270].includes(Number(c.rotate)) ? Number(c.rotate) : 0,
     })),
   }))
   const activeId = printers.some(p => p.id === current?.activePrinterId)
@@ -629,6 +639,9 @@ function addCamera() {
     snapshotUrl: '',
     preferredMode: 'webrtc',
     enabled: true,
+    flipX: false,
+    flipY: false,
+    rotate: 0,
   })
 }
 
@@ -740,6 +753,9 @@ function applyImportToDraft() {
         snapshotUrl: c.snapshotUrl ?? '',
         preferredMode: c.service === 'mjpeg' ? 'mjpeg' : c.preferredMode === 'mjpeg' ? 'mjpeg' : 'webrtc',
         enabled: c.enabled !== false,
+        flipX: c.flipX === true,
+        flipY: c.flipY === true,
+        rotate: [0, 90, 180, 270].includes(Number(c.rotate)) ? Number(c.rotate) : 0,
       })),
     }))
     draft.value.activePrinterId = merged.activePrinterId
@@ -775,6 +791,9 @@ function buildSavePayload(confirmSelfLockout = false) {
           url: c.url.trim(),
           preferredMode: c.service === 'mjpeg' ? 'mjpeg' : c.preferredMode === 'mjpeg' ? 'mjpeg' : 'webrtc',
           enabled: c.enabled !== false,
+          flipX: c.flipX === true,
+          flipY: c.flipY === true,
+          rotate: [0, 90, 180, 270].includes(Number(c.rotate)) ? Number(c.rotate) : 0,
         }
         if (cam.service === 'mjpeg' && c.snapshotUrl?.trim()) {
           cam.snapshotUrl = c.snapshotUrl.trim()
@@ -1423,6 +1442,30 @@ watch(
                       placeholder="/webcam/?action=snapshot"
                     />
                   </label>
+
+                  <div class="settings-field">
+                    <span>{{ t('Drehung') }}</span>
+                    <CockpitSelect
+                      v-model="cam.rotate"
+                      :options="cameraRotateOptions"
+                      :aria-label="t('Kameradrehung')"
+                      :disabled="!canWrite"
+                    />
+                  </div>
+
+                  <div class="settings-field">
+                    <span>{{ t('Spiegelung') }}</span>
+                    <div class="settings-cam-flips">
+                      <label class="settings-cam-flip-check">
+                        <input v-model="cam.flipX" type="checkbox" :disabled="!canWrite" />
+                        <span>{{ t('Horizontal spiegeln') }}</span>
+                      </label>
+                      <label class="settings-cam-flip-check">
+                        <input v-model="cam.flipY" type="checkbox" :disabled="!canWrite" />
+                        <span>{{ t('Vertikal spiegeln') }}</span>
+                      </label>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

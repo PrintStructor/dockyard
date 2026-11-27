@@ -28,6 +28,7 @@ const allCalibrationMacros = () => ({
   screws_tilt_adjust: {},
   resonance_tester: {},
   probe: {},
+  stepper_z: {},
   extruder: { max_temp: 300 },
   heater_bed: { max_temp: 130 },
 })
@@ -59,7 +60,7 @@ test('calibrationCapabilities detects configured macros and returns false when a
   for (const key of Object.keys(empty)) {
     assert.equal(empty[key], false, `expected ${key} to be false`)
   }
-  assert.equal(calibrationActions.length, 27)
+  assert.equal(calibrationActions.length, 32)
 })
 
 test('commandFor routes Nudge XY macros with SAVE_CONFIG restart flag and safety guards', () => {
@@ -377,4 +378,37 @@ test('Paket B2 calibration: mesh profiles, V0.1 bed_screws workflow, screws_tilt
   assert.deepEqual(norm.bedScrews.screws, [{ index: 1, name: 'front screw' }])
   assert.equal(norm.pidLimits.extruderMax, 295)
   assert.equal(norm.pidLimits.bedMax, 125)
+  assert.equal(norm.manualProbe.isActive, false)
+})
+
+test('Paket C2 calibration: PROBE_CALIBRATE, Z_ENDSTOP_CALIBRATE, TESTZ, ACCEPT, ABORT', () => {
+  const base = readyState()
+
+  assert.equal(commandFor({ action: 'probe_calibrate_start' }, base).body.script, 'PROBE_CALIBRATE')
+  assert.equal(commandFor({ action: 'z_endstop_calibrate_start' }, base).body.script, 'Z_ENDSTOP_CALIBRATE')
+
+  // TESTZ / ACCEPT / ABORT rejected when manual_probe is not active
+  assert.throws(() => commandFor({ action: 'manual_probe_testz', delta: -0.05 }, base), err => err.status === 409)
+  assert.throws(() => commandFor({ action: 'manual_probe_accept' }, base), err => err.status === 409)
+  assert.throws(() => commandFor({ action: 'manual_probe_abort' }, base), err => err.status === 409)
+
+  const active = {
+    ...base,
+    manual_probe: { is_active: true, z_position: 0.125, z_position_lower: 0.05, z_position_upper: 0.2 },
+  }
+  assert.equal(commandFor({ action: 'manual_probe_testz', delta: -0.05 }, active).body.script, 'TESTZ Z=-0.05')
+  assert.equal(commandFor({ action: 'manual_probe_testz', delta: 0.1 }, active).body.script, 'TESTZ Z=+0.1')
+  assert.equal(commandFor({ action: 'manual_probe_testz', delta: '-' }, active).body.script, 'TESTZ Z=-')
+  assert.equal(commandFor({ action: 'manual_probe_testz', delta: '+' }, active).body.script, 'TESTZ Z=+')
+  assert.throws(() => commandFor({ action: 'manual_probe_testz', delta: 12.34 }, active), err => err.status === 400)
+  assert.equal(commandFor({ action: 'manual_probe_accept' }, active).body.script, 'ACCEPT')
+  assert.equal(commandFor({ action: 'manual_probe_abort' }, active).body.script, 'ABORT')
+
+  const norm = normalizeCalibrationData({ rawStatus: active, configFiles: [] })
+  assert.deepEqual(norm.manualProbe, {
+    isActive: true,
+    zPosition: 0.125,
+    zPositionLower: 0.05,
+    zPositionUpper: 0.2,
+  })
 })

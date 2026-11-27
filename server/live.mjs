@@ -33,6 +33,8 @@ function matchesDynamicSubscription(name, baseObjects) {
     name === 'quad_gantry_level' ||
     name === 'bed_screws' ||
     name === 'screws_tilt_adjust' ||
+    name === 'manual_probe' ||
+    name === 'firmware_retraction' ||
     name === 'fan' ||
     /^fan_generic [A-Za-z0-9_-]+$/.test(name) ||
     /^heater_fan [A-Za-z0-9_-]+$/.test(name) ||
@@ -43,6 +45,7 @@ function matchesDynamicSubscription(name, baseObjects) {
     /^temperature_fan .+$/.test(name) ||
     /^filament_(?:switch|motion)_sensor .+$/.test(name) ||
     /^neopixel [A-Za-z0-9_-]+$/.test(name) ||
+    /^led [A-Za-z0-9_-]+$/.test(name) ||
     /^led_effect .+$/.test(name)
   )
 }
@@ -204,7 +207,7 @@ export function createLiveFeed({
             'printer.objects.subscribe',
             Object.fromEntries([
               ...selected.map(name => [name, null]),
-              ['configfile', ['settings', 'save_config_pending']],
+              ['configfile', ['settings', 'save_config_pending', 'warnings']],
             ]),
           )
         } else if (data.id === 2) {

@@ -720,6 +720,9 @@ watch(motion, allowed => {
         :description="cam.description"
         :service="cam.service"
         :preferred-mode="cam.preferredMode"
+        :flip-x="cam.flipX"
+        :flip-y="cam.flipY"
+        :rotate="cam.rotate"
       />
       <FanControl :status="status" :online="online" :pending="pending" :send="send" />
     </aside>

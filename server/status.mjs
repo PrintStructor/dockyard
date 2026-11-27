@@ -292,6 +292,7 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
         z: finite(tool.gcode_z_offset),
       },
       pressureAdvance: finite(extruder.pressure_advance),
+      pressureAdvanceSmoothTime: finite(extruder.smooth_time),
       canExtrude: flag(extruder.can_extrude),
     }
   })
@@ -456,6 +457,64 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
 
   const saveConfigPending = status.configfile?.save_config_pending === true
 
+  const motionLimits = {
+    maxVelocity: finite(status.toolhead?.max_velocity),
+    maxAccel: finite(status.toolhead?.max_accel),
+    minCruiseRatio: finite(status.toolhead?.minimum_cruise_ratio),
+    squareCornerVelocity: finite(status.toolhead?.square_corner_velocity),
+    configMaxVelocity: numeric(config.printer?.max_velocity),
+    configMaxAccel: numeric(config.printer?.max_accel),
+  }
+
+  const firmwareRetraction =
+    status.firmware_retraction || config.firmware_retraction
+      ? {
+          retractLength: finite(status.firmware_retraction?.retract_length) ?? numeric(config.firmware_retraction?.retract_length),
+          retractSpeed: finite(status.firmware_retraction?.retract_speed) ?? numeric(config.firmware_retraction?.retract_speed),
+          unretractExtraLength:
+            finite(status.firmware_retraction?.unretract_extra_length) ??
+            numeric(config.firmware_retraction?.unretract_extra_length),
+          unretractSpeed:
+            finite(status.firmware_retraction?.unretract_speed) ?? numeric(config.firmware_retraction?.unretract_speed),
+        }
+      : null
+
+  const manualProbe = status.manual_probe
+    ? {
+        isActive: status.manual_probe.is_active === true,
+        zPosition: finite(status.manual_probe.z_position),
+        zPositionLower: finite(status.manual_probe.z_position_lower),
+        zPositionUpper: finite(status.manual_probe.z_position_upper),
+      }
+    : null
+
+  const configWarnings = Array.isArray(status.configfile?.warnings)
+    ? status.configfile.warnings
+        .map(w => (typeof w === 'string' ? w : typeof w?.message === 'string' ? w.message : ''))
+        .filter(Boolean)
+        .slice(0, 12)
+    : []
+
+  const neopixels = Object.entries(status)
+    .filter(([key]) => /^(?:neopixel|led) [A-Za-z0-9_-]+$/.test(key))
+    .map(([key, value]) => {
+      const isLed = key.startsWith('led ')
+      const name = key.slice(isLed ? 4 : 9)
+      const cfg = config[key.toLowerCase()] ?? config[key] ?? {}
+      const order = String(cfg.color_order ?? '').toUpperCase()
+      const hasWhite = isLed ? Boolean(cfg.white_pin) : order.includes('W')
+      const firstLed = color(value?.color_data?.[0])
+      return {
+        id: key,
+        name,
+        kind: isLed ? 'led' : 'neopixel',
+        label: formatSensorLabel(name),
+        color: firstLed,
+        hasWhite,
+      }
+    })
+    .sort((a, b) => a.label.localeCompare(b.label))
+
   const gcodeMove = status.gcode_move ?? {}
   const speedFactor = finite(gcodeMove.speed_factor)
   const extrudeFactor = finite(gcodeMove.extrude_factor)
@@ -532,6 +591,11 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
     publicMacros,
     filamentSensors,
     bedScrews,
+    manualProbe,
+    motionLimits,
+    firmwareRetraction,
+    neopixels,
+    configWarnings,
     saveConfigPending,
     homedAxes: status.toolhead?.homed_axes ?? null,
     position: status.toolhead?.position ?? null,

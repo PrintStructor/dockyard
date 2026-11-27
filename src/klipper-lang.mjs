@@ -106,7 +106,7 @@ const editorBaseTheme = EditorView.theme(
       borderLeftWidth: '2px',
     },
     '&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
-      backgroundColor: 'rgba(197, 247, 107, 0.22)',
+      backgroundColor: 'var(--accent-tint)',
     },
     '.cm-activeLine': {
       backgroundColor: 'rgba(53, 65, 71, 0.26)',
@@ -171,19 +171,19 @@ const editorBaseTheme = EditorView.theme(
       outline: '1px solid var(--amber-line)',
     },
     '.cm-searchMatch.cm-searchMatch-selected': {
-      backgroundColor: 'rgba(197, 247, 107, 0.32)',
-      outline: '1px solid var(--lime)',
+      backgroundColor: 'var(--accent-tint-hover)',
+      outline: '1px solid var(--accent)',
     },
   },
   { dark: true },
 )
 
 const highlightStyle = HighlightStyle.define([
-  { tag: t.heading, color: '#c5f76b', fontWeight: '600' },
+  { tag: t.heading, color: 'var(--accent)', fontWeight: '600' },
   { tag: t.propertyName, color: '#a9d5e8' },
   { tag: t.comment, color: '#8397a0', fontStyle: 'italic' },
   { tag: t.number, color: '#f3c67b' },
-  { tag: t.string, color: '#b7df9b' },
+  { tag: t.string, color: 'var(--accent-soft)' },
   { tag: t.atom, color: '#e8b382' },
   { tag: t.meta, color: '#d7a8f2' },
   { tag: t.keyword, color: '#8fd7e8', fontWeight: '500' },

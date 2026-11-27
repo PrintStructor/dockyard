@@ -468,7 +468,8 @@ function updateExcludeDatums() {
     const wz = -(cy - centerY)
     const isExcluded = excludedSet.has(obj.name)
     const isCurrent = ex.current === obj.name
-    const color = isExcluded ? 0xb56563 : isCurrent ? 0xc5f76b : 0x8ea2ab
+    const accentHex = props.accentColor || '#c5f76b'
+    const color = isExcluded ? 0xb56563 : isCurrent ? new THREE.Color(accentHex).getHex() : 0x8ea2ab
     const opacity = isExcluded ? 0.72 : isCurrent ? 0.85 : 0.45
 
     const ring = new THREE.Mesh(
@@ -551,7 +552,9 @@ function updateNozzle() {
       Number.isInteger(props.activeTool) && props.activeTool >= 0 && props.activeTool < 6
         ? palette[props.activeTool]
         : null
-    const markerColor = toolVec ? new THREE.Color(toolVec.x, toolVec.y, toolVec.z) : new THREE.Color(0xc5f76b)
+    const markerColor = toolVec
+      ? new THREE.Color(toolVec.x, toolVec.y, toolVec.z)
+      : new THREE.Color(props.accentColor || '#c5f76b')
 
     nozzleMarker.position.set(wx, wy, wz)
     nozzleMarker.children.forEach(child => {

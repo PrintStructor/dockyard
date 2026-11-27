@@ -39,20 +39,30 @@ export const printControlActionKeys = {
 export function printControlCapabilities(config, raw) {
   const has = name => !!config[`gcode_macro ${name.toLowerCase()}`]
   const isToolchanger = Boolean(raw?.toolchanger || config.toolchanger)
-  const hasProbe = Boolean(
+  const endstopPin = String(config.stepper_z?.endstop_pin ?? '').toLowerCase()
+  const isVirtualZEndstop = endstopPin.includes('probe:z_virtual_endstop') || endstopPin.includes('beacon')
+  const hasExplicitPhysicalZEndstop = Boolean(config.stepper_z && endstopPin && !isVirtualZEndstop)
+  const hasBeacon = Boolean(config.beacon)
+  const hasTraditionalProbe = Boolean(
     config.probe ||
-      config.beacon ||
       config.bltouch ||
       config.scanner ||
       config.cartographer ||
       Object.keys(config).some(k => k.toLowerCase().startsWith('probe_eddy_current')),
   )
+  let zOffsetSaveTarget = null
+  if (!isToolchanger) {
+    if (hasBeacon) zOffsetSaveTarget = 'beacon'
+    else if (hasExplicitPhysicalZEndstop) zOffsetSaveTarget = 'endstop'
+    else if (hasTraditionalProbe) zOffsetSaveTarget = 'probe'
+    else if (config.stepper_z) zOffsetSaveTarget = 'endstop'
+  }
   return {
     printStart: !!config.virtual_sdcard,
     printCancel: has('CANCEL_PRINT') || !!config.pause_resume,
     perToolZAdjust: isToolchanger && has('SET_GCODE_OFFSET'),
     zAdjustReset: has('Z_ADJUST_RESET'),
-    zOffsetSaveTarget: hasProbe ? 'probe' : config.stepper_z ? 'endstop' : null,
+    zOffsetSaveTarget,
     firmwareRetraction: Boolean(config.firmware_retraction || raw?.firmware_retraction),
     excludeObject: raw?.exclude_object != null || !!config.exclude_object,
   }
@@ -148,7 +158,15 @@ export function printControlCommand(input, raw, capabilities) {
   }
 
   if (action === 'save_z_offset') {
-    const isProbe = capabilities.zOffsetSaveTarget === 'probe'
+    const target = capabilities.zOffsetSaveTarget
+    if (target === 'beacon') {
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script: 'BEACON_OFFSET_APPLY' },
+        label: 'Z-Offset für Beacon übernehmen',
+      }
+    }
+    const isProbe = target === 'probe'
     return {
       endpoint: '/printer/gcode/script',
       body: { script: isProbe ? 'Z_OFFSET_APPLY_PROBE' : 'Z_OFFSET_APPLY_ENDSTOP' },

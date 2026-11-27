@@ -54,13 +54,17 @@ export const calibrationActionKeys = {
 export function calibrationCapabilities(config = {}) {
   const keys = new Set(Object.keys(config).map(k => k.toLowerCase()))
   const has = macro => keys.has(`gcode_macro ${macro.toLowerCase()}`)
-  const hasProbe =
+  const hasBeacon = keys.has('beacon')
+  const hasTraditionalProbe =
     keys.has('probe') ||
-    keys.has('beacon') ||
     keys.has('bltouch') ||
     keys.has('scanner') ||
     keys.has('cartographer') ||
     [...keys].some(k => k.startsWith('probe_eddy_current'))
+  const hasProbe = hasTraditionalProbe || hasBeacon
+  const stepperZCfg = config.stepper_z ?? config.STEPPER_Z ?? null
+  const endstopPin = String(stepperZCfg?.endstop_pin ?? '').toLowerCase()
+  const isVirtualZEndstop = endstopPin.includes('probe:z_virtual_endstop') || endstopPin.includes('beacon')
   return {
     nudgeRing: has('NUDGE_CALIBRATE_RING_XY'),
     nudgeAll: has('NUDGE_CALIBRATE_ALL_TOOLS_XY'),
@@ -81,8 +85,8 @@ export function calibrationCapabilities(config = {}) {
     shaketuneBelts: has('COMPARE_BELTS_RESPONSES'),
     shaketuneVibrations: has('CREATE_VIBRATIONS_PROFILE'),
     probeAccuracy: hasProbe,
-    probeCalibrate: hasProbe,
-    zEndstopCalibrate: keys.has('stepper_z'),
+    probeCalibrate: hasTraditionalProbe,
+    zEndstopCalibrate: keys.has('stepper_z') && !isVirtualZEndstop && !hasBeacon,
     pidExtruder: keys.has('extruder'),
     pidBed: keys.has('heater_bed'),
   }

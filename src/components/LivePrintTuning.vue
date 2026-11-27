@@ -102,41 +102,109 @@ const activeToolIdx = computed(() => {
   const idx = props.status?.active
   return Number.isInteger(idx) && idx >= 0 && idx < (props.status?.tools?.length ?? 1) ? idx : 0
 })
-const activeToolObj = computed(() => props.status?.tools?.[activeToolIdx.value] ?? null)
+const lockedPaTool = ref(null)
+const selectedPaTool = computed(() => {
+  const count = props.status?.tools?.length ?? 1
+  if (lockedPaTool.value !== null && lockedPaTool.value >= 0 && lockedPaTool.value < count) {
+    return lockedPaTool.value
+  }
+  return activeToolIdx.value
+})
+const paToolObj = computed(() => props.status?.tools?.[selectedPaTool.value] ?? null)
+
+function parseDraftNum(raw) {
+  if (raw === '' || raw === null || raw === undefined) return null
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : null
+}
+
+function selectPaTool(idx) {
+  lockedPaTool.value = idx
+  paAdvanceDraft.value = null
+  paSmoothDraft.value = null
+}
+
 const paAdvanceValue = computed(() =>
-  paAdvanceDraft.value !== null ? paAdvanceDraft.value : (activeToolObj.value?.pressureAdvance ?? 0),
+  paAdvanceDraft.value !== null ? paAdvanceDraft.value : String(paToolObj.value?.pressureAdvance ?? 0),
 )
 const paSmoothValue = computed(() =>
-  paSmoothDraft.value !== null ? paSmoothDraft.value : (activeToolObj.value?.pressureAdvanceSmoothTime ?? 0.04),
+  paSmoothDraft.value !== null ? paSmoothDraft.value : String(paToolObj.value?.pressureAdvanceSmoothTime ?? 0.04),
 )
+const paDirty = computed(() => paAdvanceDraft.value !== null || paSmoothDraft.value !== null)
+const paValid = computed(() => {
+  const a = parseDraftNum(paAdvanceValue.value)
+  const s = parseDraftNum(paSmoothValue.value)
+  return a != null && a >= 0 && a <= 2 && s != null && s >= 0.005 && s <= 0.2
+})
 
 const motionLimits = computed(() => props.status?.motionLimits ?? null)
-const velValue = computed(() => (velDraft.value !== null ? velDraft.value : (motionLimits.value?.maxVelocity ?? 300)))
-const accelValue = computed(() => (accelDraft.value !== null ? accelDraft.value : (motionLimits.value?.maxAccel ?? 3000)))
+const velValue = computed(() =>
+  velDraft.value !== null ? velDraft.value : String(motionLimits.value?.maxVelocity ?? 300),
+)
+const accelValue = computed(() =>
+  accelDraft.value !== null ? accelDraft.value : String(motionLimits.value?.maxAccel ?? 3000),
+)
 const cruiseValue = computed(() =>
-  cruiseDraft.value !== null ? cruiseDraft.value : (motionLimits.value?.minCruiseRatio ?? 0.5),
+  cruiseDraft.value !== null ? cruiseDraft.value : String(motionLimits.value?.minCruiseRatio ?? 0.5),
 )
 const scvValue = computed(() =>
-  scvDraft.value !== null ? scvDraft.value : (motionLimits.value?.squareCornerVelocity ?? 5),
+  scvDraft.value !== null ? scvDraft.value : String(motionLimits.value?.squareCornerVelocity ?? 5),
 )
+const velDirty = computed(
+  () => velDraft.value !== null || accelDraft.value !== null || cruiseDraft.value !== null || scvDraft.value !== null,
+)
+const velValid = computed(() => {
+  const v = parseDraftNum(velValue.value)
+  const a = parseDraftNum(accelValue.value)
+  const s = parseDraftNum(scvValue.value)
+  const maxV = motionLimits.value?.configMaxVelocity ?? 1000
+  const maxA = motionLimits.value?.configMaxAccel ?? 50000
+  if (v == null || v < 1 || v > maxV) return false
+  if (a == null || a < 50 || a > maxA) return false
+  if (s == null || s < 0.5 || s > 50) return false
+  if (motionLimits.value?.minCruiseRatio != null) {
+    const c = parseDraftNum(cruiseValue.value)
+    if (c == null || c < 0 || c >= 1) return false
+  }
+  return true
+})
 
 const hasRetraction = computed(() => Boolean(props.status?.capabilities?.firmwareRetraction && props.status?.firmwareRetraction))
 const retractLenValue = computed(() =>
-  retractLenDraft.value !== null ? retractLenDraft.value : (props.status?.firmwareRetraction?.retractLength ?? 0.5),
+  retractLenDraft.value !== null ? retractLenDraft.value : String(props.status?.firmwareRetraction?.retractLength ?? 0.5),
 )
 const retractSpdValue = computed(() =>
-  retractSpdDraft.value !== null ? retractSpdDraft.value : (props.status?.firmwareRetraction?.retractSpeed ?? 35),
+  retractSpdDraft.value !== null ? retractSpdDraft.value : String(props.status?.firmwareRetraction?.retractSpeed ?? 35),
 )
 const unretractExtraValue = computed(() =>
   unretractExtraDraft.value !== null
     ? unretractExtraDraft.value
-    : (props.status?.firmwareRetraction?.unretractExtraLength ?? 0),
+    : String(props.status?.firmwareRetraction?.unretractExtraLength ?? 0),
 )
 const unretractSpdValue = computed(() =>
   unretractSpdDraft.value !== null
     ? unretractSpdDraft.value
-    : (props.status?.firmwareRetraction?.unretractSpeed ?? 35),
+    : String(props.status?.firmwareRetraction?.unretractSpeed ?? 35),
 )
+const retractDirty = computed(
+  () =>
+    retractLenDraft.value !== null ||
+    retractSpdDraft.value !== null ||
+    unretractExtraDraft.value !== null ||
+    unretractSpdDraft.value !== null,
+)
+const retractValid = computed(() => {
+  const rl = parseDraftNum(retractLenValue.value)
+  const rs = parseDraftNum(retractSpdValue.value)
+  const ue = parseDraftNum(unretractExtraValue.value)
+  const us = parseDraftNum(unretractSpdValue.value)
+  return (
+    rl != null && rl >= 0 && rl <= 15 &&
+    rs != null && rs >= 1 && rs <= 200 &&
+    ue != null && ue >= 0 && ue <= 5 &&
+    us != null && us >= 1 && us <= 200
+  )
+})
 
 const actualSpeed = computed(() => props.status?.speedPercent ?? null)
 const speedValue = computed(() => (speedDraft.value != null ? speedDraft.value : actualSpeed.value))
@@ -152,11 +220,12 @@ const canResetZ = computed(
     (props.status?.capabilities?.zAdjustReset || !props.status?.capabilities?.perToolZAdjust),
 )
 const canSaveZ = computed(() => !saveZReason.value && Boolean(props.status?.capabilities?.zOffsetSaveTarget))
-const saveZTargetLabel = computed(() =>
-  props.status?.capabilities?.zOffsetSaveTarget === 'probe'
-    ? 'Z-Offset für Probe vormerken (danach SAVE_CONFIG)'
-    : 'Z-Offset für Endstop vormerken (danach SAVE_CONFIG)',
-)
+const saveZTargetLabel = computed(() => {
+  const target = props.status?.capabilities?.zOffsetSaveTarget
+  if (target === 'beacon') return 'Z-Offset für Beacon vormerken (danach SAVE_CONFIG)'
+  if (target === 'probe') return 'Z-Offset für Probe vormerken (danach SAVE_CONFIG)'
+  return 'Z-Offset für Endstop vormerken (danach SAVE_CONFIG)'
+})
 
 const formattedZOffset = computed(() => {
   if (zOffset.value == null) return '—'
@@ -215,12 +284,12 @@ async function applyFlow(percent) {
 }
 
 async function applyPressureAdvance() {
-  if (paReason.value) return
-  const advance = Number(paAdvanceValue.value)
-  const smoothTime = Number(paSmoothValue.value)
-  if (!Number.isFinite(advance) || !Number.isFinite(smoothTime)) return
+  if (paReason.value || !paDirty.value || !paValid.value) return
+  const advance = parseDraftNum(paAdvanceValue.value)
+  const smoothTime = parseDraftNum(paSmoothValue.value)
+  if (advance == null || smoothTime == null) return
   const payload = { action: 'tune_pressure_advance', advance, smoothTime }
-  if ((props.status?.toolCount ?? 1) > 1) payload.tool = activeToolIdx.value
+  if ((props.status?.toolCount ?? 1) > 1) payload.tool = selectedPaTool.value
   if (await props.send(payload)) {
     paAdvanceDraft.value = null
     paSmoothDraft.value = null
@@ -228,16 +297,16 @@ async function applyPressureAdvance() {
 }
 
 async function applyVelocityLimits() {
-  if (velReason.value) return
+  if (velReason.value || !velDirty.value || !velValid.value) return
   const payload = { action: 'tune_velocity_limits' }
-  const v = Number(velValue.value)
-  const a = Number(accelValue.value)
-  const c = Number(cruiseValue.value)
-  const s = Number(scvValue.value)
-  if (Number.isFinite(v)) payload.velocity = v
-  if (Number.isFinite(a)) payload.accel = a
-  if (Number.isFinite(c) && motionLimits.value?.minCruiseRatio != null) payload.minCruiseRatio = c
-  if (Number.isFinite(s)) payload.squareCornerVelocity = s
+  const v = parseDraftNum(velValue.value)
+  const a = parseDraftNum(accelValue.value)
+  const c = parseDraftNum(cruiseValue.value)
+  const s = parseDraftNum(scvValue.value)
+  if (v != null) payload.velocity = v
+  if (a != null) payload.accel = a
+  if (c != null && motionLimits.value?.minCruiseRatio != null) payload.minCruiseRatio = c
+  if (s != null) payload.squareCornerVelocity = s
   if (await props.send(payload)) {
     velDraft.value = null
     accelDraft.value = null
@@ -247,13 +316,13 @@ async function applyVelocityLimits() {
 }
 
 async function applyRetraction() {
-  if (retractReason.value || !hasRetraction.value) return
+  if (retractReason.value || !hasRetraction.value || !retractDirty.value || !retractValid.value) return
   const payload = {
     action: 'tune_retraction',
-    retractLength: Number(retractLenValue.value),
-    retractSpeed: Number(retractSpdValue.value),
-    unretractExtraLength: Number(unretractExtraValue.value),
-    unretractSpeed: Number(unretractSpdValue.value),
+    retractLength: parseDraftNum(retractLenValue.value),
+    retractSpeed: parseDraftNum(retractSpdValue.value),
+    unretractExtraLength: parseDraftNum(unretractExtraValue.value),
+    unretractSpeed: parseDraftNum(unretractSpdValue.value),
   }
   if (await props.send(payload)) {
     retractLenDraft.value = null
@@ -491,7 +560,17 @@ async function requestOrRunExclude(name) {
         <form class="tuning-adv-card" @submit.prevent="applyPressureAdvance">
           <div class="tuning-block-head">
             <span>{{ t('Pressure Advance') }}</span>
-            <small v-if="(status?.toolCount ?? 1) > 1" class="tuning-tool-tag">T{{ activeToolIdx }}</small>
+            <div v-if="(status?.toolCount ?? 1) > 1" class="segmented tuning-pa-tools" :aria-label="t('Werkzeug für Pressure Advance')">
+              <button
+                v-for="idx in (status?.toolCount ?? 1)"
+                :key="idx - 1"
+                type="button"
+                :aria-pressed="selectedPaTool === idx - 1"
+                @click="selectPaTool(idx - 1)"
+              >
+                T{{ idx - 1 }}
+              </button>
+            </div>
           </div>
           <div class="tuning-adv-fields">
             <label>
@@ -503,7 +582,10 @@ async function requestOrRunExclude(name) {
                 step="0.005"
                 :value="paAdvanceValue"
                 :disabled="!!paReason"
-                @input="paAdvanceDraft = Number($event.target.value)"
+                @input="
+                  lockedPaTool = selectedPaTool;
+                  paAdvanceDraft = $event.target.value
+                "
               />
             </label>
             <label>
@@ -515,10 +597,13 @@ async function requestOrRunExclude(name) {
                 step="0.005"
                 :value="paSmoothValue"
                 :disabled="!!paReason"
-                @input="paSmoothDraft = Number($event.target.value)"
+                @input="
+                  lockedPaTool = selectedPaTool;
+                  paSmoothDraft = $event.target.value
+                "
               />
             </label>
-            <button type="submit" class="subtle-button tuning-adv-apply" :disabled="!!paReason">
+            <button type="submit" class="subtle-button tuning-adv-apply" :disabled="!!paReason || !paDirty || !paValid">
               <Check :size="13" />{{ t('Übernehmen') }}
             </button>
           </div>
@@ -538,7 +623,7 @@ async function requestOrRunExclude(name) {
                 step="10"
                 :value="velValue"
                 :disabled="!!velReason"
-                @input="velDraft = Number($event.target.value)"
+                @input="velDraft = $event.target.value"
               />
             </label>
             <label>
@@ -550,7 +635,7 @@ async function requestOrRunExclude(name) {
                 step="250"
                 :value="accelValue"
                 :disabled="!!velReason"
-                @input="accelDraft = Number($event.target.value)"
+                @input="accelDraft = $event.target.value"
               />
             </label>
             <label v-if="motionLimits.minCruiseRatio != null">
@@ -562,7 +647,7 @@ async function requestOrRunExclude(name) {
                 step="0.05"
                 :value="cruiseValue"
                 :disabled="!!velReason"
-                @input="cruiseDraft = Number($event.target.value)"
+                @input="cruiseDraft = $event.target.value"
               />
             </label>
             <label>
@@ -574,10 +659,10 @@ async function requestOrRunExclude(name) {
                 step="0.5"
                 :value="scvValue"
                 :disabled="!!velReason"
-                @input="scvDraft = Number($event.target.value)"
+                @input="scvDraft = $event.target.value"
               />
             </label>
-            <button type="submit" class="subtle-button tuning-adv-apply" :disabled="!!velReason">
+            <button type="submit" class="subtle-button tuning-adv-apply" :disabled="!!velReason || !velDirty || !velValid">
               <Check :size="13" />{{ t('Übernehmen') }}
             </button>
           </div>
@@ -597,7 +682,7 @@ async function requestOrRunExclude(name) {
                 step="0.05"
                 :value="retractLenValue"
                 :disabled="!!retractReason"
-                @input="retractLenDraft = Number($event.target.value)"
+                @input="retractLenDraft = $event.target.value"
               />
             </label>
             <label>
@@ -609,7 +694,7 @@ async function requestOrRunExclude(name) {
                 step="1"
                 :value="retractSpdValue"
                 :disabled="!!retractReason"
-                @input="retractSpdDraft = Number($event.target.value)"
+                @input="retractSpdDraft = $event.target.value"
               />
             </label>
             <label>
@@ -621,7 +706,7 @@ async function requestOrRunExclude(name) {
                 step="0.05"
                 :value="unretractExtraValue"
                 :disabled="!!retractReason"
-                @input="unretractExtraDraft = Number($event.target.value)"
+                @input="unretractExtraDraft = $event.target.value"
               />
             </label>
             <label>
@@ -633,10 +718,14 @@ async function requestOrRunExclude(name) {
                 step="1"
                 :value="unretractSpdValue"
                 :disabled="!!retractReason"
-                @input="unretractSpdDraft = Number($event.target.value)"
+                @input="unretractSpdDraft = $event.target.value"
               />
             </label>
-            <button type="submit" class="subtle-button tuning-adv-apply" :disabled="!!retractReason">
+            <button
+              type="submit"
+              class="subtle-button tuning-adv-apply"
+              :disabled="!!retractReason || !retractDirty || !retractValid"
+            >
               <Check :size="13" />{{ t('Übernehmen') }}
             </button>
           </div>

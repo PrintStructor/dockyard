@@ -6,6 +6,21 @@ export function useControls(refresh) {
   const feedback = ref(null)
   let lastResultId = null
   let initialized = false
+  let dismissTimer = null
+
+  function setFeedback(next, { autoDismiss = false } = {}) {
+    if (dismissTimer) {
+      clearTimeout(dismissTimer)
+      dismissTimer = null
+    }
+    feedback.value = next
+    if (autoDismiss && next?.ok) {
+      dismissTimer = setTimeout(() => {
+        if (feedback.value === next) feedback.value = null
+        dismissTimer = null
+      }, 4200)
+    }
+  }
 
   function syncServerResult(result) {
     if (!initialized) {
@@ -16,7 +31,7 @@ export function useControls(refresh) {
     if (!result || result.id == null || result.id === lastResultId) return
     lastResultId = result.id
     if (result.message) {
-      feedback.value = { ok: !!result.ok, message: result.message }
+      setFeedback({ ok: !!result.ok, message: result.message }, { autoDismiss: !!result.ok })
     }
   }
 
@@ -27,10 +42,10 @@ export function useControls(refresh) {
     if (stop) stopping.value = true
     else pending.value = true
 
-    feedback.value = {
+    setFeedback({
       ok: true,
       message: stop ? 'Not-Aus wird gesendet …' : 'Befehl wird geprüft und ausgeführt …',
-    }
+    })
 
     try {
       const timeoutMs = stop ? 12_000 : command.action === 'console' ? 610_000 : 60_000
@@ -45,16 +60,16 @@ export function useControls(refresh) {
       })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error)
-      feedback.value = { ok: true, message: data.message }
+      setFeedback({ ok: true, message: data.message }, { autoDismiss: true })
       return true
     } catch (error) {
-      feedback.value = {
+      setFeedback({
         ok: false,
         message:
           error.name === 'TypeError' || error.name === 'TimeoutError'
             ? 'Verbindung unterbrochen. Das Ergebnis ist unbekannt. Drucker prüfen, bevor du erneut bedienst.'
             : error.message,
-      }
+      })
       return false
     } finally {
       if (stop) stopping.value = false
@@ -64,6 +79,10 @@ export function useControls(refresh) {
   }
 
   function clearFeedback() {
+    if (dismissTimer) {
+      clearTimeout(dismissTimer)
+      dismissTimer = null
+    }
     feedback.value = null
     lastResultId = null
     initialized = false

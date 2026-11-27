@@ -2,7 +2,7 @@ import { normalizeStatus } from './status.mjs'
 import { ControlError } from './control.mjs'
 import { ledProfiles, auxActionReason } from '../src/aux-action-state.mjs'
 
-export const auxActions = ['led', 'pause', 'resume', 'initialize', 'watch_start', 'watch_stop']
+export const auxActions = ['led', 'pause', 'resume', 'initialize', 'initialize_recover', 'watch_start', 'watch_stop']
 
 export function auxCapabilities(config) {
   const has = name => !!config[`gcode_macro ${name.toLowerCase()}`]
@@ -48,11 +48,11 @@ export function auxCommand(input, raw, capabilities) {
     }
   }
 
-  if (input.action === 'initialize') {
+  if (input.action === 'initialize' || input.action === 'initialize_recover') {
     return {
       endpoint: '/printer/gcode/script',
       body: { script: 'INITIALIZE_TOOLCHANGER\nM400' },
-      label: 'Toolchanger initialisieren',
+      label: input.action === 'initialize_recover' ? 'Toolchanger wiederherstellen' : 'Toolchanger initialisieren',
       async: true,
     }
   }

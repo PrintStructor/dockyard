@@ -105,6 +105,24 @@ test('initialization permits startup and unique detection mismatch but not print
  for(const printState of ['printing','paused']){raw.print_stats.state=printState;assert.throws(()=>commandFor({action:'initialize'},raw),/gesperrt/)}
  raw.print_stats.state='standby';raw['tool T0']={detect_state:1};raw['tool T1']={detect_state:1};assert.throws(()=>commandFor({action:'initialize'},raw),/Eindeutige/)
 })
+test('initialize_recover unlocks tool-drop recovery during paused error state while keeping normal initialize strict',()=>{
+ const raw=state()
+ raw.print_stats.state='paused'
+ raw.toolchanger.status='error'
+ // Normal initialize stays blocked in paused state
+ assert.throws(()=>commandFor({action:'initialize'},raw),/gesperrt/)
+ // Explicit recovery unlocks INITIALIZE_TOOLCHANGER after mechanical check
+ const rec=commandFor({action:'initialize_recover'},raw)
+ assert.equal(rec.body.script,'INITIALIZE_TOOLCHANGER\nM400')
+ assert.equal(rec.async,true)
+ // Blocked while actively printing or when no error exists
+ raw.print_stats.state='printing'
+ assert.throws(()=>commandFor({action:'initialize_recover'},raw),/pausieren/)
+ raw.print_stats.state='paused'
+ raw.toolchanger.status='ready'
+ assert.throws(()=>commandFor({action:'initialize_recover'},raw),/Kein Toolchanger-Fehler/)
+})
+
 test('load watcher arms with configured temperature and all six sensors; finish remains available during automatic motion',()=>{
  const raw=state();assert.equal(commandFor({action:'watch_start'},raw).body.script,'LOAD_WATCH')
  for(const temperature of [0,169,300,'240'])assert.throws(()=>commandFor({action:'watch_start',temperature},raw),/parameter/i)

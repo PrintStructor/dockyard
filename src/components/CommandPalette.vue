@@ -33,6 +33,7 @@ const dialogEl = ref(null)
 const inputEl = ref(null)
 const query = ref('')
 const activeIdx = ref(0)
+const confirmingId = ref('')
 
 watch(
   () => props.open,
@@ -40,10 +41,12 @@ watch(
     if (isOpen) {
       query.value = ''
       activeIdx.value = 0
+      confirmingId.value = ''
       dialogEl.value?.showModal()
       await nextTick()
       inputEl.value?.focus()
     } else if (dialogEl.value?.open) {
+      confirmingId.value = ''
       dialogEl.value.close()
     }
   },
@@ -86,7 +89,7 @@ const items = computed(() => {
     {
       id: 'nav-print',
       group: 'Ansichten',
-      label: t('Druck & 3D-Vorschau.'),
+      label: t('Druck & 3D-Vorschau'),
       hint: t('Dateien, Warteschlange & 3D-G-Code'),
       icon: Printer,
       run: () => emit('navigate', { tab: 'print' }),
@@ -112,6 +115,14 @@ const items = computed(() => {
         ]
       : []),
     {
+      id: 'nav-sys-overview',
+      group: 'Ansichten',
+      label: `${t('System')} · ${t('Übersicht')}`,
+      hint: t('Host, Dienste, Strom & MCU'),
+      icon: SlidersHorizontal,
+      run: () => emit('navigate', { tab: 'system', sub: 'overview' }),
+    },
+    {
       id: 'nav-cal',
       group: 'Ansichten',
       label: `${t('System')} · ${t('Kalibrierung')}`,
@@ -126,6 +137,14 @@ const items = computed(() => {
       hint: 'printer.cfg, moonraker.conf',
       icon: SlidersHorizontal,
       run: () => emit('navigate', { tab: 'system', sub: 'config' }),
+    },
+    {
+      id: 'nav-maint',
+      group: 'Ansichten',
+      label: `${t('System')} · ${t('Wartung')}`,
+      hint: t('Updates & Logs'),
+      icon: SlidersHorizontal,
+      run: () => emit('navigate', { tab: 'system', sub: 'maintenance' }),
     },
     {
       id: 'nav-console',
@@ -169,6 +188,7 @@ const items = computed(() => {
       label: t('Alle Achsen homen'),
       hint: 'G28',
       icon: Home,
+      requiresConfirm: true,
       run: () => emit('command', { action: 'home', axis: 'all' }),
     })
     if (props.status?.saveConfigPending) {
@@ -178,6 +198,7 @@ const items = computed(() => {
         label: 'SAVE_CONFIG',
         hint: t('Kalibrierungswerte speichern & Klipper neu starten'),
         icon: Save,
+        requiresConfirm: true,
         run: () => emit('command', { action: 'save_config' }),
       })
     }
@@ -193,7 +214,7 @@ const items = computed(() => {
     })
   }
 
-  // Public Macros (non-parameterized run directly; parameterized jump to Cockpit/Console)
+  // Public Macros (non-parameterized require 2-step confirm; parameterized jump to Console)
   for (const m of props.status?.publicMacros ?? []) {
     const hasParams = Boolean(m.params?.length)
     list.push({
@@ -205,6 +226,7 @@ const items = computed(() => {
         : m.description || t('Klipper-Makro'),
       icon: Terminal,
       disabled: !hasParams && !canMotion.value,
+      requiresConfirm: !hasParams,
       run: () => {
         if (hasParams) {
           emit('navigate', { tab: 'console' })
@@ -228,15 +250,22 @@ const filtered = computed(() => {
 
 watch(filtered, () => {
   activeIdx.value = 0
+  confirmingId.value = ''
 })
 
 function move(delta) {
   if (!filtered.value.length) return
+  confirmingId.value = ''
   activeIdx.value = (activeIdx.value + delta + filtered.value.length) % filtered.value.length
 }
 
 function selectItem(item) {
   if (!item || item.disabled) return
+  if (item.requiresConfirm && confirmingId.value !== item.id) {
+    confirmingId.value = item.id
+    return
+  }
+  confirmingId.value = ''
   emit('close')
   item.run()
 }
@@ -289,7 +318,7 @@ function onKeydown(event) {
         type="button"
         role="option"
         class="cmd-palette-row"
-        :class="{ active: idx === activeIdx, disabled: item.disabled }"
+        :class="{ active: idx === activeIdx, disabled: item.disabled, confirming: confirmingId === item.id }"
         :aria-selected="idx === activeIdx"
         :disabled="item.disabled"
         @mouseenter="activeIdx = idx"
@@ -301,7 +330,10 @@ function onKeydown(event) {
           <strong>{{ item.label }}</strong>
         </span>
         <span class="cmd-palette-row-meta">
-          <small v-if="item.hint">{{ item.hint }}</small>
+          <small v-if="confirmingId === item.id" class="cmd-confirm-hint">
+            {{ t('Erneut Enter / Klicken zum Ausführen') }}
+          </small>
+          <small v-else-if="item.hint">{{ item.hint }}</small>
           <span class="cmd-palette-group">{{ t(item.group) }}</span>
         </span>
       </button>

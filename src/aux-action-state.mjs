@@ -97,6 +97,17 @@ export function auxActionReason(status, action, online = true, pending = false) 
     return ''
   }
 
+  if (action === 'initialize_recover') {
+    if (!status.capabilities?.initialize) return 'Toolchanger ist nicht konfiguriert.'
+    if (status.toolchangerState !== 'error') return 'Kein Toolchanger-Fehler vorhanden.'
+    if (status.printState === 'printing' || status.idleState === 'Printing') {
+      return 'Während aktiver Bewegung oder Druck gesperrt. Zuerst pausieren.'
+    }
+    if (!status.hasDetection || status.detectionConflict) return 'Eindeutige Werkzeugerkennung erforderlich.'
+    if (status.loadWatchActive) return 'Einlegehilfe zuerst mit Fertig beenden.'
+    return ''
+  }
+
   return 'Unbekannte Aktion.'
 }
 

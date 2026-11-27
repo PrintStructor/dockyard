@@ -1126,3 +1126,91 @@ test('Paket C2 HTTP: endstops, gcode dir metadata/mkdir/move, presets POST, conf
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('Paket D1 safety: multi-tool extrude dock-guard & extruder restore + hardware-accurate Z-offset/probe/endstop detection', async () => {
+  const { calibrationCapabilities } = await import('../server/calibration.mjs')
+
+  // 1. Multi-tool extrude blocks docked tool and restores previous extruder when switching (incl. tool 0!)
+  const tcRaw = {
+    webhooks: { state: 'ready' },
+    print_stats: { state: 'paused' },
+    idle_timeout: { state: 'Idle' },
+    toolchanger: { has_detection: true, tool_number: 0, detected_tool_number: 0, status: 'ready' },
+    toolhead: { homed_axes: 'xyz', extruder: 'extruder2' },
+    extruder: { temperature: 220, target: 220, can_extrude: true },
+    extruder1: { temperature: 220, target: 220, can_extrude: true },
+    extruder2: { temperature: 220, target: 220, can_extrude: true },
+    configfile: {
+      settings: {
+        toolchanger: {},
+        extruder: { max_temp: 300, min_extrude_temp: 170 },
+        extruder1: { max_temp: 300, min_extrude_temp: 170 },
+        extruder2: { max_temp: 300, min_extrude_temp: 170 },
+        heater_bed: { max_temp: 120 },
+        stepper_z: { endstop_pin: 'probe:z_virtual_endstop' },
+        beacon: {},
+      },
+    },
+  }
+  // Docked T1 rejected (prevents extruding into silicone dock pad!)
+  assert.throws(() => commandFor({ action: 'extrude', tool: 1, distance: 10, speed: 5 }, tcRaw), err => err.status === 409)
+  // Mounted T0 while extruder2 is active switches to extruder AND restores extruder2 afterwards
+  const ext0 = commandFor({ action: 'extrude', tool: 0, distance: 10, speed: 5 }, tcRaw)
+  assert.ok(ext0.body.script.startsWith('ACTIVATE_EXTRUDER EXTRUDER=extruder\n'))
+  assert.ok(ext0.body.script.endsWith('\nACTIVATE_EXTRUDER EXTRUDER=extruder2'))
+  // Toolchanger disables zOffsetSaveTarget so per-tool homing_origin isn't misapplied
+  assert.equal(capabilities(tcRaw).zOffsetSaveTarget, null)
+
+  // 2. Single-tool Beacon routes save_z_offset to BEACON_OFFSET_APPLY & disables PROBE_CALIBRATE / Z_ENDSTOP_CALIBRATE
+  const beacon1Tool = singleToolTridentRaw({
+    gcode_move: { homing_origin: [0, 0, -0.04, 0] },
+    configfile: {
+      settings: {
+        extruder: { max_temp: 300, min_extrude_temp: 170 },
+        heater_bed: { max_temp: 120 },
+        stepper_z: { endstop_pin: 'probe:z_virtual_endstop' },
+        beacon: {},
+      },
+    },
+  })
+  assert.equal(capabilities(beacon1Tool).zOffsetSaveTarget, 'beacon')
+  assert.equal(commandFor({ action: 'save_z_offset' }, beacon1Tool).body.script, 'BEACON_OFFSET_APPLY')
+  const beaconCalCaps = calibrationCapabilities(beacon1Tool.configfile.settings)
+  assert.equal(beaconCalCaps.probeCalibrate, false)
+  assert.equal(beaconCalCaps.zEndstopCalibrate, false)
+  assert.equal(beaconCalCaps.probeAccuracy, true)
+
+  // 3. Single-tool Voron 2.4 with physical Z endstop + Klicky probe routes save_z_offset to Z_OFFSET_APPLY_ENDSTOP
+  const physZWithProbe = singleToolTridentRaw({
+    gcode_move: { homing_origin: [0, 0, -0.04, 0] },
+    configfile: {
+      settings: {
+        extruder: { max_temp: 300, min_extrude_temp: 170 },
+        heater_bed: { max_temp: 120 },
+        stepper_z: { endstop_pin: '^PG10' },
+        probe: {},
+      },
+    },
+  })
+  assert.equal(capabilities(physZWithProbe).zOffsetSaveTarget, 'endstop')
+  assert.equal(commandFor({ action: 'save_z_offset' }, physZWithProbe).body.script, 'Z_OFFSET_APPLY_ENDSTOP')
+  assert.equal(calibrationCapabilities(physZWithProbe.configfile.settings).zEndstopCalibrate, true)
+  assert.equal(calibrationCapabilities(physZWithProbe.configfile.settings).probeCalibrate, true)
+
+  // 4. Single-tool Tap / virtual endstop disables Z_ENDSTOP_CALIBRATE & routes save_z_offset to Z_OFFSET_APPLY_PROBE
+  const tapVirtual = singleToolTridentRaw({
+    gcode_move: { homing_origin: [0, 0, -0.04, 0] },
+    configfile: {
+      settings: {
+        extruder: { max_temp: 300, min_extrude_temp: 170 },
+        heater_bed: { max_temp: 120 },
+        stepper_z: { endstop_pin: 'probe:z_virtual_endstop' },
+        probe: {},
+      },
+    },
+  })
+  assert.equal(capabilities(tapVirtual).zOffsetSaveTarget, 'probe')
+  assert.equal(commandFor({ action: 'save_z_offset' }, tapVirtual).body.script, 'Z_OFFSET_APPLY_PROBE')
+  assert.equal(calibrationCapabilities(tapVirtual.configfile.settings).zEndstopCalibrate, false)
+  assert.equal(calibrationCapabilities(tapVirtual.configfile.settings).probeCalibrate, true)
+})

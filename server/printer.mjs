@@ -427,7 +427,7 @@ function getControlState() {
 
 function cachedCapabilities(raw) {
   const fanSignature = Object.keys(raw)
-    .filter(name => name === 'fan' || /^fan_generic [A-Za-z0-9_]+$/.test(name))
+    .filter(name => name === 'fan' || /^fan_generic [A-Za-z0-9_-]+$/.test(name))
     .sort()
     .join(',')
   const load = raw['gcode_macro _LOAD_SETTINGS']?.temp_default ?? null

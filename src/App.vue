@@ -639,6 +639,38 @@ const canRunSaveConfig = computed(
     status.value?.idleState !== 'Printing',
 )
 
+const showToolchangerErrorBanner = computed(
+  () => online.value && status.value?.isToolchanger && status.value?.toolchangerState === 'error',
+)
+const toolchangerRecoverReason = computed(() =>
+  auxActionReason(status.value, 'initialize_recover', online.value, pending.value),
+)
+const confirmTcRecover = ref(false)
+let tcRecoverTimer = null
+
+function cancelTcRecoverConfirm() {
+  confirmTcRecover.value = false
+  clearTimeout(tcRecoverTimer)
+  tcRecoverTimer = null
+}
+
+function requestTcRecoverConfirm() {
+  if (toolchangerRecoverReason.value) return
+  confirmTcRecover.value = true
+  clearTimeout(tcRecoverTimer)
+  tcRecoverTimer = setTimeout(cancelTcRecoverConfirm, 6000)
+}
+
+async function runToolchangerRecover() {
+  if (toolchangerRecoverReason.value) return
+  cancelTcRecoverConfirm()
+  await send({ action: 'initialize_recover' })
+}
+
+watch(showToolchangerErrorBanner, shown => {
+  if (!shown) cancelTcRecoverConfirm()
+})
+
 watch(showSaveConfigBanner, shown => {
   if (!shown) cancelSaveConfigConfirm()
 })
@@ -1206,6 +1238,52 @@ async function acknowledgeUncertain() {
         </ul>
       </details>
 
+      <div v-if="showToolchangerErrorBanner" class="klipper-recovery-banner" role="alert">
+        <div class="klipper-recovery-copy">
+          <AlertTriangle :size="18" />
+          <div>
+            <strong>{{ t('Toolchanger-Fehler · Werkzeug prüfen') }}</strong>
+            <p>
+              {{
+                t(
+                  'Der Toolchanger meldet einen Fehler (z. B. Werkzeug abgefallen oder Wechsel abgebrochen). Prüfe das Werkzeug mechanisch am Druckkopf und initialisiere den Toolchanger danach neu.',
+                )
+              }}
+            </p>
+          </div>
+        </div>
+        <div class="klipper-recovery-actions" @keydown.esc="cancelTcRecoverConfirm">
+          <template v-if="confirmTcRecover">
+            <button
+              type="button"
+              class="confirm-button"
+              :disabled="!!toolchangerRecoverReason"
+              @click="runToolchangerRecover"
+            >
+              <RotateCw :size="14" />{{ t('Werkzeug geprüft · jetzt neu initialisieren') }}
+            </button>
+            <button
+              type="button"
+              class="subtle-button recovery-cancel-btn"
+              :aria-label="t('Abbrechen')"
+              @click="cancelTcRecoverConfirm"
+            >
+              <X :size="14" />
+            </button>
+          </template>
+          <button
+            v-else
+            type="button"
+            class="subtle-button"
+            :disabled="!!toolchangerRecoverReason"
+            :title="toolchangerRecoverReason ? t(toolchangerRecoverReason) : t('Toolchanger nach mechanischer Prüfung wiederherstellen')"
+            @click="requestTcRecoverConfirm"
+          >
+            <RotateCw :size="14" />{{ t('Toolchanger wiederherstellen') }}
+          </button>
+        </div>
+      </div>
+
       <div v-if="status?.detectionMismatch && !status?.homingCanInitialize" class="notice" role="alert">
         <AlertTriangle :size="18" />
         <span>
@@ -1255,7 +1333,7 @@ async function acknowledgeUncertain() {
 
       <Transition name="toast-slide">
         <div
-          v-if="feedback && tab !== 'controls' && !activeJob && !status?.control?.job?.uncertain"
+          v-if="feedback && !activeJob && !status?.control?.job?.uncertain"
           :class="['command-feedback', 'floating-toast', { failed: !feedback.ok }]"
           role="status"
           aria-live="polite"
@@ -1447,6 +1525,8 @@ async function acknowledgeUncertain() {
                 :ready="status?.klipperState === 'ready'"
                 :pending="pending || !!status?.control?.job"
                 :send="send"
+                :steppers="displayMode"
+                :step-size="5"
               />
             </div>
             <div class="tool-live-detail">

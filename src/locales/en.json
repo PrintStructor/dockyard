@@ -1597,5 +1597,20 @@
   "Datei konnte nicht umbenannt werden.": "Could not rename file.",
   "Preset konnte nicht gespeichert werden.": "Could not save preset.",
   "Preset konnte nicht gelöscht werden.": "Could not delete preset.",
-  "Zentrale Systemkonfigurationen können nicht gelöscht werden.": "Core system configuration files cannot be deleted."
+  "Zentrale Systemkonfigurationen können nicht gelöscht werden.": "Core system configuration files cannot be deleted.",
+  "Toolchanger-Fehler · Werkzeug prüfen": "Toolchanger error · inspect tool",
+  "Der Toolchanger meldet einen Fehler (z. B. Werkzeug abgefallen oder Wechsel abgebrochen). Prüfe das Werkzeug mechanisch am Druckkopf und initialisiere den Toolchanger danach neu.": "The toolchanger reported an error (e.g. dropped tool or aborted change). Inspect the tool mechanically on the carriage, then re-initialize the toolchanger.",
+  "Werkzeug geprüft · jetzt neu initialisieren": "Tool inspected · re-initialize now",
+  "Toolchanger nach mechanischer Prüfung wiederherstellen": "Recover toolchanger after mechanical inspection",
+  "Toolchanger wiederherstellen": "Recover toolchanger",
+  "Kein Toolchanger-Fehler vorhanden.": "No toolchanger error present.",
+  "Während aktiver Bewegung oder Druck gesperrt. Zuerst pausieren.": "Locked during active motion or printing. Pause first.",
+  "Dieses Werkzeug ist nicht aufgenommen. Zum manuellen Extrudieren zuerst aufnehmen.": "This tool is not mounted. Pick it up before manual extrusion.",
+  "Z-Offset für Beacon vormerken (danach SAVE_CONFIG)": "Stage Z offset for Beacon (run SAVE_CONFIG afterwards)",
+  "Z-Offset für Beacon übernehmen": "Apply Z offset to Beacon",
+  "Druck & 3D-Vorschau": "Print & 3D preview",
+  "Host, Dienste, Strom & MCU": "Host, services, power & MCU",
+  "Updates & Logs": "Updates & logs",
+  "Erneut Enter / Klicken zum Ausführen": "Press Enter / click again to run",
+  "Werkzeug für Pressure Advance": "Tool for Pressure Advance"
 }

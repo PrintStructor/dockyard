@@ -352,6 +352,9 @@ export function commandFor(input, raw) {
       fail('Extrusionsgeschwindigkeit muss zwischen 1 und 30 mm/s liegen.')
     }
     const extruderKey = toolId ? `extruder${toolId}` : 'extruder'
+    if (limits.isToolchanger && raw.toolchanger?.tool_number !== toolId) {
+      fail('Dieses Werkzeug ist nicht aufgenommen. Zum manuellen Extrudieren zuerst aufnehmen.', 409)
+    }
     const minTemp = limits.extrusionMin?.[toolId] ?? 170
     if (raw[extruderKey]?.can_extrude !== true) {
       fail(`Extruder zu kalt — mindestens ${minTemp} °C erforderlich.`, 409)
@@ -359,11 +362,18 @@ export function commandFor(input, raw) {
     const distFormatted = Number(dist.toFixed(2))
     const feed = Math.round(speed * 60)
     const absLabel = Math.abs(distFormatted)
-    const prefix = limits.isToolchanger && toolId > 0 ? `ACTIVATE_EXTRUDER EXTRUDER=${extruderKey}\n` : ''
+    const prevExtruder = typeof raw.toolhead?.extruder === 'string' && raw.toolhead.extruder ? raw.toolhead.extruder : null
+    const needSwitch =
+      limits.isToolchanger && (prevExtruder ? prevExtruder !== extruderKey : toolId > 0)
+    const prefix = needSwitch ? `ACTIVATE_EXTRUDER EXTRUDER=${extruderKey}\n` : ''
+    const suffix =
+      needSwitch && prevExtruder && /^extruder([1-7])?$/.test(prevExtruder)
+        ? `\nACTIVATE_EXTRUDER EXTRUDER=${prevExtruder}`
+        : ''
     return {
       endpoint: '/printer/gcode/script',
       body: {
-        script: `${prefix}SAVE_GCODE_STATE NAME=DOCKYARD_UI_EXTRUDE\nM83\nG1 E${distFormatted} F${feed}\nM400\nRESTORE_GCODE_STATE NAME=DOCKYARD_UI_EXTRUDE MOVE=0`,
+        script: `${prefix}SAVE_GCODE_STATE NAME=DOCKYARD_UI_EXTRUDE\nM83\nG1 E${distFormatted} F${feed}\nM400\nRESTORE_GCODE_STATE NAME=DOCKYARD_UI_EXTRUDE MOVE=0${suffix}`,
       },
       label: `${distFormatted > 0 ? 'Extrudieren' : 'Einziehen'} ${absLabel} mm`,
       async: true,

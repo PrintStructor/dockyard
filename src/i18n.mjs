@@ -24,12 +24,24 @@ const storage = () => {
 export const language = ref(savedLanguage(storage()))
 export const locale = computed(() => (language.value === 'en' ? 'en-GB' : 'de-DE'))
 let currentPrinterName = ''
+let currentIsToolchanger = false
 
-export function setDocumentTitle(value = language.value, printerName = currentPrinterName) {
+export function setDocumentTitle(
+  value = language.value,
+  printerName = currentPrinterName,
+  isToolchanger = currentIsToolchanger,
+) {
   currentPrinterName = typeof printerName === 'string' ? printerName.trim() : ''
+  currentIsToolchanger = Boolean(isToolchanger)
   if (typeof document === 'undefined') return
   document.documentElement.lang = value
-  const suffix = value === 'en' ? 'Toolchanger cockpit' : 'Toolchanger-Cockpit'
+  const suffix = currentIsToolchanger
+    ? value === 'en'
+      ? 'Toolchanger cockpit'
+      : 'Toolchanger-Cockpit'
+    : value === 'en'
+      ? 'Printer cockpit'
+      : 'Drucker-Cockpit'
   document.title = currentPrinterName ? `DOCKYARD · ${currentPrinterName} — ${suffix}` : `DOCKYARD · ${suffix}`
 }
 

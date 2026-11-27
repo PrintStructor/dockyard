@@ -63,6 +63,7 @@ export function commandFor(input, raw) {
     'move_to',
     'temperature',
     'temperature_all',
+    'preheat',
     'heaters_off',
     'qgl',
     'z_tilt',
@@ -87,6 +88,7 @@ export function commandFor(input, raw) {
         move_to: ['action', 'axis', 'target'],
         temperature: ['action', 'heater', 'target'],
         temperature_all: ['action', 'target'],
+        preheat: ['action', 'extruder', 'bed'],
         led: ['action', 'profile'],
         fan: ['action', 'fan', 'percent'],
         console: ['action', 'script'],
@@ -272,6 +274,31 @@ export function commandFor(input, raw) {
     script = `SET_HEATER_TEMPERATURE HEATER=${input.heater} TARGET=${input.target}`
     const heaterLabel = input.heater === 'heater_bed' ? 'Druckbett' : limits.toolCount === 1 ? 'Extruder' : `T${i}`
     label = `${heaterLabel} auf ${input.target} °C`
+  } else if (action === 'preheat') {
+    const limits = capabilities(raw)
+    const hasExtruder = input.extruder !== undefined && input.extruder !== null
+    const hasBed = input.bed !== undefined && input.bed !== null
+    if (!hasExtruder && !hasBed) fail('Mindestens eine Zieltemperatur angeben.')
+    const lines = []
+    const parts = []
+    if (hasExtruder) {
+      if (!finite(input.extruder) || !Number.isInteger(input.extruder)) fail('Ungültige Temperaturangabe.')
+      const max = limits.toolMax[0]
+      if (max == null) fail('Temperaturgrenze ist unbekannt.', 409)
+      if (input.extruder < 0 || input.extruder > max) fail(`Zieltemperatur muss zwischen 0 und ${max} °C liegen.`)
+      lines.push(`SET_HEATER_TEMPERATURE HEATER=extruder TARGET=${input.extruder}`)
+      parts.push(`Extruder ${input.extruder} °C`)
+    }
+    if (hasBed) {
+      if (!finite(input.bed) || !Number.isInteger(input.bed)) fail('Ungültige Temperaturangabe.')
+      const max = limits.bedMax
+      if (max == null) fail('Temperaturgrenze ist unbekannt.', 409)
+      if (input.bed < 0 || input.bed > max) fail(`Zieltemperatur muss zwischen 0 und ${max} °C liegen.`)
+      lines.push(`SET_HEATER_TEMPERATURE HEATER=heater_bed TARGET=${input.bed}`)
+      parts.push(`Bett ${input.bed} °C`)
+    }
+    script = lines.join('\n')
+    label = `Vorheizen · ${parts.join(' · ')}`
   } else if (action === 'heaters_off') {
     if (printState === 'printing') {
       fail('Cooldown ist während eines laufenden Drucks gesperrt. Bei einer Druckpause ist Cooldown verfügbar.', 409)
@@ -279,7 +306,8 @@ export function commandFor(input, raw) {
     script = 'TURN_OFF_HEATERS'
     label = 'Alle Heizungen ausschalten'
   } else if (action === 'motors_off') {
-    script = 'DISABLE_MOTORS'
+    const cfg = raw.configfile?.settings ?? raw.configfile?.config ?? {}
+    script = cfg['gcode_macro disable_motors'] ? 'DISABLE_MOTORS' : 'M84'
     label = 'Motoren lösen'
   } else if (action === 'z_tilt') {
     requireAxes('xyz')

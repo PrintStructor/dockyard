@@ -10,6 +10,7 @@ import {
   stepLedMeshes,
   applyLedTargets,
   createStudioLights,
+  computeExactFitDistance,
   classifyModelNodes,
   detectNozzleTip,
   detectFilamentInlet,
@@ -243,4 +244,36 @@ test('createModelLoadGuard cancels in-flight loads when switching back to alread
   guard.reset()
   assert.equal(guard.isCurrent(reqC.gen), false)
   assert.equal(guard.isLoading(), false)
+})
+
+test('computeExactFitDistance frames tall printer boxes without corner cropping and balanced lights tame glare', () => {
+  const tallPrinter = new THREE.Box3(new THREE.Vector3(-0.15, 0, -0.15), new THREE.Vector3(0.15, 0.44, 0.15))
+  const dir = new THREE.Vector3(0.52, 0.28, 0.81).normalize()
+  const vFov = THREE.MathUtils.degToRad(36)
+  const aspect = 1.6
+  const dist = computeExactFitDistance(tallPrinter, dir, vFov, aspect, 1.14)
+
+  // Verify all 8 bounding-box corners project inside NDC [-1, 1] with margin
+  const center = tallPrinter.getCenter(new THREE.Vector3())
+  const cam = new THREE.PerspectiveCamera(36, aspect, 0.01, 50)
+  cam.position.copy(center).addScaledVector(dir, dist)
+  cam.lookAt(center)
+  cam.updateMatrixWorld(true)
+  cam.updateProjectionMatrix()
+
+  for (const x of [tallPrinter.min.x, tallPrinter.max.x]) {
+    for (const y of [tallPrinter.min.y, tallPrinter.max.y]) {
+      for (const z of [tallPrinter.min.z, tallPrinter.max.z]) {
+        const p = new THREE.Vector3(x, y, z).project(cam)
+        assert.ok(Math.abs(p.x) <= 0.92, `corner X clipped: ${p.x}`)
+        assert.ok(Math.abs(p.y) <= 0.92, `corner Y clipped: ${p.y}`)
+      }
+    }
+  }
+
+  const defaultLights = createStudioLights()
+  const balancedLights = createStudioLights({ balanced: true })
+  assert.equal(balancedLights.length, 4)
+  assert.ok(balancedLights[0].intensity < defaultLights[0].intensity)
+  assert.ok(balancedLights[1].intensity < defaultLights[1].intensity)
 })

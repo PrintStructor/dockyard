@@ -20,11 +20,17 @@ const props = defineProps({
 
 const emit = defineEmits(['command', 'select', 'refresh', 'context'])
 
-const axisRows = [
-  { axis: 'x', neg: [-100, -10, -1], pos: [1, 10, 100] },
-  { axis: 'y', neg: [-100, -10, -1], pos: [1, 10, 100] },
-  { axis: 'z', neg: [-10, -1, -0.1], pos: [0.1, 1, 10] },
-]
+const axisRows = computed(() => {
+  const bedW = props.status?.bedSize?.width
+  const bedD = props.status?.bedSize?.depth
+  const bigX = Number.isFinite(bedW) && bedW <= 180 ? 50 : 100
+  const bigY = Number.isFinite(bedD) && bedD <= 180 ? 50 : 100
+  return [
+    { axis: 'x', neg: [-bigX, -10, -1], pos: [1, 10, bigX] },
+    { axis: 'y', neg: [-bigY, -10, -1], pos: [1, 10, bigY] },
+    { axis: 'z', neg: [-10, -1, -0.1], pos: [0.1, 1, 10] },
+  ]
+})
 const allTools = ref(false)
 const drafts = ref({})
 const submitted = ref({})
@@ -377,7 +383,7 @@ watch(motion, allowed => {
             "
             @click="emit('command', { action: 'home', axis: 'all' })"
           >
-            <Home :size="15" /><span>ALL</span>
+            <Home :size="15" /><span>{{ t('Alle') }}</span>
           </button>
           <button
             v-if="levelingKind === 'qgl'"
@@ -424,7 +430,7 @@ watch(motion, allowed => {
             :aria-label="t('Bett vermessen')"
             @click="emit('command', { action: 'mesh' })"
           >
-            <span>Bed Mesh</span>
+            <span>{{ t('Bett-Mesh') }}</span>
           </button>
           <button
             class="subtle-button prep-motors-btn"
@@ -536,7 +542,7 @@ watch(motion, allowed => {
             "
             @click="coolAll"
           >
-            <Snowflake :size="15" />Cooldown
+            <Snowflake :size="15" />{{ t('Abkühlen') }}
           </button>
         </div>
 
@@ -631,7 +637,7 @@ watch(motion, allowed => {
               {{ preset.name }}<span>{{ presetTarget(preset) ?? '—' }} °C</span>
             </button>
             <button type="button" :disabled="heaterMax == null || heaterMax < 140" @click="stagePreset(140)">
-              Preheat<span>140 °C</span>
+              {{ t('Vorheizen') }}<span>140 °C</span>
             </button>
           </div>
           <button class="subtle-button preset-apply" :disabled="!enabled || !groupReady || (allTools && moving)">
@@ -678,7 +684,7 @@ watch(motion, allowed => {
               :aria-label="t('Cooldown nur für das Druckbett')"
               @click="coolBed"
             >
-              <Snowflake :size="14" />Cooldown
+              <Snowflake :size="14" />{{ t('Abkühlen') }}
             </button>
           </div>
 

@@ -56,6 +56,7 @@ test('normalizePresets prefers Mainsail presets, falls back to legacy DB and saf
     { name: 'ABS', bed: 110, tools: [260, 260, 260, 260, 260, 260] },
     { name: 'PLA', bed: 65, tools: [215, 215, 215, 215, 215, 215] },
     { name: 'PETG', bed: 80, tools: [240, 240, 240, 240, 240, 240] },
+    { name: 'BEACON ABS', bed: 110, tools: [150, 150, 150, 150, 150, 150] },
   ])
 
   const defaultsOnly = normalizePresets()

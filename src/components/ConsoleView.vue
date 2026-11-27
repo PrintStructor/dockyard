@@ -198,7 +198,7 @@ onBeforeUnmount(() => {
           autocomplete="off"
           autocapitalize="off"
           spellcheck="false"
-          :placeholder="t('z. B. DEBUG_TOOL_DETECTION')"
+          :placeholder="status?.isToolchanger ? t('z. B. DEBUG_TOOL_DETECTION') : t('z. B. QUERY_ENDSTOPS')"
           @keydown.up.prevent="recall(-1)"
           @keydown.down.prevent="recall(1)"
         />
@@ -222,9 +222,22 @@ onBeforeUnmount(() => {
 
     <div v-if="!compact" class="console-quick">
       <span>{{ t('Einfügen:') }}</span>
-      <button class="subtle-button" type="button" @click="fill('DEBUG_TOOL_DETECTION')">
+      <button
+        v-if="status?.isToolchanger"
+        class="subtle-button"
+        type="button"
+        @click="fill('DEBUG_TOOL_DETECTION')"
+      >
         {{ t('Tool-Erkennung') }}
       </button>
+      <template v-else>
+        <button class="subtle-button" type="button" @click="fill('QUERY_ENDSTOPS')">
+          {{ t('Endschalter') }}
+        </button>
+        <button class="subtle-button" type="button" @click="fill('GET_POSITION')">
+          {{ t('Position') }}
+        </button>
+      </template>
       <button class="subtle-button" type="button" @click="fill('STATUS')">Status</button>
       <button v-if="!following" class="subtle-button" type="button" @click="latest">
         <ArrowDown :size="14" />{{ t('Neueste Ausgabe') }}

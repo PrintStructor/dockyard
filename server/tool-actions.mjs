@@ -4,10 +4,10 @@ import { ControlError } from './control.mjs'
 
 const hiddenDummyFans = new Set(['fan3'])
 const fanOrder = name => ({ fan0: 0, bedfans: 1 }[name.toLowerCase()] ?? 2)
-const fanLabel = name => {
+const fanLabel = (name, isToolchanger = true) => {
   const lower = name.toLowerCase()
-  if (lower === 'bedfans') return 'Bettlüfter'
-  if (lower === 'fan0') return 'CPAP Part Fan'
+  if (lower === 'bedfans' || lower === 'bed_fans' || lower === 'bed-fans') return 'Bettlüfter'
+  if (isToolchanger && lower === 'fan0') return 'CPAP Part Fan'
   return name
 }
 
@@ -27,13 +27,13 @@ export function toolCapabilities(config, raw) {
   const genericFans = Object.keys(raw)
     .filter(
       name =>
-        /^fan_generic [A-Za-z0-9_]+$/.test(name) &&
+        /^fan_generic [A-Za-z0-9_-]+$/.test(name) &&
         config[name.toLowerCase()] &&
-        !hiddenDummyFans.has(name.slice(12).toLowerCase()),
+        (!isToolchanger || !hiddenDummyFans.has(name.slice(12).toLowerCase())),
     )
     .map(name => ({
       name: name.slice(12),
-      label: fanLabel(name.slice(12)),
+      label: fanLabel(name.slice(12), isToolchanger),
     }))
     .sort((a, b) => fanOrder(a.name) - fanOrder(b.name) || a.name.localeCompare(b.name))
 

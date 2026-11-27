@@ -26,12 +26,19 @@ export function toolActionReason(status, action, tool, online = true, pending = 
   if (!online || !status) return 'Keine aktuellen Druckerdaten.'
   if (status.klipperState !== 'ready') return 'Klipper ist nicht bereit.'
   if (pending || status.control?.job) return 'Ein Befehl läuft noch oder muss geprüft werden.'
-  if (!['standby', 'complete', 'cancelled', 'error'].includes(status.printState) || status.idleState === 'Printing') {
+  const isToolchanger = status.isToolchanger ?? status.capabilities?.isToolchanger ?? true
+  const singlePauseFilamentAllowed =
+    !isToolchanger &&
+    status.printState === 'paused' &&
+    ['load', 'unload', 'purge'].includes(action)
+  if (
+    (!['standby', 'complete', 'cancelled', 'error'].includes(status.printState) && !singlePauseFilamentAllowed) ||
+    status.idleState === 'Printing'
+  ) {
     return 'Während eines Drucks, einer Pause oder laufender Befehle gesperrt.'
   }
   if (status.loadWatchActive) return 'Einlegehilfe ist scharf. Zuerst mit „Fertig“ beenden.'
 
-  const isToolchanger = status.isToolchanger ?? status.capabilities?.isToolchanger ?? true
   const maxTool = Math.max(0, (status.toolCount ?? status.capabilities?.toolCount ?? 6) - 1)
 
   if (!isToolchanger) {

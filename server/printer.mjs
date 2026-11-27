@@ -527,7 +527,7 @@ function isDynamicPrinterObject(name) {
     name === 'z_tilt' ||
     name === 'quad_gantry_level' ||
     name === 'fan' ||
-    /^fan_generic [A-Za-z0-9_]+$/.test(name) ||
+    /^fan_generic [A-Za-z0-9_-]+$/.test(name) ||
     /^temperature_sensor .+$/.test(name) ||
     /^temperature_fan .+$/.test(name) ||
     /^filament_(?:switch|motion)_sensor .+$/.test(name) ||
@@ -549,7 +549,7 @@ async function query(withConfig = false) {
       throw new ControlError('Der aktive Drucker wurde während der Abfrage gewechselt.', 409)
     }
     const available = Array.isArray(data.result?.objects) ? data.result.objects : []
-    nextFanObjects = available.filter(name => /^fan_generic [A-Za-z0-9_]+$/.test(name))
+    nextFanObjects = available.filter(name => /^fan_generic [A-Za-z0-9_-]+$/.test(name))
     nextDiscovered = available.filter(isDynamicPrinterObject)
     fanObjects = nextFanObjects
     discoveredObjects = nextDiscovered

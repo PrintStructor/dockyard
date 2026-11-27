@@ -110,6 +110,7 @@ onBeforeUnmount(() => {
         </button>
         <button
           class="icon-button"
+          type="button"
           :disabled="!hasMedia"
           :aria-label="t('{0} vergrößern', [t(name)])"
           @click="open"
@@ -149,6 +150,7 @@ onBeforeUnmount(() => {
     <dialog
       ref="dialog"
       class="camera-dialog"
+      :aria-label="t(name)"
       @close="expanded = false"
       @click="event => event.target === dialog && close()"
     >

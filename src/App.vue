@@ -226,8 +226,8 @@ const activeCameras = computed(() => {
   return []
 })
 watch(
-  [language, printerName],
-  ([nextLang, nextPrinter]) => setDocumentTitle(nextLang, nextPrinter),
+  [language, printerName, () => Boolean(status.value?.isToolchanger ?? settingsStore.activePrinter.value?.model?.preset === 'stormtrooper-6tc')],
+  ([nextLang, nextPrinter, nextTc]) => setDocumentTitle(nextLang, nextPrinter, nextTc),
   { immediate: true },
 )
 const mainsailUrl = computed(() =>
@@ -402,6 +402,14 @@ const isSingleTool = computed(() =>
   status.value
     ? !status.value.isToolchanger && status.value.toolCount === 1
     : settingsStore.activePrinter.value?.model?.preset !== 'stormtrooper-6tc',
+)
+const printerIdentityKnown = computed(() => Boolean(status.value || settingsStore.loaded.value))
+watch(
+  [printerIdentityKnown, isSingleTool, tab],
+  ([known, single, activeTab]) => {
+    if (known && single && activeTab === 'controls') tab.value = 'tools'
+  },
+  { immediate: true },
 )
 const sceneConfig = computed(() =>
   resolveSceneConfig(settingsStore.activePrinter.value, status.value, {
@@ -588,15 +596,6 @@ function formatDuration(seconds) {
   return `${secs} s`
 }
 
-const sensors = computed(() => [
-  ['Druckbett', status.value?.bed?.temperature],
-  ['Bauraum', status.value?.chamber],
-  ['Raspberry Pi', status.value?.raspberryPi],
-  ['Octopus', status.value?.octopus],
-  ['RP2350', status.value?.rp2350],
-  ['Beacon-Spule', status.value?.beacon],
-])
-
 const pageHeading = computed(
   () =>
     ({
@@ -614,7 +613,7 @@ const pageSubtitle = computed(() => {
   if (tab.value === 'controls') return controlsSubtitle.value
   return {
     tools: isSingleTool.value
-      ? 'Temperaturen, Lüfter, Achsen und Sensoren direkt im Blick.'
+      ? 'Temperaturen, Bewegung, Lüfter und Sensoren direkt steuern.'
       : 'Werkzeug auswählen und seinen aktuellen Zustand prüfen.',
     print: 'Aktuellen Druck oder G-Code-Dateien als 3D-Modell prüfen.',
     history: isToolchanger.value
@@ -637,15 +636,20 @@ async function acknowledgeUncertain() {
 
 <template>
   <div class="app-shell" :class="{ 'controls-active': tab === 'controls', 'display-mode': displayMode }">
+    <a class="skip-link" href="#main-content">{{ t('Zum Inhalt springen') }}</a>
     <header class="masthead">
       <div class="brand">
-        <a href="#" :aria-label="t('DOCKYARD Werkzeugübersicht')" @click.prevent="tab = 'tools'">
+        <a
+          href="#"
+          :aria-label="isSingleTool ? t('DOCKYARD Cockpit') : t('DOCKYARD Werkzeugübersicht')"
+          @click.prevent="tab = 'tools'"
+        >
           <img src="/voron-logo.svg" width="34" height="39" alt="DOCKYARD" />
         </a>
         <span>
           <span class="brand-title">
             <a href="#" @click.prevent="tab = 'tools'">DOCKYARD</a>
-            <div v-if="printerName" ref="switcherRoot" class="brand-printer-switcher">
+            <span v-if="printerName" ref="switcherRoot" class="brand-printer-switcher">
               <button
                 type="button"
                 class="brand-printer-pill interactive"
@@ -687,7 +691,7 @@ async function acknowledgeUncertain() {
                   </div>
                 </div>
 
-                <p v-if="popoverError" class="settings-inline-error" style="padding: 4px 8px; margin: 0">
+                <p v-if="popoverError" class="settings-inline-error" role="alert" style="padding: 4px 8px; margin: 0">
                   {{ t(popoverError) }}
                 </p>
 
@@ -714,7 +718,7 @@ async function acknowledgeUncertain() {
                   <Settings :size="14" />{{ t('Drucker verwalten …') }}
                 </button>
               </div>
-            </div>
+            </span>
           </span>
           <small v-if="printerSubtitle">{{ printerSubtitle }}</small>
         </span>
@@ -797,9 +801,10 @@ async function acknowledgeUncertain() {
         :aria-current="tab === 'tools' ? 'page' : undefined"
         @click="tab = 'tools'"
       >
-        <Box :size="17" />{{ isSingleTool ? t('Übersicht') : t('Werkzeuge') }}
+        <Box :size="17" />{{ isSingleTool ? t('Cockpit') : t('Werkzeuge') }}
       </button>
       <button
+        v-if="!isSingleTool"
         type="button"
         :class="{ active: tab === 'controls' }"
         :aria-current="tab === 'controls' ? 'page' : undefined"
@@ -843,7 +848,9 @@ async function acknowledgeUncertain() {
           v-if="configEditor.isDirty.value"
           class="nav-dirty-dot"
           :title="t('Ungespeicherte Konfigurationsänderungen')"
-        />
+        >
+          <span class="sr-only">{{ t('Ungespeicherte Konfigurationsänderungen') }}</span>
+        </span>
       </button>
       <button
         type="button"
@@ -858,7 +865,7 @@ async function acknowledgeUncertain() {
       </a>
     </nav>
 
-    <main>
+    <main id="main-content" tabindex="-1">
       <div
         v-if="isPrintActive && tab !== 'print'"
         class="print-job-bar"
@@ -880,7 +887,7 @@ async function acknowledgeUncertain() {
             {{ status.speedPercent }} %
           </span>
           <span v-if="status.flowPercent != null && status.flowPercent !== 100" class="print-tuning-pill">
-            Flow {{ status.flowPercent }} %
+            {{ t('Fluss') }} {{ status.flowPercent }} %
           </span>
           <div class="print-job-bar-actions">
             <button
@@ -916,7 +923,9 @@ async function acknowledgeUncertain() {
           {{
             status
               ? t('Letzter Datenstand: {0}.', [time])
-              : t('Temperaturen und Werkzeugzustände werden angezeigt, sobald die Verbindung steht.')
+              : isSingleTool
+                ? t('Temperaturen und Druckerstatus werden angezeigt, sobald die Verbindung steht.')
+                : t('Temperaturen und Werkzeugzustände werden angezeigt, sobald die Verbindung steht.')
           }}
         </span>
         <div class="notice-actions">
@@ -1096,8 +1105,10 @@ async function acknowledgeUncertain() {
           :time="time"
           :printer-subtitle="printerSubtitle"
           :printer-name="printerName"
+          :printer-id="settingsStore.activePrinter.value?.id ?? ''"
           :scene-config="sceneConfig"
           :can-write="canWrite"
+          :display-mode="displayMode"
           @command="send"
           @open-settings="openSettings('printers')"
           @refresh="refresh"
@@ -1121,8 +1132,10 @@ async function acknowledgeUncertain() {
               :tool="current"
               :online="online"
               :printer-name="printerName"
+              :printer-id="settingsStore.activePrinter.value?.id ?? ''"
               :bed-size="status?.bedSize ?? null"
               :can-write="canWrite"
+              :lightweight="displayMode"
               @open-settings="openSettings('printers')"
             />
             <div
@@ -1410,7 +1423,7 @@ async function acknowledgeUncertain() {
       </section>
 
       <ControlsView
-        v-if="tab === 'controls'"
+        v-if="!isSingleTool && tab === 'controls'"
         :key="`controls-${printerSwitchKey}`"
         :status="status"
         :online="online"
@@ -1525,6 +1538,7 @@ async function acknowledgeUncertain() {
     <SettingsDialog
       :open="settingsOpen"
       :initial-section="settingsInitialSection"
+      :is-single-tool="isSingleTool"
       @close="settingsOpen = false"
       @switched="onSettingsDialogSwitched"
     />

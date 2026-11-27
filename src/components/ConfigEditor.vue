@@ -396,7 +396,7 @@ onBeforeUnmount(() => {
           <span class="skeleton-bar" />
         </div>
 
-        <div v-else-if="store.listError.value && !store.files.value.length" class="system-banner amber">
+        <div v-else-if="store.listError.value && !store.files.value.length" class="system-banner amber" role="alert">
           <AlertTriangle :size="15" />
           <span>{{ t(store.listError.value) }}</span>
         </div>

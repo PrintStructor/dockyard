@@ -30,10 +30,11 @@ export const printControlActionKeys = {
 
 export function printControlCapabilities(config, raw) {
   const has = name => !!config[`gcode_macro ${name.toLowerCase()}`]
+  const isToolchanger = Boolean(raw?.toolchanger || config.toolchanger)
   return {
     printStart: !!config.virtual_sdcard,
     printCancel: has('CANCEL_PRINT') || !!config.pause_resume,
-    perToolZAdjust: has('SET_GCODE_OFFSET'),
+    perToolZAdjust: isToolchanger && has('SET_GCODE_OFFSET'),
     zAdjustReset: has('Z_ADJUST_RESET'),
     excludeObject: raw?.exclude_object != null || !!config.exclude_object,
   }

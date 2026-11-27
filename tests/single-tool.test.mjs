@@ -470,3 +470,67 @@ test('GET /api/presets infers single-tool count on cold start before /api/status
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('Paket A single-tool fixes: M84 motors_off, atomic preheat, pause filament unlock, perToolZAdjust gating, native pause_resume, and hyphenated fans', () => {
+  const raw = singleToolTridentRaw({
+    'fan_generic nevermore-micro': { speed: 0.8 },
+    'fan_generic fan0': { speed: 0.4 },
+    'fan_generic fan3': { speed: 0.2 },
+    configfile: {
+      settings: {
+        extruder: { max_temp: 300, min_extrude_temp: 170 },
+        heater_bed: { max_temp: 120 },
+        pause_resume: {},
+        'gcode_macro set_gcode_offset': { gcode: 'SET_GCODE_OFFSET_BASE' },
+        'gcode_macro load_filament': {},
+        'gcode_macro unload_filament': {},
+        'gcode_macro purge_nozzle': {},
+        'gcode_macro clean_nozzle': {},
+        'fan_generic nevermore-micro': { max_power: 1 },
+        'fan_generic fan0': { max_power: 1 },
+        'fan_generic fan3': { max_power: 1 },
+      },
+    },
+  })
+
+  // 1. motors_off emits standard Klipper M84 when DISABLE_MOTORS macro is absent
+  assert.equal(commandFor({ action: 'motors_off' }, raw).body.script, 'M84')
+  const withMacro = singleToolTridentRaw()
+  withMacro.configfile.settings['gcode_macro disable_motors'] = {}
+  assert.equal(commandFor({ action: 'motors_off' }, withMacro).body.script, 'DISABLE_MOTORS')
+
+  // 2. Atomic combined preheat
+  const pre = commandFor({ action: 'preheat', extruder: 255, bed: 110 }, raw)
+  assert.equal(
+    pre.body.script,
+    'SET_HEATER_TEMPERATURE HEATER=extruder TARGET=255\nSET_HEATER_TEMPERATURE HEATER=heater_bed TARGET=110',
+  )
+  assert.equal(pre.label, 'Vorheizen · Extruder 255 °C · Bett 110 °C')
+  assert.throws(() => commandFor({ action: 'preheat' }, raw))
+  assert.throws(() => commandFor({ action: 'preheat', extruder: 300 }, raw))
+
+  // 3. Pause mode unlocks single-tool load/unload/purge (M600 recovery) while keeping clean locked
+  const paused = { ...raw, print_stats: { state: 'paused' } }
+  assert.equal(commandFor({ action: 'load', tool: 0 }, paused).body.script, 'LOAD_FILAMENT\nM400')
+  assert.equal(commandFor({ action: 'unload', tool: 0 }, paused).body.script, 'UNLOAD_FILAMENT\nM400')
+  assert.equal(commandFor({ action: 'purge', tool: 0 }, paused).body.script, 'PURGE_NOZZLE\nM400')
+  assert.throws(() => commandFor({ action: 'clean', tool: 0 }, paused), /gesperrt/)
+
+  // 4. Native [pause_resume] enables pause/resume without custom PAUSE/RESUME macros
+  const caps = capabilities(raw)
+  assert.equal(caps.pause, true)
+  assert.equal(caps.resume, true)
+
+  // 5. perToolZAdjust stays false on 1-tool even with SET_GCODE_OFFSET macro wrapper -> Z reset works
+  assert.equal(caps.perToolZAdjust, false)
+  assert.equal(commandFor({ action: 'tune_z_offset', reset: true }, paused).body.script, 'SET_GCODE_OFFSET Z=0 MOVE=1')
+
+  // 6. Single-tool fan labels preserve fan0/fan3 and allow hyphenated fan_generic names
+  assert.ok(caps.fans.some(f => f.name === 'nevermore-micro' && f.label === 'nevermore-micro'))
+  assert.ok(caps.fans.some(f => f.name === 'fan0' && f.label === 'fan0'))
+  assert.ok(caps.fans.some(f => f.name === 'fan3' && f.label === 'fan3'))
+  assert.equal(
+    commandFor({ action: 'fan', fan: 'nevermore-micro', percent: 75 }, raw).body.script,
+    'SET_FAN_SPEED FAN=nevermore-micro SPEED=0.75',
+  )
+})

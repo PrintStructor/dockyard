@@ -393,7 +393,7 @@ onBeforeUnmount(() => {
                   <span>{{ formatTimestamp(job.startTime) }}</span>
                   <span v-if="job.tools.length && (isToolchanger || job.tools.length > 1)" class="history-row-tools">
                     <span v-for="tool in job.tools" :key="tool.id" class="history-tool-chip">
-                      <span class="history-tool-dot" :style="{ background: tool.color ?? '#8b9ba2' }" />
+                      <span class="history-tool-dot" :style="{ background: tool.color ?? 'var(--muted)' }" />
                       T{{ tool.id }}
                     </span>
                   </span>
@@ -593,7 +593,7 @@ onBeforeUnmount(() => {
               <li v-for="tool in selectedJob.tools" :key="tool.id" class="print-tool-item">
                 <span
                   class="print-tool-swatch"
-                  :style="{ background: tool.color ?? '#8b9ba2' }"
+                  :style="{ background: tool.color ?? 'var(--muted)' }"
                   :title="tool.color ?? ''"
                 />
                 <div class="print-tool-info">
@@ -622,6 +622,7 @@ onBeforeUnmount(() => {
     <dialog
       ref="thumbnailDialog"
       class="camera-dialog thumbnail-dialog"
+      :aria-label="t('Vorschaubild')"
       @click="event => event.target === thumbnailDialog && closeThumbnail()"
     >
       <header>

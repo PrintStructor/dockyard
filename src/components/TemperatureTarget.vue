@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { Check } from '@lucide/vue'
+import { Check, Minus, Plus } from '@lucide/vue'
 import { t } from '../i18n.mjs'
 
 const props = defineProps({
@@ -13,6 +13,8 @@ const props = defineProps({
   ready: Boolean,
   pending: Boolean,
   send: Function,
+  steppers: { type: Boolean, default: false },
+  stepSize: { type: Number, default: 5 },
 })
 
 const draft = ref(null)
@@ -38,6 +40,15 @@ function acknowledge() {
 
 watch(() => props.target, acknowledge)
 
+async function applyValue(nextTarget) {
+  if (!enabled.value || !Number.isInteger(nextTarget) || nextTarget < 0 || nextTarget > props.max) return
+  if (await props.send({ action: 'temperature', heater: resolvedHeater.value, target: nextTarget })) {
+    submitted.value = nextTarget
+    draft.value = String(nextTarget)
+    acknowledge()
+  }
+}
+
 async function apply() {
   if (!enabled.value || !valid.value || !dirty.value) return
   const target = Number(value.value)
@@ -46,11 +57,29 @@ async function apply() {
     acknowledge()
   }
 }
+
+function nudge(delta) {
+  if (!enabled.value) return
+  const base = Number.isFinite(Number(value.value)) && value.value !== '' ? Math.round(Number(value.value)) : 0
+  const clamped = Math.max(0, Math.min(props.max, base + delta))
+  if (clamped !== props.target) applyValue(clamped)
+}
 </script>
 
 <template>
-  <form class="inspector-target" @submit.prevent="apply">
+  <form class="inspector-target" :class="{ 'has-steppers': steppers }" @submit.prevent="apply">
     <label :for="inputId">{{ t('Ziel') }}</label>
+    <button
+      v-if="steppers"
+      type="button"
+      class="subtle-button target-step-btn"
+      :disabled="!enabled || (Number(value) || 0) <= 0"
+      :aria-label="t('{0} um {1} °C senken', [targetDisplayName, stepSize])"
+      :title="`−${stepSize} °C`"
+      @click="nudge(-stepSize)"
+    >
+      <Minus :size="14" />
+    </button>
     <input
       :id="inputId"
       :value="value"
@@ -73,6 +102,17 @@ async function apply() {
       @keydown.esc="draft = null"
     />
     <span>°C</span>
+    <button
+      v-if="steppers"
+      type="button"
+      class="subtle-button target-step-btn"
+      :disabled="!enabled || (Number(value) || 0) >= max"
+      :aria-label="t('{0} um {1} °C erhöhen', [targetDisplayName, stepSize])"
+      :title="`+${stepSize} °C`"
+      @click="nudge(stepSize)"
+    >
+      <Plus :size="14" />
+    </button>
     <button
       class="apply-temperature"
       :disabled="!enabled || !valid || !dirty"

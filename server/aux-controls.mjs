@@ -8,8 +8,8 @@ export function auxCapabilities(config) {
   const has = name => !!config[`gcode_macro ${name.toLowerCase()}`]
   return {
     ledProfiles: ledProfiles.filter(profile => has(profile.macro)).map(profile => profile.id),
-    pause: has('PAUSE'),
-    resume: has('RESUME'),
+    pause: has('PAUSE') || !!config.pause_resume,
+    resume: has('RESUME') || !!config.pause_resume,
     initialize: !!config.toolchanger,
     watchAutoHome: config.toolchanger?.on_axis_not_homed === 'home',
     loadWatch:

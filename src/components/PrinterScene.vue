@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
-import { RotateCcw, ArrowDownToLine, Box, Move, Upload } from '@lucide/vue'
+import { RotateCcw, ArrowDownToLine, Box, Upload, Lock, Unlock } from '@lucide/vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
@@ -18,6 +18,7 @@ import {
   applyLedTargets,
   stepLedMeshes,
   createStudioLights,
+  computeExactFitDistance,
   buildThermalGlowTexture,
   buildStudioFloorVeil,
   classifyModelNodes,
@@ -32,14 +33,50 @@ const props = defineProps({
   tool: { type: Object, default: () => ({}) },
   online: { type: Boolean, default: false },
   printerName: { type: String, default: '' },
+  printerId: { type: String, default: '' },
   bedSize: { type: Object, default: null },
   canWrite: { type: Boolean, default: true },
+  lightweight: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['open-settings'])
 
 const viewport = ref(null)
-const activeView = ref(props.sceneConfig?.defaultView === 'printer' ? 'printer' : 'toolhead')
+
+function sceneViewStorageKey() {
+  const key = (props.printerId || props.printerName || 'default').trim().toLowerCase()
+  return `dockyard.sceneView.${key}`
+}
+
+function readSavedSceneView() {
+  try {
+    const saved = globalThis.localStorage?.getItem(sceneViewStorageKey())
+    if (saved === 'printer' || saved === 'toolhead') return saved
+  } catch {
+    // Ignore restricted storage
+  }
+  return null
+}
+
+function saveSceneView(view) {
+  try {
+    globalThis.localStorage?.setItem(sceneViewStorageKey(), view)
+  } catch {
+    // Ignore restricted storage
+  }
+}
+
+function initialViewChoice() {
+  const views = props.sceneConfig?.views ?? {}
+  const saved = readSavedSceneView()
+  if (saved && views[saved]) return saved
+  if (props.sceneConfig?.defaultView === 'printer' && views.printer) return 'printer'
+  return views.toolhead ? 'toolhead' : 'printer'
+}
+
+const activeView = ref(initialViewChoice())
+const cameraPreset = ref('iso')
+const orbitUnlocked = ref(!props.lightweight)
 const loading = ref(false)
 const failure = ref('')
 
@@ -127,29 +164,37 @@ function render(now) {
   }
   const ledAnimating = stepLedMeshes(ledMeshes, now)
   const changed = controls.update()
-  composer.render()
+  if (composer) {
+    composer.render()
+  } else {
+    renderer.render(world, camera)
+  }
   if (moving || changed || ledAnimating) invalidate()
 }
 
-function fitCamera(box, { animate = false, underside = false } = {}) {
+function directionForPreset(preset, isPrinter) {
+  if (preset === 'underside') return new THREE.Vector3(0.24, -0.42, 0.88).normalize()
+  if (preset === 'front') return new THREE.Vector3(0.0, 0.08, 1.0).normalize()
+  if (preset === 'side') return new THREE.Vector3(1.0, 0.12, 0.08).normalize()
+  return isPrinter
+    ? new THREE.Vector3(0.52, 0.28, 0.81).normalize()
+    : new THREE.Vector3(0.38, 0.14, 0.91).normalize()
+}
+
+function fitCamera(box, { animate = false, preset = 'iso' } = {}) {
   if (!box || !camera || !controls) return
+  cameraPreset.value = preset
   const center = box.getCenter(new THREE.Vector3())
   const size = box.getSize(new THREE.Vector3())
   const maxDim = Math.max(size.x, size.y, size.z, 0.05)
   const isPrinter = activeViewKind.value === 'printer'
+  const underside = preset === 'underside'
 
-  const dir = underside
-    ? new THREE.Vector3(0.24, -0.42, 0.88).normalize()
-    : isPrinter
-      ? new THREE.Vector3(0.56, 0.34, 0.75).normalize()
-      : new THREE.Vector3(0.38, 0.14, 0.91).normalize()
-
+  const dir = directionForPreset(preset, isPrinter)
   const fov = THREE.MathUtils.degToRad(camera.fov)
-  const aspect = Math.max(0.5, camera.aspect || 1)
-  const fitHeight = size.y / (2 * Math.tan(fov / 2))
-  const fitWidth = Math.max(size.x, size.z) / (2 * Math.tan(fov / 2) * aspect)
-  const margin = underside ? 1.05 : isPrinter ? 1.48 : 1.38
-  const dist = Math.max(fitHeight, fitWidth, maxDim * 0.75) * margin
+  const aspect = Math.max(0.45, camera.aspect || 1)
+  const margin = underside ? 1.06 : isPrinter ? 1.14 : 1.16
+  const dist = computeExactFitDistance(box, dir, fov, aspect, margin)
 
   const target = center.clone()
   if (underside && nozzleTip) {
@@ -162,7 +207,7 @@ function fitCamera(box, { animate = false, underside = false } = {}) {
   camera.near = Math.max(0.002, dist / 200)
   camera.far = Math.max(50, dist * 40)
   camera.updateProjectionMatrix()
-  controls.minDistance = maxDim * 0.5
+  controls.minDistance = maxDim * 0.45
   controls.maxDistance = maxDim * 8
 
   if (animate && !reducedMotion.matches) {
@@ -182,14 +227,30 @@ function fitCamera(box, { animate = false, underside = false } = {}) {
   invalidate()
 }
 
+function setCameraPreset(preset) {
+  if (currentBox) fitCamera(currentBox, { animate: true, preset })
+}
+
 function resetCamera() {
-  if (currentBox) fitCamera(currentBox, { animate: true, underside: false })
+  if (currentBox) fitCamera(currentBox, { animate: true, preset: 'iso' })
 }
 
 function showUnderside() {
   if (currentBox && activeViewKind.value === 'toolhead') {
-    fitCamera(currentBox, { animate: true, underside: true })
+    fitCamera(currentBox, { animate: true, preset: 'underside' })
   }
+}
+
+function syncOrbitInteraction() {
+  if (!controls || !renderer) return
+  const active = !props.lightweight || orbitUnlocked.value
+  controls.enabled = active
+  renderer.domElement.style.touchAction = active ? 'none' : 'pan-y'
+}
+
+function toggleOrbitLock() {
+  orbitUnlocked.value = !orbitUnlocked.value
+  syncOrbitInteraction()
 }
 
 function applyAccentColor() {
@@ -239,32 +300,43 @@ function rebuildStageExtras(box) {
   const floorD = maxDim * 2.8
   const floorY = box.min.y - Math.max(0.0003, maxDim * 0.002)
 
-  floor = new Reflector(new THREE.PlaneGeometry(floorW * 0.9, floorD * 0.82), {
-    textureWidth: 512,
-    textureHeight: 512,
-    color: 0x80888c,
-    clipBias: 0.00003,
-    multisample: 0,
-  })
-  const origBefore = floor.onBeforeRender
-  floor.onBeforeRender = function (r, scene, cam, ...rest) {
-    if (scene.overrideMaterial) return
-    const veilWas = floorVeil?.visible ?? false
-    const thermalWas = thermalGroup?.visible ?? false
-    if (floorVeil) floorVeil.visible = false
-    if (thermalGroup) thermalGroup.visible = false
-    origBefore.call(this, r, scene, cam, ...rest)
-    if (floorVeil) floorVeil.visible = veilWas
-    if (thermalGroup) thermalGroup.visible = thermalWas
-  }
-  floor.rotation.x = -Math.PI / 2
-  floor.position.set(center.x, floorY, center.z)
-  world.add(floor)
+  if (props.lightweight) {
+    // Pi / kiosk mode: skip heavy Reflector secondary render pass for crisp touch responsiveness.
+    floor = new THREE.Mesh(
+      new THREE.CircleGeometry(maxDim * 1.15, 36),
+      new THREE.MeshBasicMaterial({ color: 0x223037, transparent: true, opacity: 0.45 }),
+    )
+    floor.rotation.x = -Math.PI / 2
+    floor.position.set(center.x, floorY, center.z)
+    world.add(floor)
+  } else {
+    floor = new Reflector(new THREE.PlaneGeometry(floorW * 0.9, floorD * 0.82), {
+      textureWidth: 512,
+      textureHeight: 512,
+      color: 0x6f797e,
+      clipBias: 0.00003,
+      multisample: 0,
+    })
+    const origBefore = floor.onBeforeRender
+    floor.onBeforeRender = function (r, scene, cam, ...rest) {
+      if (scene.overrideMaterial) return
+      const veilWas = floorVeil?.visible ?? false
+      const thermalWas = thermalGroup?.visible ?? false
+      if (floorVeil) floorVeil.visible = false
+      if (thermalGroup) thermalGroup.visible = false
+      origBefore.call(this, r, scene, cam, ...rest)
+      if (floorVeil) floorVeil.visible = veilWas
+      if (thermalGroup) thermalGroup.visible = thermalWas
+    }
+    floor.rotation.x = -Math.PI / 2
+    floor.position.set(center.x, floorY, center.z)
+    world.add(floor)
 
-  floorVeil = buildStudioFloorVeil({ width: floorW, depth: floorD })
-  if (floorVeil) {
-    floorVeil.position.set(center.x, floorY + 0.00025, center.z)
-    world.add(floorVeil)
+    floorVeil = buildStudioFloorVeil({ width: floorW, depth: floorD })
+    if (floorVeil) {
+      floorVeil.position.set(center.x, floorY + 0.00025, center.z)
+      world.add(floorVeil)
+    }
   }
 
   if (activeViewKind.value === 'toolhead') {
@@ -344,8 +416,8 @@ function rebuildStageExtras(box) {
 function visualSignature() {
   const t0 = props.tool ?? {}
   const leds = t0.leds
-  const hasSensor = t0.filamentEnabled != null
-  const filamentVisible = props.online && (hasSensor ? t0.filamentEnabled === true && t0.filamentDetected === true : true)
+  const filamentVisible =
+    props.online && !(t0.filamentEnabled === true && t0.filamentDetected === false)
   const matColor = t0.material?.color ?? '#bec9cc'
   const glow = nozzleThermalGlow(t0.temperature, props.online)
   return [
@@ -385,9 +457,8 @@ function syncVisuals(force = false) {
   }
 
   if (filamentStrand) {
-    const hasSensor = props.tool?.filamentEnabled != null
     filamentStrand.visible =
-      props.online && (hasSensor ? props.tool?.filamentEnabled === true && props.tool?.filamentDetected === true : true)
+      props.online && !(props.tool?.filamentEnabled === true && props.tool?.filamentDetected === false)
     filamentStrand.material.color.set(props.tool?.material?.color ?? '#bec9cc')
   }
 
@@ -464,8 +535,8 @@ async function loadActiveModel(forceReload = false) {
           if (mat.roughness != null) mat.roughness = Math.min(mat.roughness, 0.16)
           if (mat.metalness != null) mat.metalness = Math.min(mat.metalness, 0.15)
         } else {
-          if (mat.metalness != null) mat.metalness = Math.min(mat.metalness, 0.45)
-          if (mat.roughness != null) mat.roughness = Math.max(mat.roughness, 0.35)
+          if (mat.metalness != null) mat.metalness = Math.min(mat.metalness, 0.38)
+          if (mat.roughness != null) mat.roughness = Math.max(mat.roughness, 0.42)
         }
       }
       if (hasTransparentGlass) object.renderOrder = 1
@@ -490,7 +561,7 @@ async function loadActiveModel(forceReload = false) {
 
     applyAccentColor()
     rebuildStageExtras(currentBox)
-    fitCamera(currentBox, { animate: false, underside: false })
+    fitCamera(currentBox, { animate: false, preset: 'iso' })
     syncVisuals(true)
   } catch {
     if (!disposed && loadGuard.isCurrent(gen)) {
@@ -517,6 +588,7 @@ function onVisibility() {
 }
 
 function updateCanvasLabels() {
+  renderer?.domElement.setAttribute('role', 'img')
   renderer?.domElement.setAttribute('title', t('Ziehen zum Drehen · Scrollen zum Zoomen'))
   renderer?.domElement.setAttribute('aria-label', t('Interaktive 3D-Ansicht des Druckers.'))
 }
@@ -530,11 +602,11 @@ function initWebGL() {
   if (renderer || !viewport.value || isEmptyCustom.value) return
   try {
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' })
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.75))
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, props.lightweight ? 1.25 : 1.75))
     renderer.setClearColor(0x1b252a, 1)
     renderer.outputColorSpace = THREE.SRGBColorSpace
     renderer.toneMapping = THREE.ACESFilmicToneMapping
-    renderer.toneMappingExposure = 1.3
+    renderer.toneMappingExposure = 1.02
     updateCanvasLabels()
 
     viewport.value.appendChild(renderer.domElement)
@@ -542,21 +614,24 @@ function initWebGL() {
     world.background = new THREE.Color('#1b252a')
     camera = new THREE.PerspectiveCamera(36, 1, 0.005, 100)
 
-    const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType })
-    target.texture.colorSpace = THREE.LinearSRGBColorSpace
-    composer = new EffectComposer(renderer, target)
-    composer.addPass(new RenderPass(world, camera))
-    bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.32, 0.24, 1.8)
-    composer.addPass(bloom)
-    composer.addPass(new OutputPass())
+    if (!props.lightweight) {
+      const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType })
+      target.texture.colorSpace = THREE.LinearSRGBColorSpace
+      composer = new EffectComposer(renderer, target)
+      composer.addPass(new RenderPass(world, camera))
+      bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.22, 0.22, 2.2)
+      composer.addPass(bloom)
+      composer.addPass(new OutputPass())
+    }
 
-    createStudioLights().forEach(light => world.add(light))
+    createStudioLights({ balanced: true }).forEach(light => world.add(light))
 
     controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = !reducedMotion.matches
     controls.dampingFactor = 0.12
     controls.maxPolarAngle = Math.PI * 0.92
     controls.addEventListener('change', invalidate)
+    syncOrbitInteraction()
 
     renderer.domElement.addEventListener('pointerdown', () => {
       animation = null
@@ -635,9 +710,22 @@ watch(
   },
 )
 
-watch(activeView, () => {
+watch(activeView, next => {
+  saveSceneView(next)
   if (renderer && !isEmptyCustom.value) loadActiveModel(false)
 })
+
+watch(
+  () => props.lightweight,
+  async next => {
+    orbitUnlocked.value = !next
+    if (renderer && !isEmptyCustom.value) {
+      teardownWebGL()
+      await nextTick()
+      initWebGL()
+    }
+  },
+)
 
 watch(
   () => props.sceneConfig?.accentColor,
@@ -677,7 +765,7 @@ onBeforeUnmount(() => {
     <template v-else>
       <div class="scene-toolbar">
         <div class="scene-toolbar-left">
-          <div v-if="hasBothViews" class="segmented" :aria-label="t('3D-Modell')">
+          <div v-if="hasBothViews" class="segmented scene-view-switch" role="group" :aria-label="t('3D-Modell')">
             <button type="button" :aria-pressed="activeViewKind === 'toolhead'" @click="activeView = 'toolhead'">
               {{ t('Toolhead') }}
             </button>
@@ -691,11 +779,52 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="scene-actions">
+          <div class="segmented scene-presets" role="group" :aria-label="t('Kameraperspektive')">
+            <button
+              type="button"
+              :disabled="!ready"
+              :aria-pressed="cameraPreset === 'iso'"
+              @click="setCameraPreset('iso')"
+            >
+              Iso
+            </button>
+            <button
+              type="button"
+              :disabled="!ready"
+              :aria-pressed="cameraPreset === 'front'"
+              @click="setCameraPreset('front')"
+            >
+              {{ t('Front') }}
+            </button>
+            <button
+              type="button"
+              :disabled="!ready"
+              :aria-pressed="cameraPreset === 'side'"
+              @click="setCameraPreset('side')"
+            >
+              {{ t('Seite') }}
+            </button>
+          </div>
+          <button
+            v-if="lightweight"
+            class="icon-button"
+            :class="{ 'toggle-on': orbitUnlocked }"
+            type="button"
+            :disabled="!ready"
+            :aria-pressed="orbitUnlocked"
+            :aria-label="orbitUnlocked ? t('3D-Drehen sperren (Scrollen aktiv)') : t('3D-Drehen aktivieren')"
+            :title="orbitUnlocked ? t('3D-Drehen sperren (Scrollen aktiv)') : t('3D-Drehen aktivieren')"
+            @click="toggleOrbitLock"
+          >
+            <Unlock v-if="orbitUnlocked" :size="15" />
+            <Lock v-else :size="15" />
+          </button>
           <button
             v-if="activeViewKind === 'toolhead'"
             class="icon-button"
             type="button"
             :disabled="!ready"
+            :aria-pressed="cameraPreset === 'underside'"
             :aria-label="t('Toolhead von unten ansehen')"
             :title="t('Unterseite')"
             @click="showUnderside"
@@ -727,7 +856,9 @@ onBeforeUnmount(() => {
 
       <div class="scene-bottom">
         <span class="scene-badge"><Box :size="13" />{{ badgeText }}</span>
-        <span class="orbit-hint"><Move :size="12" />{{ t('Ziehen zum Drehen · Scrollen zum Zoomen') }}</span>
+        <span v-if="lightweight && !orbitUnlocked" class="scene-lock-hint">
+          <Lock :size="11" />{{ t('Scroll-Schutz aktiv') }}
+        </span>
       </div>
     </template>
   </section>

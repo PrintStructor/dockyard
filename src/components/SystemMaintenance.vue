@@ -816,7 +816,12 @@ onMounted(() => {
       </div>
     </section>
 
-    <dialog ref="notesDialog" class="camera-dialog update-notes-dialog" @click.self="closeNotes">
+    <dialog
+      ref="notesDialog"
+      class="camera-dialog update-notes-dialog"
+      :aria-label="t('Neuigkeiten & Änderungen')"
+      @click.self="closeNotes"
+    >
       <header>
         <h2>{{ notesTarget }} · {{ t('Neuigkeiten & Änderungen') }}</h2>
         <button type="button" class="icon-button" :aria-label="t('Schließen')" @click="closeNotes">
@@ -866,7 +871,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div v-if="notesData.githubError" class="system-banner amber">
+        <div v-if="notesData.githubError" class="system-banner amber" role="alert">
           <AlertTriangle :size="14" />
           <span>{{ t('Release-Notes von GitHub derzeit nicht abrufbar:') }} {{ notesData.githubError }}</span>
         </div>

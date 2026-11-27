@@ -50,6 +50,27 @@ test('normalizePrintMetadata parses OrcaSlicer multi-tool weights, colors, and b
   assert.equal(meta.tools[0].used, false)
 })
 
+test('normalizePrintMetadata parses single-tool plain string metadata and total weight fallback', () => {
+  const single = normalizePrintMetadata(
+    {
+      slicer: 'OrcaSlicer',
+      filament_type: 'ABS',
+      filament_name: 'eSUN ABS+ White',
+      filament_colors: '#d62828',
+      filament_weight_total: 42.5,
+      first_layer_extr_temp: 255,
+    },
+    'crucible_part.gcode',
+  )
+  assert.equal(single.tools[0].used, true)
+  assert.equal(single.tools[0].type, 'ABS')
+  assert.equal(single.tools[0].name, 'eSUN ABS+ White')
+  assert.equal(single.tools[0].color, '#d62828')
+  assert.equal(single.tools[0].weight, 42.5)
+  assert.equal(single.tools[0].temp, 255)
+  assert.equal(single.tools[1].used, false)
+})
+
 test('parseGcodeText extracts multi-tool surface walls, flags supports, skips sparse infill, and encodes binary', () => {
   const sample = `
 M83

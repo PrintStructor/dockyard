@@ -32,7 +32,7 @@ function matchesDynamicSubscription(name, baseObjects) {
     name === 'z_tilt' ||
     name === 'quad_gantry_level' ||
     name === 'fan' ||
-    /^fan_generic [A-Za-z0-9_]+$/.test(name) ||
+    /^fan_generic [A-Za-z0-9_-]+$/.test(name) ||
     /^temperature_sensor .+$/.test(name) ||
     /^temperature_fan .+$/.test(name) ||
     /^filament_(?:switch|motion)_sensor .+$/.test(name) ||

@@ -84,15 +84,58 @@ export function applyLedTargets(
   return anyChanged
 }
 
-export function createStudioLights() {
-  const hemi = new THREE.HemisphereLight(0xe3edff, 0x65716a, 2.25)
-  const key = new THREE.DirectionalLight(0xfff6e9, 3.9)
+export function createStudioLights({ balanced = false } = {}) {
+  const hemi = new THREE.HemisphereLight(0xe3edff, 0x65716a, balanced ? 1.45 : 2.25)
+  const key = new THREE.DirectionalLight(0xfff6e9, balanced ? 2.25 : 3.9)
   key.position.set(3, 5, 5)
-  const fill = new THREE.DirectionalLight(0xc5d4ef, 1.8)
+  const fill = new THREE.DirectionalLight(0xc5d4ef, balanced ? 1.1 : 1.8)
   fill.position.set(-4, 2, -3)
-  const rim = new THREE.DirectionalLight(0xd4ecff, 2.2)
+  const rim = new THREE.DirectionalLight(0xd4ecff, balanced ? 1.35 : 2.2)
   rim.position.set(0, 1.9, -4.5)
   return [hemi, key, fill, rim]
+}
+
+/**
+ * Compute exact perspective camera distance along unit vector `dir` (target -> camera)
+ * so all 8 corners of `box` fit cleanly inside the viewport frustum without top/bottom
+ * or left/right cropping at any aspect ratio.
+ */
+export function computeExactFitDistance(box, dir, vFovRad, aspect, margin = 1.15) {
+  if (!box || box.isEmpty()) return 0.5
+  const center = box.getCenter(new THREE.Vector3())
+  const size = box.getSize(new THREE.Vector3())
+  const maxDim = Math.max(size.x, size.y, size.z, 0.05)
+
+  const viewDir = dir.clone().normalize()
+  const worldUp = Math.abs(viewDir.y) > 0.96 ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 1, 0)
+  const right = new THREE.Vector3().crossVectors(worldUp, viewDir).normalize()
+  const up = new THREE.Vector3().crossVectors(viewDir, right).normalize()
+
+  const tanHalfV = Math.max(0.05, Math.tan(vFovRad / 2))
+  const tanHalfH = tanHalfV * Math.max(0.45, aspect || 1)
+  const safeMargin = Math.max(1.0, margin)
+
+  const xs = [box.min.x - center.x, box.max.x - center.x]
+  const ys = [box.min.y - center.y, box.max.y - center.y]
+  const zs = [box.min.z - center.z, box.max.z - center.z]
+  const corner = new THREE.Vector3()
+  let dist = maxDim * 0.75
+
+  for (const x of xs) {
+    for (const y of ys) {
+      for (const z of zs) {
+        corner.set(x, y, z)
+        const projR = Math.abs(corner.dot(right))
+        const projU = Math.abs(corner.dot(up))
+        const projD = corner.dot(viewDir)
+        const reqV = projD + (projU * safeMargin) / tanHalfV
+        const reqH = projD + (projR * safeMargin) / tanHalfH
+        if (reqV > dist) dist = reqV
+        if (reqH > dist) dist = reqH
+      }
+    }
+  }
+  return dist
 }
 
 export function buildThermalGlowTexture() {

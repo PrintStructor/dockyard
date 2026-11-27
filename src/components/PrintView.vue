@@ -616,7 +616,7 @@ onBeforeUnmount(() => {
           >
             <span
               class="print-tool-swatch"
-              :style="{ background: tool.color ?? '#8b9ba2' }"
+              :style="{ background: tool.color ?? 'var(--muted)' }"
               :title="tool.color ?? ''"
             />
             <div class="print-tool-info">
@@ -663,6 +663,7 @@ onBeforeUnmount(() => {
     <dialog
       ref="thumbnailDialog"
       class="camera-dialog thumbnail-dialog"
+      :aria-label="t('Vorschaubild')"
       @click="event => event.target === thumbnailDialog && closeThumbnail()"
     >
       <header>

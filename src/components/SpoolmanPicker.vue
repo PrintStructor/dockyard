@@ -12,6 +12,8 @@ const props = defineProps({
 const emit = defineEmits(['changed'])
 
 const rootEl = ref(null)
+const triggerEl = ref(null)
+const searchEl = ref(null)
 const open = ref(false)
 const loading = ref(false)
 const saving = ref(false)
@@ -68,6 +70,7 @@ function togglePopover() {
   if (open.value) {
     query.value = ''
     loadSpools()
+    setTimeout(() => searchEl.value?.focus(), 0)
   }
 }
 
@@ -105,6 +108,7 @@ function onOutsidePointer(event) {
 function onKeydown(event) {
   if (event.key === 'Escape' && open.value) {
     open.value = false
+    triggerEl.value?.focus()
   }
 }
 
@@ -121,16 +125,18 @@ onBeforeUnmount(() => {
 <template>
   <div ref="rootEl" class="spoolman-wrap">
     <button
+      ref="triggerEl"
       type="button"
       class="spoolman-pill"
       :class="{ empty: !activeSpool, readonly: !interactive }"
+      aria-haspopup="dialog"
       :aria-expanded="open"
       :aria-label="t('Spoolman-Spule auswählen')"
       @click="togglePopover"
     >
       <span
         class="spoolman-dot"
-        :style="{ background: activeSpool?.color ?? '#879499' }"
+        :style="{ background: activeSpool?.color ?? 'var(--muted)' }"
         aria-hidden="true"
       />
       <span class="spoolman-pill-text">{{ pillLabel }}</span>
@@ -157,6 +163,7 @@ onBeforeUnmount(() => {
       <label class="spoolman-search">
         <Search :size="13" />
         <input
+          ref="searchEl"
           v-model="query"
           type="text"
           :placeholder="t('Spule, Material oder Hersteller suchen …')"
@@ -167,12 +174,12 @@ onBeforeUnmount(() => {
       <p v-if="!canWrite" class="spoolman-note">{{ t('Nur Lesezugriff: Spulenwechsel ist für diesen Browser gesperrt.') }}</p>
       <p v-else-if="error" class="spoolman-error" role="alert">{{ t(error) }}</p>
 
-      <div v-if="loading" class="spoolman-state">
+      <div v-if="loading" class="spoolman-state" role="status" aria-live="polite">
         <Loader2 :size="15" class="spinning" />
         <span>{{ t('Spulen werden geladen …') }}</span>
       </div>
 
-      <div v-else-if="!filteredSpools.length" class="spoolman-state">
+      <div v-else-if="!filteredSpools.length" class="spoolman-state" role="status" aria-live="polite">
         <span>{{ spools.length ? t('Keine passende Spule gefunden.') : t('Keine aktiven Spulen in Spoolman vorhanden.') }}</span>
       </div>
 
@@ -188,7 +195,7 @@ onBeforeUnmount(() => {
           :disabled="!interactive || saving"
           @click="selectSpool(spool.id)"
         >
-          <span class="spoolman-dot" :style="{ background: spool.color ?? '#879499' }" aria-hidden="true" />
+          <span class="spoolman-dot" :style="{ background: spool.color ?? 'var(--muted)' }" aria-hidden="true" />
           <span class="spoolman-row-main">
             <strong>
               <span v-if="spool.material" class="spoolman-mat">{{ spool.material }}</span>

@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import { RotateCcw, Focus, Grid3x3, Box, Layers, Eye, EyeOff, Loader2 } from '@lucide/vue'
+import { RotateCcw, Grid3x3, Box, Layers, Eye, EyeOff, Loader2 } from '@lucide/vue'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import { t, language } from '../i18n.mjs'
@@ -911,16 +911,6 @@ onBeforeUnmount(() => {
         <button
           class="icon-button"
           type="button"
-          :disabled="!hasModel"
-          :title="t('Modell fokussieren')"
-          :aria-label="t('Modell fokussieren')"
-          @click="focusObject(true)"
-        >
-          <Focus :size="16" />
-        </button>
-        <button
-          class="icon-button"
-          type="button"
           :disabled="!!webglError"
           :title="t('Gesamtes Druckbett zeigen')"
           :aria-label="t('Gesamtes Druckbett zeigen')"
@@ -932,8 +922,8 @@ onBeforeUnmount(() => {
           class="icon-button"
           type="button"
           :disabled="!hasModel"
-          :title="t('Ansicht zurücksetzen')"
-          :aria-label="t('Ansicht zurücksetzen')"
+          :title="t('Modell fokussieren & Ansicht zurücksetzen')"
+          :aria-label="t('Modell fokussieren & Ansicht zurücksetzen')"
           @click="focusObject(true)"
         >
           <RotateCcw :size="15" />

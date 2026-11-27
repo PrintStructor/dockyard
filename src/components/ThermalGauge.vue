@@ -12,6 +12,7 @@ const props = defineProps({
   maxTemperature: Number,
   online: Boolean,
   decorative: Boolean,
+  hideLabel: { type: Boolean, default: false },
 })
 const gauge = computed(() => thermalDisplay(props))
 </script>
@@ -47,6 +48,6 @@ const gauge = computed(() => thermalDisplay(props))
       <span v-for="tick in [25, 50, 75]" :key="tick" class="thermal-tick" :style="{ left: `${tick}%` }" />
       <span v-if="gauge.marker != null" class="thermal-target" :style="{ left: `${gauge.marker * 100}%` }" />
     </span>
-    <span class="thermal-label">{{ t(gauge.label) }}</span>
+    <span v-if="!hideLabel" class="thermal-label">{{ t(gauge.label) }}</span>
   </span>
 </template>

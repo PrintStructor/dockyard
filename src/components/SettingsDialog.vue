@@ -47,6 +47,7 @@ import CockpitSelect from './CockpitSelect.vue'
 const props = defineProps({
   open: Boolean,
   initialSection: { type: String, default: 'printers' },
+  isSingleTool: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['close', 'switched'])
@@ -97,15 +98,26 @@ const languageOptions = computed(() => [
   { value: 'en', label: 'English (EN)', lang: 'en' },
 ])
 
-const defaultTabOptions = computed(() => [
-  { value: 'tools', label: t('Werkzeuge') },
-  { value: 'controls', label: t('Bedienung') },
-  { value: 'print', label: t('Druck') },
-  { value: 'history', label: t('Verlauf') },
-  { value: 'cameras', label: t('Kameras') },
-  { value: 'console', label: t('Konsole') },
-  { value: 'system', label: t('System') },
-])
+const defaultTabOptions = computed(() =>
+  props.isSingleTool
+    ? [
+        { value: 'tools', label: t('Cockpit') },
+        { value: 'print', label: t('Druck') },
+        { value: 'history', label: t('Verlauf') },
+        { value: 'cameras', label: t('Kameras') },
+        { value: 'console', label: t('Konsole') },
+        { value: 'system', label: t('System') },
+      ]
+    : [
+        { value: 'tools', label: t('Werkzeuge') },
+        { value: 'controls', label: t('Bedienung') },
+        { value: 'print', label: t('Druck') },
+        { value: 'history', label: t('Verlauf') },
+        { value: 'cameras', label: t('Kameras') },
+        { value: 'console', label: t('Konsole') },
+        { value: 'system', label: t('System') },
+      ],
+)
 
 const cameraServiceOptions = computed(() => [
   { value: 'camera-streamer', label: t('camera-streamer (WebRTC + MJPEG)') },
@@ -141,6 +153,14 @@ const modelUploadState = ref({ toolhead: '', printer: '' })
 const modelDragOver = ref({ toolhead: false, printer: false })
 const modelFeedback = ref(null)
 const modelFileInputs = ref({})
+const confirmDeleteModelSlot = ref('')
+let confirmDeleteModelTimer = null
+
+function resetModelDeleteConfirm() {
+  confirmDeleteModelSlot.value = ''
+  clearTimeout(confirmDeleteModelTimer)
+  confirmDeleteModelTimer = null
+}
 
 const persistedSelectedPrinter = computed(() => {
   const id = selectedPrinter.value?.id
@@ -257,13 +277,51 @@ async function handleModelUpload(slot, file) {
     const res = await settingsStore.uploadModel(printerId, slot, uploadPayload, file.name)
     if (!res.ok) {
       modelFeedback.value = { ok: false, message: res.error || 'Upload fehlgeschlagen.' }
-    } else if (optimizedSummary) {
-      modelFeedback.value = {
-        ok: true,
-        message: `3D-Modell automatisch optimiert (${formatBytes(optimizedSummary.from)} → ${formatBytes(optimizedSummary.to)}) und live aktiviert.`,
-      }
     } else {
-      modelFeedback.value = { ok: true, message: '3D-Modell gespeichert und live aktiviert.' }
+      const draftPreset = selectedPrinter.value?.model?.preset
+      const persistedPreset = persistedSelectedPrinter.value?.model?.preset
+      let needsManualSave = false
+      if (draftPreset && persistedPreset && draftPreset !== persistedPreset) {
+        if (isServerDirty.value) {
+          // Persist the preset choice automatically when uploading so "live aktiviert" never silently reverts on close.
+          const syncedPrinters = (settingsStore.printers.value ?? []).map(p =>
+            p.id === printerId
+              ? { ...p, model: { ...(p.model ?? {}), preset: draftPreset } }
+              : p,
+          )
+          const saved = await settingsStore.saveSettings({
+            activePrinterId: settingsStore.settings.value?.activePrinterId,
+            printers: syncedPrinters,
+            network: settingsStore.settings.value?.network,
+          })
+          if (saved.ok) {
+            try {
+              const prevBase = JSON.parse(baselineJson.value || '{}')
+              prevBase.printers = (prevBase.printers ?? []).map(p =>
+                p.id === printerId ? { ...p, model: { ...(p.model ?? {}), preset: draftPreset } } : p,
+              )
+              baselineJson.value = JSON.stringify(prevBase)
+            } catch {
+              // Ignore baseline parse failure
+            }
+          } else {
+            needsManualSave = true
+          }
+        }
+      }
+      if (needsManualSave) {
+        modelFeedback.value = {
+          ok: true,
+          message: '3D-Modell hochgeladen · bitte unten „Speichern“ klicken, um das CAD-Profil zu aktivieren.',
+        }
+      } else if (optimizedSummary) {
+        modelFeedback.value = {
+          ok: true,
+          message: `3D-Modell automatisch optimiert (${formatBytes(optimizedSummary.from)} → ${formatBytes(optimizedSummary.to)}) und live aktiviert.`,
+        }
+      } else {
+        modelFeedback.value = { ok: true, message: '3D-Modell gespeichert und live aktiviert.' }
+      }
     }
   } finally {
     modelUploadState.value[slot] = ''
@@ -320,7 +378,7 @@ function onModelDrop(slot, event) {
   if (!file) {
     modelFeedback.value = {
       ok: false,
-      message: 'Keine Datei erkannt. Falls die Datei in iCloud liegt, bitte zuerst lokal laden oder über „.glb hochladen“ auswählen.',
+      message: 'Keine Datei erkannt. Falls die Datei in iCloud liegt, bitte zuerst lokal laden oder über „Datei auswählen & hochladen“ auswählen.',
     }
     return
   }
@@ -330,6 +388,13 @@ function onModelDrop(slot, event) {
 async function handleModelDelete(slot) {
   const printerId = selectedPrinter.value?.id
   if (!printerId || !canWrite.value || modelUploadState.value[slot]) return
+  if (confirmDeleteModelSlot.value !== slot) {
+    confirmDeleteModelSlot.value = slot
+    clearTimeout(confirmDeleteModelTimer)
+    confirmDeleteModelTimer = setTimeout(resetModelDeleteConfirm, 5000)
+    return
+  }
+  resetModelDeleteConfirm()
   modelFeedback.value = null
   modelUploadState.value[slot] = 'deleting'
   try {
@@ -349,6 +414,7 @@ const importHasCustomPreset = computed(() =>
 )
 watch(selectedPrinterId, () => {
   modelFeedback.value = null
+  resetModelDeleteConfirm()
 })
 
 const canWrite = computed(() => settingsStore.runtime.value?.canWrite !== false)
@@ -392,6 +458,7 @@ function cloneDraftFromStore() {
     selectedPrinterId.value = activeId
   }
   deleteConfirmId.value = ''
+  resetModelDeleteConfirm()
   closeConfirmOpen.value = false
   dirtyConfigSwitchConfirm.value = null
   selfLockoutPending.value = false
@@ -505,6 +572,10 @@ async function activatePrinter(printer, confirmedDirty = false) {
   saveFeedback.value = null
   if (isServerDirty.value) {
     draft.value.activePrinterId = printer.id
+    saveFeedback.value = {
+      ok: true,
+      message: t('Wechsel auf {0} vorgemerkt · unten „Speichern“ klicken, um zu aktivieren.', [printer.name || printer.id]),
+    }
     return
   }
   if (!canWrite.value) return
@@ -996,7 +1067,7 @@ watch(
                       type="text"
                       class="settings-mono"
                       :disabled="!canWrite"
-                      placeholder="http://192.168.50.22 oder 192.168.50.22:7125"
+                      :placeholder="t('http://192.168.50.22 oder 192.168.50.22:7125')"
                     />
                     <button
                       type="button"
@@ -1150,13 +1221,23 @@ watch(
                           <button
                             v-if="customSlotMeta(slot.id)"
                             type="button"
-                            class="icon-button"
+                            :class="confirmDeleteModelSlot === slot.id ? 'confirm-button settings-model-delete-confirm' : 'icon-button'"
                             :disabled="!canWrite || Boolean(modelUploadState[slot.id])"
-                            :title="t('Modell entfernen')"
-                            :aria-label="t('Modell entfernen')"
+                            :title="
+                              confirmDeleteModelSlot === slot.id
+                                ? t('Erneut klicken, um das 3D-Modell endgültig zu entfernen')
+                                : t('Modell entfernen')
+                            "
+                            :aria-label="
+                              confirmDeleteModelSlot === slot.id
+                                ? t('3D-Modell wirklich entfernen?')
+                                : t('Modell entfernen')
+                            "
                             @click="handleModelDelete(slot.id)"
+                            @keydown.esc="resetModelDeleteConfirm"
                           >
                             <Trash2 :size="14" />
+                            <span v-if="confirmDeleteModelSlot === slot.id">{{ t('Entfernen?') }}</span>
                           </button>
                         </div>
                       </div>
@@ -1484,6 +1565,7 @@ watch(
                   type="text"
                   class="settings-mono"
                   :disabled="!canWrite"
+                  :aria-label="t('Erlaubte Browser-Origin hinzufügen')"
                   placeholder="http://192.168.50.10:4173"
                   @keydown.enter.prevent="addAllowedOrigin()"
                 />
@@ -1496,7 +1578,7 @@ watch(
                   <Plus :size="14" />{{ t('Hinzufügen') }}
                 </button>
               </div>
-              <p v-if="originError" class="settings-inline-error">{{ t(originError) }}</p>
+              <p v-if="originError" class="settings-inline-error" role="alert">{{ t(originError) }}</p>
             </div>
 
             <div v-if="selfLockoutPending" class="settings-notice amber" role="alert">
@@ -1574,11 +1656,13 @@ watch(
                   type="file"
                   accept=".json,application/json"
                   class="sr-only"
+                  tabindex="-1"
+                  aria-hidden="true"
                   @change="onImportFileSelected"
                 />
               </div>
 
-              <p v-if="importError" class="settings-inline-error">{{ t(importError) }}</p>
+              <p v-if="importError" class="settings-inline-error" role="alert">{{ t(importError) }}</p>
 
               <div v-if="importPreview" class="settings-import-box">
                 <div class="settings-import-summary">

@@ -246,7 +246,7 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
   })
 
   const genericFans = Object.keys(status)
-    .filter(name => /^fan_generic [A-Za-z0-9_]+$/.test(name))
+    .filter(name => /^fan_generic [A-Za-z0-9_-]+$/.test(name))
     .map(object => {
       const settings = config[object.toLowerCase()] ?? {}
       const speed = finite(status[object]?.speed)

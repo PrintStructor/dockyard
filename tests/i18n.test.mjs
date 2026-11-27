@@ -170,8 +170,10 @@ test('dynamic Paket 2 model, settings, and Spoolman error messages translate to 
   assert.deepEqual(untranslated, [], `Untranslated dynamic error messages:\n${untranslated.join('\n')}`)
 })
 
-test('display-mode touch targets for SpoolmanPicker meet 44px minimum', async () => {
+test('display-mode touch targets for SpoolmanPicker meet 44px minimum and style.css stays free of undefined tokens or box-shadows', async () => {
   const css = await readFile(fileURLToPath(new URL('../src/style.css', import.meta.url)), 'utf8')
   assert.match(css, /\.app-shell\.display-mode\s+\.spoolman-pill\{[^}]*min-height:44px/)
   assert.match(css, /\.app-shell\.display-mode\s+\.spoolman-clear-btn\{[^}]*min-height:44px/)
+  assert.doesNotMatch(css, /var\(--surface-hi\)/)
+  assert.doesNotMatch(css, /box-shadow\s*:/)
 })

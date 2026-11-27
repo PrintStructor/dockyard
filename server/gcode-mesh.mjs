@@ -48,13 +48,21 @@ export function validateThumbnailPath(relPath) {
 
 function parseJsonList(value) {
   if (Array.isArray(value)) return value
+  if (typeof value === 'number' && Number.isFinite(value)) return [value]
   if (typeof value !== 'string') return []
+  const trimmed = value.trim()
+  if (!trimmed) return []
   try {
-    const parsed = JSON.parse(value)
-    return Array.isArray(parsed) ? parsed : []
+    const parsed = JSON.parse(trimmed)
+    if (Array.isArray(parsed)) return parsed
+    if (typeof parsed === 'string' || typeof parsed === 'number') return [parsed]
   } catch {
-    return []
+    // Plain or semicolon-delimited slicer strings (Orca/Prusa/SuperSlicer single-tool)
   }
+  return trimmed
+    .split(';')
+    .map(part => part.trim().replace(/^["']|["']$/g, ''))
+    .filter(Boolean)
 }
 
 export function normalizePrintMetadata(metadata = {}, filename = '') {
@@ -63,20 +71,46 @@ export function normalizePrintMetadata(metadata = {}, filename = '') {
   const colors = parseJsonList(metadata.filament_colors)
   const temps = parseJsonList(metadata.filament_temps)
   const weights = parseJsonList(metadata.filament_weights)
-  const num = value => (typeof value === 'number' && Number.isFinite(value) ? value : null)
+  const num = value => {
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value.trim())
+      if (Number.isFinite(parsed)) return parsed
+    }
+    return null
+  }
 
   const tools = Array.from({ length: 6 }, (_, id) => {
     const weight = num(weights[id])
+    const rawColor = typeof colors[id] === 'string' ? colors[id].trim() : ''
+    const normalizedColor = /^#[0-9a-f]{6}$/i.test(rawColor)
+      ? rawColor
+      : /^[0-9a-f]{6}$/i.test(rawColor)
+        ? `#${rawColor}`
+        : null
     return {
       id,
       type: typeof types[id] === 'string' && types[id].trim() ? types[id].trim().slice(0, 80) : null,
       name: typeof names[id] === 'string' && names[id].trim() ? names[id].trim().slice(0, 160) : null,
-      color: typeof colors[id] === 'string' && /^#[0-9a-f]{6}$/i.test(colors[id]) ? colors[id] : null,
+      color: normalizedColor,
       temp: num(temps[id]),
       weight,
       used: weight != null && weight > 0,
     }
   })
+
+  const totalWeight = num(metadata.filament_weight_total)
+  const firstExtrTemp = num(metadata.first_layer_extr_temp)
+  if (!tools.some(item => item.used)) {
+    const t0 = tools[0]
+    const hasSingleToolMeta =
+      (totalWeight != null && totalWeight > 0) || Boolean(t0.type || t0.name || t0.color)
+    if (hasSingleToolMeta) {
+      t0.used = true
+      if (t0.weight == null && totalWeight != null && totalWeight > 0) t0.weight = totalWeight
+      if (t0.temp == null && firstExtrTemp != null && firstExtrTemp > 0) t0.temp = firstExtrTemp
+    }
+  }
 
   const thumbnails = Array.isArray(metadata.thumbnails) ? metadata.thumbnails : []
   const bestThumb = [...thumbnails]

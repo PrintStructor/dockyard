@@ -74,10 +74,36 @@ export function inferToolCountFromPresets(mainsail = null, legacy = null) {
   return maxIdx >= 0 ? Math.min(8, maxIdx + 1) : null
 }
 
+function extractMainsailPreset(entry, toolCount) {
+  if (!entry || typeof entry.name !== 'string' || !entry.values) return null
+  const name = entry.name.trim()
+  if (!name) return null
+  const bed = readMainsailValue(entry.values, 'heater_bed')
+  const fallbackTool = readMainsailValue(entry.values, 'extruder')
+  const tools = Array.from({ length: toolCount }, (_, id) =>
+    readMainsailValue(entry.values, id ? `extruder${id}` : 'extruder') ?? fallbackTool,
+  )
+  if (bed == null && tools.every(t => t == null)) return null
+  return { name, bed, tools }
+}
+
+function extractLegacyPreset(entry, toolCount) {
+  if (!entry || typeof entry.name !== 'string' || !entry.temps) return null
+  const name = entry.name.trim()
+  if (!name) return null
+  const bed = parseTemp(entry.temps.heater_bed)
+  const fallbackTool = parseTemp(entry.temps.extruder)
+  const tools = Array.from({ length: toolCount }, (_, id) =>
+    parseTemp(entry.temps[id ? `extruder${id}` : 'extruder']) ?? fallbackTool,
+  )
+  if (bed == null && tools.every(t => t == null)) return null
+  return { name, bed, tools }
+}
+
 export function normalizePresets({ mainsail = null, legacy = null, toolCount = 6 } = {}) {
   const count = Number.isInteger(toolCount) && toolCount >= 1 && toolCount <= 8 ? toolCount : 6
   const mainsailMap = mainsail?.presets ?? mainsail
-  return PRESET_NAMES.map(name => {
+  const result = PRESET_NAMES.map(name => {
     const fromMainsail = findMainsailPreset(mainsailMap, name, count)
     if (fromMainsail) return fromMainsail
     const fromLegacy = findLegacyPreset(legacy, name, count)
@@ -89,4 +115,31 @@ export function normalizePresets({ mainsail = null, legacy = null, toolCount = 6
       tools: Array.from({ length: count }, () => fallback.tool),
     }
   })
+
+  const seen = new Set(result.map(item => item.name.toUpperCase()))
+  const isCorePrefix = upper => PRESET_NAMES.some(core => upper === core || upper.startsWith(`${core} `))
+
+  const extras = []
+  if (mainsailMap && typeof mainsailMap === 'object') {
+    for (const entry of Object.values(mainsailMap)) {
+      const parsed = extractMainsailPreset(entry, count)
+      if (!parsed) continue
+      const upper = parsed.name.toUpperCase()
+      if (seen.has(upper) || isCorePrefix(upper)) continue
+      seen.add(upper)
+      extras.push(parsed)
+    }
+  }
+  if (Array.isArray(legacy)) {
+    for (const entry of legacy) {
+      const parsed = extractLegacyPreset(entry, count)
+      if (!parsed) continue
+      const upper = parsed.name.toUpperCase()
+      if (seen.has(upper) || isCorePrefix(upper)) continue
+      seen.add(upper)
+      extras.push(parsed)
+    }
+  }
+
+  return [...result, ...extras].slice(0, 12)
 }

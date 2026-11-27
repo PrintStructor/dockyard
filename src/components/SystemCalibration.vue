@@ -446,7 +446,7 @@ onMounted(() => {
               :title="t(blockReason({ capKey: 'nudgeAll' }) || 'Alle 30 Werkzeugpaare messen + SAVE_CONFIG')"
               @click="requestConfirm('nudge_all', { capKey: 'nudgeAll' })"
             >
-              Nudge Voll XY
+              {{ t('Nudge Voll XY') }}
             </button>
 
             <template v-if="confirmKey === 'nudge_restore'">
@@ -979,7 +979,12 @@ onMounted(() => {
       <p v-else class="muted" style="margin-top: 0">{{ t('Keine ShakeTune-Diagramme vorhanden.') }}</p>
     </section>
 
-    <dialog ref="lightboxDialog" class="camera-dialog shaketune-dialog" @click.self="closeChart">
+    <dialog
+      ref="lightboxDialog"
+      class="camera-dialog shaketune-dialog"
+      :aria-label="t('ShakeTune-Diagramm')"
+      @click.self="closeChart"
+    >
       <header>
         <h2>{{ lightboxChart?.name }}</h2>
         <button type="button" class="icon-button" :aria-label="t('Schließen')" @click="closeChart">

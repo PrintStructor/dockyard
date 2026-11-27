@@ -14,6 +14,7 @@ const props = defineProps({
   status: Object,
   online: Boolean,
   pending: Boolean,
+  hidePrep: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['command'])
@@ -129,7 +130,7 @@ function initialize() {
 </script>
 
 <template>
-  <section class="initialize-control" :aria-label="isToolchanger ? t('Vorbereitung & Toolchanger') : t('Maschine & Vorbereitung')">
+  <section v-if="!hidePrep" class="initialize-control" :aria-label="isToolchanger ? t('Vorbereitung & Toolchanger') : t('Maschine & Vorbereitung')">
     <div class="machine-deck-head">
       <h3><Wrench :size="14" />{{ t('Maschine & Vorbereitung') }}</h3>
       <p :class="{ 'prep-note-warn': confirmMotors || !!homeReason }" :title="t(prepNote)" role="status">
@@ -219,7 +220,6 @@ function initialize() {
                     : t('Motoren lösen')
           "
           @click="releaseMotors"
-          @blur="resetMotorsConfirm"
           @keydown.esc="resetMotorsConfirm"
         >
           <svg class="motor-off-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
@@ -236,7 +236,7 @@ function initialize() {
             />
             <line x1="2.5" y1="2.5" x2="21.5" y2="21.5" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" />
           </svg>
-          <span v-if="confirmMotors" class="prep-confirm-mark">?</span>
+          <span>{{ confirmMotors ? t('Aus?') : t('Aus') }}</span>
         </button>
       </div>
 
@@ -281,8 +281,12 @@ function initialize() {
 
   <section v-if="hasLedProfiles" class="led-controls" :aria-label="t('LED-Befehle')">
     <div class="machine-deck-head">
-      <h3><Lightbulb :size="14" />LED Control</h3>
-      <p :title="t('LED-Status für Tools und Drucker.')">{{ t('LED-Status für Tools und Drucker.') }}</p>
+      <h3><Lightbulb :size="14" />{{ t('LED-Steuerung') }}</h3>
+      <p
+        :title="isToolchanger ? t('LED-Status für Tools und Drucker.') : t('LED-Status für den Drucker.')"
+      >
+        {{ isToolchanger ? t('LED-Status für Tools und Drucker.') : t('LED-Status für den Drucker.') }}
+      </p>
     </div>
     <div class="led-actions" :data-count="main.length">
       <button

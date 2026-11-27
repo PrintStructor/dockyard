@@ -530,8 +530,10 @@ over Xform "MeshPrimDef_Micro"
         0.0, 1.0, 0.0, 20.0,
         0.0, 0.0, 0.0, 1.0,
     ]
-    post_occ = mod._build_usd_post_transform_row(occ_rot_x90, doc_up='z', requested_up='z')
-    post_yup = mod._build_usd_post_transform_row(None, doc_up='z', requested_up='y')
+    post_occ = mod._build_usd_post_transform_row(occ_rot_x90, doc_up='z', requested_up='auto')
+    post_yup = mod._build_usd_post_transform_row(None, doc_up='z', requested_up='x+90')
+    post_auto_printer = mod._build_usd_post_transform_row(None, doc_up='y', requested_up='auto')
+    assert post_auto_printer == mod._IDENTITY_MAT4, post_auto_printer
     # Lying-down toolhead in USD space: X=50mm, Y=60mm, Z=110mm (points along -Z_usd)
     lying_usda = os.path.join(tmp, 'lying.usda')
     open(lying_usda, 'w', encoding='utf-8').write("""#usda 1.0

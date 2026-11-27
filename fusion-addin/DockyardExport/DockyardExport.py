@@ -429,19 +429,20 @@ def _mat3_mul(a, b):
     )
 
 
-def _build_usd_post_transform_row(occ_transform_col=None, doc_up="z", requested_up="z"):
+def _build_usd_post_transform_row(occ_transform_col=None, doc_up="z", requested_up="auto"):
     """Build a USD row-vector 4x4 rotation/scale matrix that:
     1. Restores a selected Occurrence's assembly orientation (`occ.transform2`) when Fusion's
        USD exporter exports `occ.component` in local component space.
-    2. Applies the user's requested `up_axis` ('z' vs 'y') relative to Fusion's document up axis.
+    2. Applies an optional orientation override ('auto', 'x+90', 'x-90', or legacy 'z'/'y').
     """
     # Basis change from Fusion space to USD Y-up space (column-vector 3x3)
-    u_z = (1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0)
-    u_z_inv = (1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0)
+    u_z = (1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0)       # -90 deg around X: (x,y,z) -> (x,z,-y)
+    u_z_inv = (1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0)   # +90 deg around X: (x,y,z) -> (x,-z,y)
     ident3 = (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
 
-    u_doc_inv = u_z_inv if str(doc_up or "z").lower() != "y" else ident3
-    u_req = u_z if str(requested_up or "z").lower() != "y" else ident3
+    is_doc_y = str(doc_up or "z").lower() == "y"
+    u_doc = ident3 if is_doc_y else u_z
+    u_doc_inv = ident3 if is_doc_y else u_z_inv
 
     if occ_transform_col and len(occ_transform_col) >= 12:
         r_occ = (
@@ -452,7 +453,19 @@ def _build_usd_post_transform_row(occ_transform_col=None, doc_up="z", requested_
     else:
         r_occ = ident3
 
-    m_col = _mat3_mul(_mat3_mul(u_req, r_occ), u_doc_inv)
+    req = str(requested_up or "auto").lower()
+    if req == "auto":
+        m_col = _mat3_mul(_mat3_mul(u_doc, r_occ), u_doc_inv)
+    elif req == "x+90":
+        base = _mat3_mul(_mat3_mul(u_doc, r_occ), u_doc_inv)
+        m_col = _mat3_mul(u_z_inv, base)
+    elif req == "x-90":
+        base = _mat3_mul(_mat3_mul(u_doc, r_occ), u_doc_inv)
+        m_col = _mat3_mul(u_z, base)
+    else:
+        u_req = ident3 if req == "y" else u_z
+        m_col = _mat3_mul(_mat3_mul(u_req, r_occ), u_doc_inv)
+
     # Transpose 3x3 column-vector matrix to USD row-vector 4x4 matrix
     return (
         m_col[0], m_col[3], m_col[6], 0.0,
@@ -1697,7 +1710,10 @@ def _try_native_export(app, design, ui, slot, up_axis, quality_mode, skip_fasten
                     progress.message = "Konvertiere 3MF nach GLB …"
                     progress.progressValue = 65
                     adsk.doEvents()
-                    mesh_groups, total_tris = parse_3mf_to_mesh_groups(tmp_3mf, up_axis=up_axis)
+                    mesh_groups, total_tris = parse_3mf_to_mesh_groups(
+                        tmp_3mf,
+                        up_axis=doc_up if str(up_axis or "auto").lower() == "auto" else ("y" if str(up_axis).lower() in ("y", "x+90") else "z"),
+                    )
                     if mesh_groups:
                         return mesh_groups, total_tris, 0, {}, "Native 3MF"
         except Exception:
@@ -1747,6 +1763,7 @@ def _execute_export(app, ui, slot, up_axis, quality_mode, skip_fasteners, out_di
         progress.isCancelButtonShown = True
         progress.show(_CMD_NAME, "Verarbeite Körper %v von %m …", 0, len(targets), 0)
 
+        brep_up = _detect_default_up_axis(app) if str(up_axis or "auto").lower() == "auto" else ("y" if str(up_axis).lower() in ("y", "x+90") else "z")
         try:
             for idx_body, (body, occ, mat, leaf_label, full_label) in enumerate(targets):
                 if idx_body % 10 == 0:
@@ -1835,7 +1852,7 @@ def _execute_export(app, ui, slot, up_axis, quality_mode, skip_fasteners, out_di
                 base_vert = len(grp["positions"]) // 3
                 for i in range(0, len(coords), 3):
                     wx, wy, wz = _transform_point(use_mat, coords[i], coords[i + 1], coords[i + 2])
-                    gx, gy, gz = fusion_cm_to_gltf_m(wx, wy, wz, up_axis=up_axis)
+                    gx, gy, gz = fusion_cm_to_gltf_m(wx, wy, wz, up_axis=brep_up)
                     min_x = min(min_x, gx)
                     max_x = max(max_x, gx)
                     min_y = min(min_y, gy)
@@ -1843,7 +1860,7 @@ def _execute_export(app, ui, slot, up_axis, quality_mode, skip_fasteners, out_di
                     min_z = min(min_z, gz)
                     max_z = max(max_z, gz)
                     grp["positions"].extend((gx, gy, gz))
-                    nx, ny, nz = _transform_normal(use_mat, normals[i], normals[i + 1], normals[i + 2], up_axis=up_axis)
+                    nx, ny, nz = _transform_normal(use_mat, normals[i], normals[i + 1], normals[i + 2], up_axis=brep_up)
                     grp["normals"].extend((nx, ny, nz))
 
                 for v_idx in indices:
@@ -1942,7 +1959,8 @@ def run(_context):
                     dir_inp = adsk.core.StringValueCommandInput.cast(inputs.itemById("outdir"))
 
                     slot = "toolhead" if slot_drop.selectedItem.index == 1 else "printer"
-                    up_axis = "y" if axis_drop.selectedItem.index == 1 else "z"
+                    axis_idx = axis_drop.selectedItem.index
+                    up_axis = "x+90" if axis_idx == 1 else "x-90" if axis_idx == 2 else "auto"
                     quality = "detail" if qual_drop.selectedItem.index == 1 else "compact"
                     out_dir = os.path.expanduser(dir_inp.value.strip() or "~/Desktop/dockyard-exports")
                     _execute_export(app, ui, slot, up_axis, quality, fast_chk.value, out_dir, reveal_chk.value)
@@ -1963,12 +1981,12 @@ def run(_context):
                     slot_drop.listItems.add("Gesamter Drucker (printer)", True)
                     slot_drop.listItems.add("Toolhead / Aktive Auswahl (toolhead)", False)
 
-                    default_axis = _detect_default_up_axis(app)
                     axis_drop = inputs.addDropDownCommandInput(
-                        "up_axis", "Hochachse", adsk.core.DropDownStyles.TextListDropDownStyle
+                        "up_axis", "Ausrichtung", adsk.core.DropDownStyles.TextListDropDownStyle
                     )
-                    axis_drop.listItems.add("Z-oben (VORON / STEP-Standard)", default_axis != "y")
-                    axis_drop.listItems.add("Y-oben (Fusion-Standard)", default_axis == "y")
+                    axis_drop.listItems.add("Automatisch (wie im Fusion-Viewport)", True)
+                    axis_drop.listItems.add("+90° aufrichten (falls auf Front liegend)", False)
+                    axis_drop.listItems.add("-90° aufrichten (falls auf Rücken liegend)", False)
 
                     qual_drop = inputs.addDropDownCommandInput(
                         "quality", "Detailstufe", adsk.core.DropDownStyles.TextListDropDownStyle

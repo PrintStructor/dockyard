@@ -15,6 +15,9 @@ import {
   resolveRestartTargetForFile,
   buildConfigUploadFormData,
   validateRestartTarget,
+  validateHostAction,
+  normalizePowerDevices,
+  validatePowerAction,
   evaluateMachineWriteGuard,
   normalizeSystemOverview,
   normalizeUpdateStatus,
@@ -39,6 +42,11 @@ test('constants match spec bounds and allowlist', () => {
     'mobileraker',
     'helixscreen',
     'klipper-mcu',
+    'KlipperScreen',
+    'spoolman',
+    'webcamd',
+    'timelapse',
+    'octoeverywhere',
   ])
 })
 
@@ -827,4 +835,50 @@ test('printerMiddleware enforces CSRF/method checks on update upgrade/recover an
   }
   const badNotes = await invokeMiddleware('GET', '/api/system/updates/notes?name=../etc/passwd')
   assert.equal(badNotes.status, 400)
+})
+
+test('Paket B2 machine: host reboot/shutdown, power devices, disk usage, MCU diagnostics, and CSRF guards', async () => {
+  assert.equal(validateHostAction('reboot').endpoint, '/machine/reboot')
+  assert.equal(validateHostAction('shutdown').endpoint, '/machine/shutdown')
+  assert.throws(() => validateHostAction('halt'), err => err.status === 400)
+
+  const devs = normalizePowerDevices({
+    devices: [
+      { device: 'printer_psu', type: 'gpio', status: 'on', locked_while_printing: true },
+      { device: 'caselight', type: 'tplink_smartplug', status: 'off', locked_while_printing: false },
+      { device: '../bad', type: 'gpio', status: 'on' },
+    ],
+  })
+  assert.equal(devs.length, 2)
+  assert.equal(validatePowerAction('printer_psu', 'off', devs).device.lockedWhilePrinting, true)
+  assert.throws(() => validatePowerAction('missing', 'on', devs), err => err.status === 404)
+  assert.throws(() => validatePowerAction('caselight', 'pulse', devs), err => err.status === 400)
+
+  const overview = normalizeSystemOverview({
+    diskUsage: { total: 32_000_000_000, used: 8_000_000_000, free: 24_000_000_000 },
+    mcuStatus: {
+      mcu: {
+        mcu_version: 'v0.12.0-123',
+        last_stats: { mcu_awake: 0.032, mcu_task_avg: 0.000015, bytes_retransmit: 0 },
+      },
+      'mcu ebbsb2209': {
+        mcu_version: 'v0.12.0-123',
+        last_stats: { mcu_awake: 0.018, mcu_task_avg: 0.000009, bytes_retransmit: 4 },
+      },
+    },
+  })
+  assert.equal(overview.disk.usedPercent, 25)
+  assert.equal(overview.mcus.length, 2)
+  assert.equal(overview.mcus[0].name, 'MCU')
+  assert.equal(overview.mcus[0].awakePercent, 3.2)
+  assert.equal(overview.mcus[0].taskAvgUs, 15)
+  assert.equal(overview.mcus[1].bytesRetransmit, 4)
+
+  // CSRF & method guards on new write routes
+  for (const route of ['/api/system/host/reboot', '/api/system/host/shutdown']) {
+    assert.equal((await invokeMiddleware('GET', route)).status, 405)
+    assert.equal((await invokeMiddleware('POST', route, { body: '{}' })).status, 403)
+  }
+  assert.equal((await invokeMiddleware('POST', '/api/system/power', { body: '{}' })).status, 403)
+  assert.equal((await invokeMiddleware('DELETE', '/api/system/power')).status, 405)
 })

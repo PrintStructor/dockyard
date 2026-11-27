@@ -25,6 +25,9 @@ import {
   checkExpectedModified,
   buildConfigUploadFormData,
   validateRestartTarget,
+  validateHostAction,
+  normalizePowerDevices,
+  validatePowerAction,
   evaluateMachineWriteGuard,
   normalizeSystemOverview,
   normalizeUpdateStatus,
@@ -526,8 +529,14 @@ function isDynamicPrinterObject(name) {
     /^tool T[0-7]$/.test(name) ||
     name === 'z_tilt' ||
     name === 'quad_gantry_level' ||
+    name === 'bed_screws' ||
+    name === 'screws_tilt_adjust' ||
     name === 'fan' ||
     /^fan_generic [A-Za-z0-9_-]+$/.test(name) ||
+    /^heater_fan [A-Za-z0-9_-]+$/.test(name) ||
+    /^controller_fan [A-Za-z0-9_-]+$/.test(name) ||
+    /^heater_generic [A-Za-z0-9_-]+$/.test(name) ||
+    /^output_pin [A-Za-z0-9_-]+$/.test(name) ||
     /^temperature_sensor .+$/.test(name) ||
     /^temperature_fan .+$/.test(name) ||
     /^filament_(?:switch|motion)_sensor .+$/.test(name) ||
@@ -559,8 +568,9 @@ async function query(withConfig = false) {
       ? Array.from(new Set([...nextDiscovered, ...effectObjects]))
       : [...objects, ...effectObjects, ...nextFanObjects]
   const queryNames = queryList.map(encodeURIComponent).join('&')
+  const configParam = withConfig ? '&configfile=settings,save_config_pending' : '&configfile=save_config_pending'
   const response = await fetchUpstream(
-    `${base}/printer/objects/query?${queryNames}${withConfig ? '&configfile=settings' : ''}`,
+    `${base}/printer/objects/query?${queryNames}${configParam}`,
     { signal: AbortSignal.timeout(5000) },
   )
   if (!response.ok) throw new Error(`Moonraker HTTP ${response.status}`)
@@ -575,7 +585,15 @@ async function query(withConfig = false) {
     configCache = data.result.status.configfile ?? null
     effectObjects = Object.keys(configCache?.settings ?? {}).filter(name => name.startsWith('led_effect '))
   }
-  return { ...data.result.status, configfile: configCache }
+  const mergedConfigfile = configCache
+    ? {
+        ...configCache,
+        ...(data.result.status.configfile?.save_config_pending !== undefined
+          ? { save_config_pending: data.result.status.configfile.save_config_pending }
+          : {}),
+      }
+    : (data.result.status.configfile ?? null)
+  return { ...data.result.status, configfile: mergedConfigfile }
 }
 
 function successMessageFor(action, label) {
@@ -989,7 +1007,7 @@ function printerMiddleware(req, res, next) {
   const modelRoute = path.match(/^\/api\/models\/([a-z0-9][a-z0-9_-]{0,31})\/(toolhead|printer)$/)
   const spoolmanRoute = path.match(/^\/api\/spoolman\/(spools|active)$/)
   const systemRoute = path.match(
-    /^\/api\/system\/(overview|calibration|calibration\/shaketune-image|config\/list|config\/file|config\/save|service\/restart|updates|updates\/refresh|updates\/notes|updates\/upgrade|updates\/recover|logs\/list|logs\/tail|logs\/download)$/,
+    /^\/api\/system\/(overview|calibration|calibration\/shaketune-image|config\/list|config\/file|config\/save|service\/restart|host\/reboot|host\/shutdown|power|updates|updates\/refresh|updates\/notes|updates\/upgrade|updates\/recover|logs\/list|logs\/tail|logs\/download)$/,
   )
   if (
     path !== '/api/status' &&
@@ -1020,10 +1038,13 @@ function printerMiddleware(req, res, next) {
   const isPrintDelete = printSub === 'file' && req.method === 'DELETE'
   const isPrintQueueGet = printSub === 'queue' && req.method === 'GET'
   const isPrintQueueWrite = printSub === 'queue' && req.method === 'POST'
+  const isSystemPowerGet = systemSub === 'power' && req.method === 'GET'
+  const isSystemPowerWrite = systemSub === 'power' && req.method === 'POST'
   const write =
     !isSettingsGet &&
     !isModelGet &&
     !isPrintQueueGet &&
+    !isSystemPowerGet &&
     (path === '/api/control' ||
       path === '/api/settings' ||
       settingsSub === 'switch' ||
@@ -1032,10 +1053,13 @@ function printerMiddleware(req, res, next) {
       isPrintUpload ||
       isPrintDelete ||
       isPrintQueueWrite ||
+      isSystemPowerWrite ||
       spoolmanSub === 'active' ||
       camera?.[2] === 'webrtc' ||
       systemSub === 'config/save' ||
       systemSub === 'service/restart' ||
+      systemSub === 'host/reboot' ||
+      systemSub === 'host/shutdown' ||
       systemSub === 'updates/refresh' ||
       systemSub === 'updates/upgrade' ||
       systemSub === 'updates/recover')
@@ -1045,7 +1069,7 @@ function printerMiddleware(req, res, next) {
     }
   } else if (printSub === 'file') {
     if (req.method !== 'DELETE') return json(405, { error: 'Methode nicht erlaubt.' })
-  } else if (printSub === 'queue') {
+  } else if (printSub === 'queue' || systemSub === 'power') {
     if (!['GET', 'POST'].includes(req.method)) return json(405, { error: 'Methode nicht erlaubt.' })
   } else if (!isSettingsGet && req.method !== (write ? 'POST' : 'GET')) {
     return json(405, { error: 'Methode nicht erlaubt.' })
@@ -1222,10 +1246,14 @@ function printerMiddleware(req, res, next) {
       }
       if (systemRoute) {
         if (systemSub === 'overview') {
-          const [procRes, sysRes, infoRes] = await Promise.all([
+          const [procRes, sysRes, infoRes, dirRes, objListRes] = await Promise.all([
             fetchUpstream(`${printer}/machine/proc_stats`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
             fetchUpstream(`${printer}/machine/system_info`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
             fetchUpstream(`${printer}/server/info`, { signal: AbortSignal.timeout(5000) }).catch(() => null),
+            fetchUpstream(`${printer}/server/files/directory?path=gcodes`, { signal: AbortSignal.timeout(4000) }).catch(
+              () => null,
+            ),
+            fetchUpstream(`${printer}/printer/objects/list`, { signal: AbortSignal.timeout(4000) }).catch(() => null),
           ])
           if (!procRes?.ok && !sysRes?.ok && !infoRes?.ok) {
             throw new Error('Moonraker-Systemdaten nicht erreichbar.')
@@ -1233,12 +1261,32 @@ function printerMiddleware(req, res, next) {
           const procJson = procRes?.ok ? await procRes.json().catch(() => null) : null
           const sysJson = sysRes?.ok ? await sysRes.json().catch(() => null) : null
           const infoJson = infoRes?.ok ? await infoRes.json().catch(() => null) : null
+          const dirJson = dirRes?.ok ? await dirRes.json().catch(() => null) : null
+          const objListJson = objListRes?.ok ? await objListRes.json().catch(() => null) : null
+
+          let mcuStatus = null
+          const mcuObjects = (Array.isArray(objListJson?.result?.objects) ? objListJson.result.objects : []).filter(
+            name => name === 'mcu' || /^mcu [A-Za-z0-9_-]+$/.test(name),
+          )
+          if (mcuObjects.length > 0 && infoJson?.result?.klippy_connected !== false) {
+            const mcuQuery = mcuObjects.map(encodeURIComponent).join('&')
+            const mcuRes = await fetchUpstream(`${printer}/printer/objects/query?${mcuQuery}`, {
+              signal: AbortSignal.timeout(4000),
+            }).catch(() => null)
+            if (mcuRes?.ok) {
+              const mcuJson = await mcuRes.json().catch(() => null)
+              mcuStatus = mcuJson?.result?.status ?? null
+            }
+          }
+
           return json(
             200,
             normalizeSystemOverview({
               procStats: procJson?.result ?? null,
               systemInfo: sysJson?.result?.system_info ?? null,
               serverInfo: infoJson?.result ?? null,
+              diskUsage: dirJson?.result?.disk_usage ?? null,
+              mcuStatus,
             }),
           )
         }
@@ -1256,6 +1304,12 @@ function printerMiddleware(req, res, next) {
             'bed_mesh',
             'quad_gantry_level',
             'z_tilt',
+            'bed_screws',
+            'screws_tilt_adjust',
+            'probe',
+            'bltouch',
+            'scanner',
+            'cartographer',
             'beacon',
             'tools_calibrate',
             'save_variables',
@@ -1265,7 +1319,7 @@ function printerMiddleware(req, res, next) {
             ...Array.from({ length: 8 }, (_, i) => [i ? `extruder${i}` : 'extruder', `tool T${i}`]).flat(),
           ].filter(name => availSet.size === 0 || availSet.has(name))
 
-          const queryStr = [...wanted.map(encodeURIComponent), 'configfile=settings'].join('&')
+          const queryStr = [...wanted.map(encodeURIComponent), 'configfile=settings,save_config_pending'].join('&')
           const qRes = await fetchUpstream(`${printer}/printer/objects/query?${queryStr}`, {
             signal: AbortSignal.timeout(6000),
           })
@@ -1469,6 +1523,93 @@ function printerMiddleware(req, res, next) {
             ok: true,
             target,
             message: `${spec.label}: ausgelöst. Verbindung wird automatisch neu aufgebaut.`,
+          })
+        }
+
+        if (systemSub === 'host/reboot' || systemSub === 'host/shutdown') {
+          await readJson(req, 2048).catch(() => ({}))
+          const hostAction = systemSub === 'host/reboot' ? 'reboot' : 'shutdown'
+          const spec = validateHostAction(hostAction)
+          await probeMachineWriteGuard(false)
+          try {
+            const hRes = await fetchUpstream(`${printer}${spec.endpoint}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: '{}',
+              signal: AbortSignal.timeout(8000),
+            })
+            if (!hRes.ok) {
+              const errJson = await hRes.json().catch(() => null)
+              throw new ControlError(
+                errJson?.error?.message || `${spec.label} fehlgeschlagen (HTTP ${hRes.status}).`,
+                hRes.status === 403 || hRes.status === 404 ? hRes.status : 502,
+              )
+            }
+          } catch (hostErr) {
+            if (hostErr instanceof ControlError) throw hostErr
+            // Host reboot/shutdown may drop connection immediately after accepting the command.
+          }
+          return json(200, {
+            ok: true,
+            action: spec.action,
+            message:
+              spec.action === 'reboot'
+                ? 'Host-Neustart ausgelöst. Der Drucker verbindet sich nach dem Booten automatisch wieder.'
+                : 'Host wird heruntergefahren. Bitte warte vor dem Trennen der Stromversorgung.',
+          })
+        }
+
+        if (systemSub === 'power') {
+          if (req.method === 'GET') {
+            const pRes = await fetchUpstream(`${printer}/machine/device_power/devices`, {
+              signal: AbortSignal.timeout(5000),
+            }).catch(() => null)
+            if (!pRes || pRes.status === 404) {
+              return json(200, { available: false, devices: [] })
+            }
+            if (!pRes.ok) throw new Error('Stromgeräte nicht erreichbar.')
+            const pJson = await pRes.json().catch(() => ({}))
+            return json(200, {
+              available: true,
+              devices: normalizePowerDevices(pJson?.result),
+            })
+          }
+
+          const payload = await readJson(req, 4000)
+          const listRes = await fetchUpstream(`${printer}/machine/device_power/devices`, {
+            signal: AbortSignal.timeout(5000),
+          }).catch(() => null)
+          if (!listRes || listRes.status === 404) {
+            throw new ControlError('Moonraker Power-Plugin ist nicht konfiguriert.', 404)
+          }
+          if (!listRes.ok) throw new Error('Stromgeräte nicht erreichbar.')
+          const listJson = await listRes.json().catch(() => ({}))
+          const devices = normalizePowerDevices(listJson?.result)
+          const { device: targetDev, action } = validatePowerAction(payload?.device, payload?.action, devices)
+
+          const mightTurnOff = action === 'off' || (action === 'toggle' && targetDev.status === 'on')
+          if (mightTurnOff && targetDev.lockedWhilePrinting) {
+            await probeMachineWriteGuard(false)
+          }
+
+          const postUrl = `${printer}/machine/device_power/device?device=${encodeURIComponent(targetDev.device)}&action=${encodeURIComponent(action)}`
+          const setRes = await fetchUpstream(postUrl, {
+            method: 'POST',
+            signal: AbortSignal.timeout(8000),
+          })
+          if (!setRes.ok) {
+            const errJson = await setRes.json().catch(() => null)
+            throw new ControlError(
+              errJson?.error?.message || `Stromgerät konnte nicht geschaltet werden (HTTP ${setRes.status}).`,
+              setRes.status >= 400 && setRes.status < 500 ? setRes.status : 502,
+            )
+          }
+          const setJson = await setRes.json().catch(() => ({}))
+          const nextState = setJson?.result?.[targetDev.device] ?? (action === 'on' ? 'on' : action === 'off' ? 'off' : 'unknown')
+          return json(200, {
+            ok: true,
+            device: targetDev.device,
+            status: nextState,
           })
         }
 
@@ -1942,7 +2083,9 @@ function printerMiddleware(req, res, next) {
         const data = await response.json()
         const knownToolCount = capabilityCache?.toolCount ?? liveCapabilityRef.value?.toolCount ?? null
         const toolCount = knownToolCount ?? inferExtruderCountFromStore(data.result)
-        return json(200, temperatureHistory(data.result, undefined, { toolCount }))
+        const requestedDuration = Number(parsedUrl.searchParams.get('duration'))
+        const duration = [600, 1800, 3600].includes(requestedDuration) ? requestedDuration : 600
+        return json(200, temperatureHistory(data.result, undefined, { toolCount, duration }))
       }
 
       if (path === '/api/presets') {

@@ -11,6 +11,11 @@ export const ALLOWED_SYSTEMD_SERVICES = [
   'mobileraker',
   'helixscreen',
   'klipper-mcu',
+  'KlipperScreen',
+  'spoolman',
+  'webcamd',
+  'timelapse',
+  'octoeverywhere',
 ]
 
 const BINARY_EXT_RE = /\.(png|jpe?g|gif|webp|ico|svg|zip|gz|tar|xz|bz2|7z|bin|elf|uf2|hex|stdata|pdf|woff2?|ttf|otf|mp4|mkv)$/i
@@ -28,6 +33,11 @@ const SERVICE_LABELS = {
   mobileraker: 'Mobileraker neu starten',
   helixscreen: 'HelixScreen neu starten',
   'klipper-mcu': 'Klipper-MCU-Dienst neu starten',
+  KlipperScreen: 'KlipperScreen neu starten',
+  spoolman: 'Spoolman neu starten',
+  webcamd: 'Webcam-Dienst neu starten',
+  timelapse: 'Timelapse neu starten',
+  octoeverywhere: 'OctoEverywhere neu starten',
 }
 
 function hasPathTraversalOrControl(raw) {
@@ -202,6 +212,39 @@ export function validateRestartTarget(target, availableServices = []) {
   }
 }
 
+export function validateHostAction(action) {
+  if (action === 'reboot') return { action: 'reboot', endpoint: '/machine/reboot', label: 'Host neu starten' }
+  if (action === 'shutdown') {
+    return { action: 'shutdown', endpoint: '/machine/shutdown', label: 'Host herunterfahren' }
+  }
+  throw new ControlError('Ungültige Host-Aktion (erlaubt: reboot oder shutdown).', 400)
+}
+
+export function normalizePowerDevices(raw) {
+  const list = Array.isArray(raw?.devices) ? raw.devices : Array.isArray(raw) ? raw : []
+  return list
+    .filter(dev => dev && typeof dev.device === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(dev.device))
+    .map(dev => ({
+      device: dev.device,
+      type: typeof dev.type === 'string' ? dev.type : 'unknown',
+      status: typeof dev.status === 'string' ? dev.status : 'unknown',
+      lockedWhilePrinting: dev.locked_while_printing === true,
+    }))
+    .sort((a, b) => a.device.localeCompare(b.device))
+}
+
+export function validatePowerAction(device, action, devices = []) {
+  if (typeof device !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(device)) {
+    throw new ControlError('Ungültiges Stromgerät.', 400)
+  }
+  if (!['on', 'off', 'toggle'].includes(action)) {
+    throw new ControlError('Ungültige Schaltaktion (erlaubt: on, off oder toggle).', 400)
+  }
+  const found = Array.isArray(devices) ? devices.find(item => item.device === device) : null
+  if (!found) throw new ControlError('Stromgerät ist auf diesem Drucker nicht konfiguriert.', 404)
+  return { device: found, action }
+}
+
 export function evaluateMachineWriteGuard({
   queryData = null,
   queryStatus = 200,
@@ -254,7 +297,13 @@ export function evaluateMachineWriteGuard({
   return { klipperState: webhooksState ?? 'ready', mode: 'ready' }
 }
 
-export function normalizeSystemOverview({ procStats = null, systemInfo = null, serverInfo = null } = {}) {
+export function normalizeSystemOverview({
+  procStats = null,
+  systemInfo = null,
+  serverInfo = null,
+  diskUsage = null,
+  mcuStatus = null,
+} = {}) {
   const cpuInfo = systemInfo?.cpu_info ?? {}
   const dist = systemInfo?.distribution ?? {}
   const release = dist.release_info ?? {}
@@ -264,6 +313,44 @@ export function normalizeSystemOverview({ procStats = null, systemInfo = null, s
   const availableBytes = Number.isFinite(mem.available) ? mem.available * 1024 : null
   const usedPercent =
     totalBytes && usedBytes != null ? Math.round((usedBytes / totalBytes) * 1000) / 10 : null
+
+  const rawDisk = diskUsage ?? systemInfo?.disk_usage ?? null
+  const diskTotal = Number.isFinite(rawDisk?.total) ? rawDisk.total : null
+  const diskUsed = Number.isFinite(rawDisk?.used) ? rawDisk.used : null
+  const diskFree = Number.isFinite(rawDisk?.free) ? rawDisk.free : null
+  const disk =
+    diskTotal && diskTotal > 0
+      ? {
+          totalBytes: diskTotal,
+          usedBytes: diskUsed,
+          freeBytes: diskFree,
+          usedPercent: diskUsed != null ? Math.round((diskUsed / diskTotal) * 1000) / 10 : null,
+        }
+      : null
+
+  const mcus =
+    mcuStatus && typeof mcuStatus === 'object'
+      ? Object.entries(mcuStatus)
+          .filter(([key, val]) => (key === 'mcu' || /^mcu [A-Za-z0-9_-]+$/.test(key)) && val && typeof val === 'object')
+          .map(([key, val]) => {
+            const stats = val.last_stats ?? {}
+            const awake = Number.isFinite(stats.mcu_awake) ? Math.round(stats.mcu_awake * 1000) / 10 : null
+            const taskAvgUs = Number.isFinite(stats.mcu_task_avg) ? Math.round(stats.mcu_task_avg * 1e6) : null
+            const retransmits = Number.isFinite(stats.bytes_retransmit) ? stats.bytes_retransmit : null
+            const invalid = Number.isFinite(stats.bytes_invalid) ? stats.bytes_invalid : null
+            const version = typeof val.mcu_version === 'string' ? val.mcu_version : null
+            return {
+              id: key,
+              name: key === 'mcu' ? 'MCU' : key.slice(4),
+              awakePercent: awake,
+              taskAvgUs,
+              bytesRetransmit: retransmits,
+              bytesInvalid: invalid,
+              version,
+            }
+          })
+          .sort((a, b) => (a.id === 'mcu' ? -1 : b.id === 'mcu' ? 1 : a.name.localeCompare(b.name)))
+      : []
 
   const availableServices = Array.isArray(systemInfo?.available_services) ? systemInfo.available_services : []
   const serviceState = systemInfo?.service_state ?? {}
@@ -292,6 +379,8 @@ export function normalizeSystemOverview({ procStats = null, systemInfo = null, s
       availableBytes,
       usedPercent,
     },
+    disk,
+    mcus,
     throttledFlags: Array.isArray(procStats?.throttled_state?.flags)
       ? procStats.throttled_state.flags.filter(flag => typeof flag === 'string' && flag.trim())
       : [],

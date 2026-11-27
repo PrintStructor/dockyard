@@ -16,6 +16,21 @@ export const calibrationActions = [
   'calibrate_gantry_twist',
   'calibrate_beacon_poke',
   'calibrate_shaper_foc',
+  'mesh_profile_load',
+  'mesh_profile_save',
+  'mesh_profile_remove',
+  'mesh_clear',
+  'bed_screws_start',
+  'bed_screws_accept',
+  'bed_screws_adjusted',
+  'bed_screws_abort',
+  'screws_tilt_calculate',
+  'calibrate_pid',
+  'calibrate_shaper',
+  'shaketune_shaper',
+  'shaketune_belts',
+  'shaketune_vibrations',
+  'probe_accuracy',
 ]
 
 export const calibrationActionKeys = {
@@ -23,11 +38,23 @@ export const calibrationActionKeys = {
   calibrate_beacon_all_z: ['action', 'probeTemp'],
   calibrate_nozzle_expansion: ['action', 'tool'],
   calibrate_shaper_foc: ['action', 'axis'],
+  mesh_profile_load: ['action', 'profile'],
+  mesh_profile_save: ['action', 'profile'],
+  mesh_profile_remove: ['action', 'profile'],
+  calibrate_pid: ['action', 'heater', 'target'],
+  calibrate_shaper: ['action', 'axis'],
 }
 
 export function calibrationCapabilities(config = {}) {
   const keys = new Set(Object.keys(config).map(k => k.toLowerCase()))
   const has = macro => keys.has(`gcode_macro ${macro.toLowerCase()}`)
+  const hasProbe =
+    keys.has('probe') ||
+    keys.has('beacon') ||
+    keys.has('bltouch') ||
+    keys.has('scanner') ||
+    keys.has('cartographer') ||
+    [...keys].some(k => k.startsWith('probe_eddy_current'))
   return {
     nudgeRing: has('NUDGE_CALIBRATE_RING_XY'),
     nudgeAll: has('NUDGE_CALIBRATE_ALL_TOOLS_XY'),
@@ -41,6 +68,15 @@ export function calibrationCapabilities(config = {}) {
     gantryTwist: has('BEACON_MEASURE_GANTRY_TWIST'),
     beaconPoke: has('BEACON_POKE_TEST'),
     shaperFoc: has('SHAPER_CALIBRATE_FOC'),
+    bedScrews: keys.has('bed_screws'),
+    screwsTilt: keys.has('screws_tilt_adjust'),
+    resonanceTester: keys.has('resonance_tester'),
+    shaketuneShaper: has('AXES_SHAPER_CALIBRATION'),
+    shaketuneBelts: has('COMPARE_BELTS_RESPONSES'),
+    shaketuneVibrations: has('CREATE_VIBRATIONS_PROFILE'),
+    probeAccuracy: hasProbe,
+    pidExtruder: keys.has('extruder'),
+    pidBed: keys.has('heater_bed'),
   }
 }
 
@@ -62,6 +98,13 @@ function isBatchRunning(raw) {
   return Number(raw?.['gcode_macro _BEACON_BATCH_STATE']?.running) === 1
 }
 
+function assertMeshProfileName(value) {
+  if (typeof value !== 'string' || !/^[A-Za-z0-9._-]{1,48}$/.test(value)) {
+    throw new ControlError('Ungültiger Bed-Mesh-Profilname (erlaubt: Buchstaben, Ziffern, . _ -).', 400)
+  }
+  return value
+}
+
 export function calibrationCommand(input, raw, caps) {
   const { action } = input
   const printState = raw?.print_stats?.state
@@ -76,6 +119,24 @@ export function calibrationCommand(input, raw, caps) {
       endpoint: '/printer/gcode/script',
       body: { script: 'BEACON_BATCH_ABORT' },
       label: 'Beacon-Batch abbrechen',
+      async: true,
+      timeoutMs: 60_000,
+    }
+  }
+
+  if (['bed_screws_accept', 'bed_screws_adjusted', 'bed_screws_abort'].includes(action)) {
+    if (raw?.bed_screws?.is_active !== true) {
+      throw new ControlError('Aktuell läuft keine manuelle Bett-Schrauben-Kalibrierung.', 409)
+    }
+    const map = {
+      bed_screws_accept: { script: 'ACCEPT', label: 'Schraube akzeptieren' },
+      bed_screws_adjusted: { script: 'ADJUSTED', label: 'Schraube nachgestellt' },
+      bed_screws_abort: { script: 'ABORT', label: 'Bett-Schrauben-Kalibrierung abbrechen' },
+    }
+    return {
+      endpoint: '/printer/gcode/script',
+      body: { script: map[action].script },
+      label: map[action].label,
       async: true,
       timeoutMs: 60_000,
     }
@@ -225,6 +286,157 @@ export function calibrationCommand(input, raw, caps) {
       }
     }
 
+    case 'mesh_profile_load': {
+      if (!caps?.mesh) throw new ControlError('Bed Mesh ist nicht konfiguriert.', 409)
+      const profile = assertMeshProfileName(input.profile)
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script: `BED_MESH_PROFILE LOAD="${profile}"` },
+        label: `Bed Mesh laden · ${profile}`,
+      }
+    }
+
+    case 'mesh_profile_save': {
+      if (!caps?.mesh) throw new ControlError('Bed Mesh ist nicht konfiguriert.', 409)
+      const profile = assertMeshProfileName(input.profile)
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script: `BED_MESH_PROFILE SAVE="${profile}"` },
+        label: `Bed Mesh speichern · ${profile}`,
+      }
+    }
+
+    case 'mesh_profile_remove': {
+      if (!caps?.mesh) throw new ControlError('Bed Mesh ist nicht konfiguriert.', 409)
+      const profile = assertMeshProfileName(input.profile)
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script: `BED_MESH_PROFILE REMOVE="${profile}"` },
+        label: `Bed Mesh entfernen · ${profile}`,
+      }
+    }
+
+    case 'mesh_clear':
+      if (!caps?.mesh) throw new ControlError('Bed Mesh ist nicht konfiguriert.', 409)
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script: 'BED_MESH_CLEAR' },
+        label: 'Aktives Bed Mesh entladen',
+      }
+
+    case 'bed_screws_start':
+      requireCap('bedScrews', 'BED_SCREWS_ADJUST')
+      assertHomedXyz(raw)
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script: 'BED_SCREWS_ADJUST' },
+        label: 'Manuelle Bett-Schrauben-Kalibrierung',
+        async: true,
+        timeoutMs: 120_000,
+      }
+
+    case 'screws_tilt_calculate':
+      requireCap('screwsTilt', 'SCREWS_TILT_CALCULATE')
+      assertHomedXyz(raw)
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script: 'SCREWS_TILT_CALCULATE' },
+        label: 'Schrauben-Neigung berechnen',
+        async: true,
+        timeoutMs: 300_000,
+      }
+
+    case 'calibrate_pid': {
+      const heater = input.heater
+      if (heater !== 'heater_bed' && !/^extruder([1-7])?$/.test(String(heater))) {
+        throw new ControlError('Ungültiger Heizer für PID-Kalibrierung (erlaubt: extruder oder heater_bed).', 400)
+      }
+      const isBed = heater === 'heater_bed'
+      const toolIdx = isBed ? -1 : heater === 'extruder' ? 0 : Number(heater.slice(8))
+      if (isBed && !caps?.pidBed) throw new ControlError('Druckbett-Heizer ist nicht konfiguriert.', 409)
+      if (!isBed) {
+        const count = caps?.toolCount ?? detectToolCount(raw)
+        if (!caps?.pidExtruder || toolIdx < 0 || toolIdx >= count) {
+          throw new ControlError('Extruder ist auf diesem Drucker nicht konfiguriert.', 409)
+        }
+      }
+      const max = isBed ? caps?.bedMax : caps?.toolMax?.[toolIdx]
+      if (max == null) throw new ControlError('Temperaturgrenze ist unbekannt.', 409)
+      const target = input.target
+      if (!Number.isInteger(target) || target < 40 || target > max) {
+        throw new ControlError(`PID-Zieltemperatur muss zwischen 40 und ${max} °C liegen.`, 400)
+      }
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script: `PID_CALIBRATE HEATER=${heater} TARGET=${target}` },
+        label: `PID-Kalibrierung ${isBed ? 'Druckbett' : toolIdx === 0 ? 'Extruder' : `T${toolIdx}`} (${target} °C)`,
+        async: true,
+        timeoutMs: 900_000,
+      }
+    }
+
+    case 'calibrate_shaper': {
+      requireCap('resonanceTester', 'SHAPER_CALIBRATE')
+      assertHomedXyz(raw)
+      const axis = input.axis ?? 'ALL'
+      if (!['X', 'Y', 'ALL'].includes(axis)) {
+        throw new ControlError('Ungültige Achse (erlaubt: X, Y oder ALL).', 400)
+      }
+      const script = axis === 'ALL' ? 'SHAPER_CALIBRATE' : `SHAPER_CALIBRATE AXIS=${axis}`
+      const axisLabel = axis === 'ALL' ? 'X + Y' : axis
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script },
+        label: `Input Shaper (${axisLabel})`,
+        async: true,
+        timeoutMs: 900_000,
+      }
+    }
+
+    case 'shaketune_shaper':
+      requireCap('shaketuneShaper', 'AXES_SHAPER_CALIBRATION')
+      assertHomedXyz(raw)
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script: 'AXES_SHAPER_CALIBRATION' },
+        label: 'ShakeTune · Achsen-Shaper',
+        async: true,
+        timeoutMs: 900_000,
+      }
+
+    case 'shaketune_belts':
+      requireCap('shaketuneBelts', 'COMPARE_BELTS_RESPONSES')
+      assertHomedXyz(raw)
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script: 'COMPARE_BELTS_RESPONSES' },
+        label: 'ShakeTune · Riemen-Vergleich',
+        async: true,
+        timeoutMs: 900_000,
+      }
+
+    case 'shaketune_vibrations':
+      requireCap('shaketuneVibrations', 'CREATE_VIBRATIONS_PROFILE')
+      assertHomedXyz(raw)
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script: 'CREATE_VIBRATIONS_PROFILE' },
+        label: 'ShakeTune · Vibrationsprofil',
+        async: true,
+        timeoutMs: 1_200_000,
+      }
+
+    case 'probe_accuracy':
+      requireCap('probeAccuracy', 'PROBE_ACCURACY')
+      assertHomedXyz(raw)
+      return {
+        endpoint: '/printer/gcode/script',
+        body: { script: 'PROBE_ACCURACY' },
+        label: 'Probe-Genauigkeit testen',
+        async: true,
+        timeoutMs: 300_000,
+      }
+
     default:
       throw new ControlError('Unbekannte Kalibrierungsaktion.', 400)
   }
@@ -254,7 +466,22 @@ const finitePair = pair =>
     ? [parseNum(pair[0]), parseNum(pair[1])]
     : null
 
-function normalizeBedMesh(mesh, meshConfig = null) {
+function extractBedScrewNames(cfg) {
+  if (!cfg || typeof cfg !== 'object') return []
+  const names = []
+  for (let i = 1; i <= 12; i++) {
+    const coord = cfg[`screw${i}`]
+    if (!coord) break
+    const name = cfg[`screw${i}_name`]
+    names.push({
+      index: i,
+      name: typeof name === 'string' && name.trim() ? name.trim() : `Screw ${i}`,
+    })
+  }
+  return names
+}
+
+function normalizeBedMesh(mesh, meshConfig = null, allSettings = {}) {
   const cfg = meshConfig && typeof meshConfig === 'object'
     ? {
         probeCount: finitePair(meshConfig.probe_count),
@@ -266,6 +493,22 @@ function normalizeBedMesh(mesh, meshConfig = null) {
         fadeEnd: parseNum(meshConfig.fade_end),
       }
     : null
+
+  const profileSet = new Set()
+  if (mesh?.profiles && typeof mesh.profiles === 'object') {
+    for (const name of Object.keys(mesh.profiles)) {
+      if (typeof name === 'string' && name.trim()) profileSet.add(name.trim())
+    }
+  }
+  if (allSettings && typeof allSettings === 'object') {
+    for (const key of Object.keys(allSettings)) {
+      if (key.toLowerCase().startsWith('bed_mesh ')) {
+        const name = key.slice(9).trim()
+        if (name) profileSet.add(name)
+      }
+    }
+  }
+  const profiles = [...profileSet].sort((a, b) => a.localeCompare(b))
 
   const profileName = typeof mesh?.profile_name === 'string' ? mesh.profile_name.trim() : ''
   const rawMatrix = Array.isArray(mesh?.probed_matrix) && mesh.probed_matrix.length > 0
@@ -283,6 +526,7 @@ function normalizeBedMesh(mesh, meshConfig = null) {
     return {
       active: false,
       profileName: '',
+      profiles,
       min: null,
       max: null,
       range: null,
@@ -303,6 +547,7 @@ function normalizeBedMesh(mesh, meshConfig = null) {
   return {
     active: true,
     profileName,
+    profiles,
     min,
     max,
     range: max - min,
@@ -380,17 +625,44 @@ export function normalizeCalibrationData({ rawStatus = {}, configFiles = [] } = 
     .filter(Boolean)
     .sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0))
 
+  const extruderMaxRaw = parseNum(settings.extruder?.max_temp)
+  const bedMaxRaw = parseNum(settings.heater_bed?.max_temp)
+
   return {
     isToolchanger: status.isToolchanger,
     toolCount,
     initialTool: status.initialTool,
     zReferenceTool: Number.isInteger(vars.z_offset_reference_tool) ? vars.z_offset_reference_tool : null,
+    saveConfigPending: rawStatus?.configfile?.save_config_pending === true,
+    pidLimits: {
+      extruderMax: extruderMaxRaw != null ? Math.max(0, Math.floor(extruderMaxRaw) - 5) : null,
+      bedMax: bedMaxRaw != null ? Math.max(0, Math.floor(bedMaxRaw) - 5) : null,
+    },
     tools,
     nudgeRingClosure,
     nudgeXy,
     beaconZ,
     beaconBatch,
-    bedMesh: normalizeBedMesh(rawStatus?.bed_mesh, settings.bed_mesh),
+    bedMesh: normalizeBedMesh(rawStatus?.bed_mesh, settings.bed_mesh, settings),
+    bedScrews: {
+      configured: Boolean(settings.bed_screws || rawStatus?.bed_screws),
+      isActive: rawStatus?.bed_screws?.is_active === true,
+      state: typeof rawStatus?.bed_screws?.state === 'string' ? rawStatus.bed_screws.state : null,
+      currentStage: Number.isInteger(rawStatus?.bed_screws?.current_stage) ? rawStatus.bed_screws.current_stage : null,
+      acceptedScrews: Number.isInteger(rawStatus?.bed_screws?.accepted_screws)
+        ? rawStatus.bed_screws.accepted_screws
+        : 0,
+      screws: extractBedScrewNames(settings.bed_screws),
+    },
+    screwsTilt: {
+      configured: Boolean(settings.screws_tilt_adjust || rawStatus?.screws_tilt_adjust),
+      error: rawStatus?.screws_tilt_adjust?.error === true,
+      maxDeviation: finite(rawStatus?.screws_tilt_adjust?.max_deviation),
+      results:
+        rawStatus?.screws_tilt_adjust?.results && typeof rawStatus.screws_tilt_adjust.results === 'object'
+          ? rawStatus.screws_tilt_adjust.results
+          : null,
+    },
     qgl: {
       configured: !!settings.quad_gantry_level,
       applied: rawStatus?.quad_gantry_level?.applied === true,

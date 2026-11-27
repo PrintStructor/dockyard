@@ -65,6 +65,10 @@ export function commandFor(input, raw) {
     'filament_sensor',
     'temperature',
     'temperature_all',
+    'temperature_fan',
+    'output_pin',
+    'macro',
+    'save_config',
     'preheat',
     'heaters_off',
     'qgl',
@@ -92,6 +96,10 @@ export function commandFor(input, raw) {
         filament_sensor: ['action', 'sensor', 'enabled'],
         temperature: ['action', 'heater', 'target'],
         temperature_all: ['action', 'target'],
+        temperature_fan: ['action', 'fan', 'target'],
+        output_pin: ['action', 'pin', 'value'],
+        macro: ['action', 'name'],
+        save_config: ['action'],
         preheat: ['action', 'extruder', 'bed'],
         led: ['action', 'profile'],
         fan: ['action', 'fan', 'percent'],
@@ -132,6 +140,105 @@ export function commandFor(input, raw) {
   if (toolActions.includes(action)) return toolActionCommand(input, raw, capabilities(raw))
   if (printControlActions.includes(action)) return printControlCommand(input, raw, capabilities(raw))
   if (calibrationActions.includes(action)) return calibrationCommand(input, raw, capabilities(raw))
+
+  if (action === 'save_config') {
+    if (['printing', 'paused'].includes(printState)) {
+      fail('SAVE_CONFIG ist während eines aktiven oder pausierten Drucks gesperrt.', 409)
+    }
+    if (raw.idle_timeout?.state === 'Printing') {
+      fail('Der Drucker führt bereits eine Bewegung oder einen Befehl aus.', 409)
+    }
+    return {
+      endpoint: '/printer/gcode/script',
+      body: { script: 'SAVE_CONFIG' },
+      label: 'Konfiguration speichern (SAVE_CONFIG)',
+      async: true,
+      restartsKlipper: true,
+      timeoutMs: 60_000,
+    }
+  }
+
+  if (action === 'temperature_fan') {
+    if (
+      typeof input.fan !== 'string' ||
+      !/^[A-Za-z0-9_.-]{1,80}$/.test(input.fan) ||
+      !finite(input.target) ||
+      !Number.isInteger(input.target)
+    ) {
+      fail('Ungültiger Temperaturlüfter oder Zieltemperatur.')
+    }
+    const cfg = raw.configfile?.settings ?? raw.configfile?.config ?? {}
+    const fanKey = `temperature_fan ${input.fan}`
+    const fanCfg = cfg[fanKey.toLowerCase()] ?? cfg[fanKey]
+    if (!raw[fanKey] && !fanCfg) {
+      fail('Temperaturlüfter ist auf diesem Drucker nicht konfiguriert.', 409)
+    }
+    const maxRaw = Number(fanCfg?.max_temp ?? 100)
+    const max = Number.isFinite(maxRaw) ? Math.max(0, Math.floor(maxRaw)) : 100
+    if (input.target < 0 || input.target > max) {
+      fail(`Zieltemperatur muss zwischen 0 und ${max} °C liegen.`)
+    }
+    return {
+      endpoint: '/printer/gcode/script',
+      body: { script: `SET_TEMPERATURE_FAN_TARGET TEMPERATURE_FAN=${input.fan} TARGET=${input.target}` },
+      label: `${input.fan} Ziel ${input.target} °C`,
+    }
+  }
+
+  if (action === 'output_pin') {
+    if (typeof input.pin !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(input.pin) || !finite(input.value)) {
+      fail('Ungültiger Ausgang oder Zielwert.')
+    }
+    const cfg = raw.configfile?.settings ?? raw.configfile?.config ?? {}
+    const pinKey = `output_pin ${input.pin}`
+    const pinCfg = cfg[pinKey.toLowerCase()] ?? cfg[pinKey]
+    if (!raw[pinKey] && !pinCfg) {
+      fail('Ausgang (output_pin) ist auf diesem Drucker nicht konfiguriert.', 409)
+    }
+    const scaleRaw = Number(pinCfg?.scale ?? 1)
+    const scale = Number.isFinite(scaleRaw) && scaleRaw > 0 ? scaleRaw : 1
+    const isPwm = pinCfg?.pwm === true || String(pinCfg?.pwm).toLowerCase() === 'true'
+    if (input.value < 0 || input.value > scale) {
+      fail(`Wert muss zwischen 0 und ${scale} liegen.`)
+    }
+    if (!isPwm && input.value !== 0 && Math.abs(input.value - scale) > 1e-6) {
+      fail(`Digitaler Ausgang erlaubt nur 0 oder ${scale}.`)
+    }
+    const formatted = Number(input.value.toFixed(3))
+    return {
+      endpoint: '/printer/gcode/script',
+      body: { script: `SET_PIN PIN=${input.pin} VALUE=${formatted}` },
+      label: `${input.pin} auf ${formatted}`,
+    }
+  }
+
+  if (action === 'macro') {
+    if (raw['gcode_macro LOAD_WATCH']?.active === 1) {
+      fail('Einlegehilfe ist scharf. Zuerst mit Fertig beenden.', 409)
+    }
+    if (['printing', 'paused'].includes(printState)) {
+      fail('Makros sind während eines aktiven oder pausierten Drucks gesperrt.', 409)
+    }
+    if (raw.idle_timeout?.state === 'Printing') {
+      fail('Der Drucker führt bereits eine Bewegung oder einen Befehl aus.', 409)
+    }
+    if (typeof input.name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(input.name)) {
+      fail('Ungültiger Makroname.')
+    }
+    const cfg = raw.configfile?.settings ?? raw.configfile?.config ?? {}
+    const macroKey = `gcode_macro ${input.name.toLowerCase()}`
+    if (!Object.keys(cfg).some(k => k.toLowerCase() === macroKey)) {
+      fail(`Makro ${input.name} ist auf diesem Drucker nicht konfiguriert.`, 409)
+    }
+    const macroUpper = input.name.toUpperCase()
+    return {
+      endpoint: '/printer/gcode/script',
+      body: { script: macroUpper },
+      label: `Makro ${macroUpper}`,
+      async: true,
+      timeoutMs: 300_000,
+    }
+  }
 
   if (action === 'filament_sensor') {
     if (
@@ -327,23 +434,35 @@ export function commandFor(input, raw) {
     label = `${axis} auf ${target} mm`
   } else if (action === 'temperature') {
     const limits = capabilities(raw)
+    const cfg = raw.configfile?.settings ?? raw.configfile?.config ?? {}
+    const isGeneric = typeof input.heater === 'string' && /^heater_generic [A-Za-z0-9_-]+$/.test(input.heater)
     const allowedHeaters = [
       'heater_bed',
       ...Array.from({ length: limits.toolCount }, (_, id) => (id ? `extruder${id}` : 'extruder')),
     ]
+    const genericCfg = isGeneric ? (cfg[input.heater.toLowerCase()] ?? cfg[input.heater]) : null
+    const genericExists = isGeneric && Boolean(raw[input.heater] || genericCfg)
     if (
-      !allowedHeaters.includes(input.heater) ||
+      (!allowedHeaters.includes(input.heater) && !genericExists) ||
       !finite(input.target) ||
       !Number.isInteger(input.target)
     ) {
       fail('Ungültige Temperaturangabe.')
     }
-    const i = input.heater === 'extruder' ? 0 : Number(input.heater.replace('extruder', ''))
-    const max = input.heater === 'heater_bed' ? limits.bedMax : limits.toolMax[i]
+    let max
+    let heaterLabel
+    if (isGeneric) {
+      const rawMax = Number(genericCfg?.max_temp)
+      max = Number.isFinite(rawMax) ? Math.max(0, Math.floor(rawMax) - 5) : null
+      heaterLabel = input.heater.slice(15)
+    } else {
+      const i = input.heater === 'extruder' ? 0 : Number(input.heater.replace('extruder', ''))
+      max = input.heater === 'heater_bed' ? limits.bedMax : limits.toolMax[i]
+      heaterLabel = input.heater === 'heater_bed' ? 'Druckbett' : limits.toolCount === 1 ? 'Extruder' : `T${i}`
+    }
     if (max == null) fail('Temperaturgrenze ist unbekannt.', 409)
     if (input.target < 0 || input.target > max) fail(`Zieltemperatur muss zwischen 0 und ${max} °C liegen.`)
     script = `SET_HEATER_TEMPERATURE HEATER=${input.heater} TARGET=${input.target}`
-    const heaterLabel = input.heater === 'heater_bed' ? 'Druckbett' : limits.toolCount === 1 ? 'Extruder' : `T${i}`
     label = `${heaterLabel} auf ${input.target} °C`
   } else if (action === 'preheat') {
     const limits = capabilities(raw)

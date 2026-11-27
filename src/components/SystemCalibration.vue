@@ -6,9 +6,13 @@ import {
   Check,
   ChevronRight,
   Crosshair,
+  Flame,
   Grid2x2,
   RefreshCw,
+  Save,
+  SlidersHorizontal,
   Terminal,
+  Trash2,
   X,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
@@ -32,6 +36,9 @@ const selectedTool = ref('0')
 const shaperAxis = ref('ALL')
 const shakeFilter = ref('all') // 'all' | 'input_shaper' | 'belts' | 'vibrations'
 const hoveredMeshCell = ref(null)
+const meshProfileDraft = ref('')
+const pidExtruderTarget = ref(220)
+const pidBedTarget = ref(60)
 
 const lightboxChart = ref(null)
 const lightboxDialog = ref(null)
@@ -107,6 +114,64 @@ const isHomedXyz = computed(() => {
 
 const isPrintBlocked = computed(() => ['printing', 'paused'].includes(props.status?.printState))
 const hasActiveJob = computed(() => Boolean(props.status?.control?.job))
+
+const liveBedScrews = computed(() => props.status?.bedScrews ?? data.value?.bedScrews ?? null)
+const bedScrewsActive = computed(() => liveBedScrews.value?.isActive === true)
+const hasBedScrewsSection = computed(() =>
+  Boolean(data.value?.bedScrews?.configured || data.value?.screwsTilt?.configured || props.status?.bedScrews?.configured),
+)
+const hasPidOrProbeSection = computed(() =>
+  Boolean(
+    data.value?.capabilities?.pidExtruder ||
+      data.value?.capabilities?.pidBed ||
+      data.value?.capabilities?.probeAccuracy,
+  ),
+)
+const pidExtruderMax = computed(() => data.value?.pidLimits?.extruderMax ?? props.status?.capabilities?.toolMax?.[0] ?? 295)
+const pidBedMax = computed(() => data.value?.pidLimits?.bedMax ?? props.status?.capabilities?.bedMax ?? 120)
+const validPidExtruder = computed(
+  () => Number.isInteger(pidExtruderTarget.value) && pidExtruderTarget.value >= 40 && pidExtruderTarget.value <= pidExtruderMax.value,
+)
+const validPidBed = computed(
+  () => Number.isInteger(pidBedTarget.value) && pidBedTarget.value >= 40 && pidBedTarget.value <= pidBedMax.value,
+)
+const validMeshProfileName = computed(() => /^[A-Za-z0-9._-]{1,48}$/.test(meshProfileDraft.value.trim()))
+
+const hasShaperFoc = computed(() => Boolean(data.value?.capabilities?.shaperFoc))
+const hasStandardShaper = computed(() => Boolean(data.value?.capabilities?.resonanceTester))
+const hasShakeTuneMacros = computed(() =>
+  Boolean(
+    data.value?.capabilities?.shaketuneShaper ||
+      data.value?.capabilities?.shaketuneBelts ||
+      data.value?.capabilities?.shaketuneVibrations,
+  ),
+)
+const shaperSubtitle = computed(() =>
+  hasShaperFoc.value
+    ? 'Aktive Resonanzdämpfung (FOC) und gespeicherte ShakeTune-Messdiagramme.'
+    : 'Aktive Resonanzdämpfung, Input-Shaper-Messung und gespeicherte ShakeTune-Diagramme.',
+)
+
+const screwsTiltRows = computed(() => {
+  const res = data.value?.screwsTilt?.results
+  if (!res || typeof res !== 'object') return []
+  return Object.entries(res).map(([key, item]) => ({
+    key,
+    name: item?.name || key,
+    z: typeof item?.z === 'number' ? item.z : null,
+    sign: item?.sign || '',
+    adjust: item?.adjust || '00:00',
+    isBase: item?.is_base === true,
+  }))
+})
+
+async function saveMeshProfile() {
+  const name = meshProfileDraft.value.trim()
+  if (!validMeshProfileName.value || !data.value?.bedMesh?.active) return
+  if (blockReason({ capKey: 'mesh' })) return
+  const ok = await props.send({ action: 'mesh_profile_save', profile: name })
+  if (ok) meshProfileDraft.value = ''
+}
 
 function blockReason({ capKey = null, requireHomed = false, allowWhenBatch = false } = {}) {
   if (!props.online) return 'Nicht verbunden.'
@@ -731,7 +796,86 @@ onMounted(() => {
             >
               <Grid2x2 :size="13" />{{ t('Bett vermessen') }}
             </button>
+
+            <button
+              v-if="data?.bedMesh?.active"
+              type="button"
+              class="subtle-button"
+              :disabled="!!blockReason({ capKey: 'mesh' })"
+              :title="t('Aktives Bed Mesh entladen (BED_MESH_CLEAR)')"
+              @click="runAction({ action: 'mesh_clear' }, { capKey: 'mesh' })"
+            >
+              <X :size="13" />{{ t('Mesh entladen') }}
+            </button>
           </template>
+        </div>
+
+        <div
+          v-if="data?.capabilities?.mesh && (data?.bedMesh?.profiles?.length || data?.bedMesh?.active)"
+          class="mesh-profiles-bar"
+          :aria-label="t('Bed-Mesh-Profile')"
+        >
+          <div v-if="data?.bedMesh?.profiles?.length" class="mesh-profile-chips">
+            <span class="mesh-profiles-label">{{ t('Gespeicherte Profile') }}</span>
+            <div v-for="prof in data.bedMesh.profiles" :key="prof" class="mesh-profile-chip-group">
+              <button
+                type="button"
+                class="subtle-button mesh-profile-btn"
+                :class="{ active: data.bedMesh.profileName === prof }"
+                :disabled="!!blockReason({ capKey: 'mesh' })"
+                :title="t('Profil „{0}“ laden', [prof])"
+                @click="runAction({ action: 'mesh_profile_load', profile: prof }, { capKey: 'mesh' })"
+              >
+                <Check v-if="data.bedMesh.profileName === prof" :size="12" />{{ prof }}
+              </button>
+              <template v-if="confirmKey === `mesh_rm_${prof}`">
+                <button
+                  type="button"
+                  class="danger-button mesh-profile-rm-confirm"
+                  @click="runAction({ action: 'mesh_profile_remove', profile: prof }, { capKey: 'mesh' })"
+                >
+                  {{ t('Löschen?') }}
+                </button>
+                <button type="button" class="subtle-button mesh-profile-rm-btn" @click="cancelConfirm">
+                  <X :size="12" />
+                </button>
+              </template>
+              <button
+                v-else
+                type="button"
+                class="subtle-button mesh-profile-rm-btn"
+                :disabled="!!blockReason({ capKey: 'mesh' })"
+                :aria-label="t('Profil „{0}“ entfernen', [prof])"
+                :title="t('Profil „{0}“ entfernen', [prof])"
+                @click="requestConfirm(`mesh_rm_${prof}`, { capKey: 'mesh' })"
+              >
+                <Trash2 :size="12" />
+              </button>
+            </div>
+          </div>
+
+          <form
+            v-if="data?.bedMesh?.active"
+            class="mesh-profile-save-form"
+            @submit.prevent="saveMeshProfile"
+          >
+            <input
+              v-model="meshProfileDraft"
+              type="text"
+              maxlength="48"
+              :placeholder="t('Profilname (z. B. abs_110)')"
+              :aria-label="t('Neuer Bed-Mesh-Profilname')"
+              :disabled="!!blockReason({ capKey: 'mesh' })"
+            />
+            <button
+              type="submit"
+              class="subtle-button"
+              :disabled="!validMeshProfileName || !!blockReason({ capKey: 'mesh' })"
+              :title="t('Aktives Bed Mesh als Profil speichern')"
+            >
+              <Save :size="13" />{{ t('Profil speichern') }}
+            </button>
+          </form>
         </div>
 
         <template v-if="data?.bedMesh?.active && meshCells">
@@ -870,13 +1014,280 @@ onMounted(() => {
       </section>
     </div>
 
+    <div
+      v-if="hasBedScrewsSection || hasPidOrProbeSection"
+      class="cal-two-col"
+      :class="{ 'cal-single-col': !(hasBedScrewsSection && hasPidOrProbeSection) }"
+    >
+      <section v-if="hasBedScrewsSection" class="cal-section" :aria-label="t('Manuelles Bett-Leveling')">
+        <div class="system-panel-head" style="margin-bottom: 0">
+          <div>
+            <h2>{{ t('Bett-Schrauben & Neigung') }}</h2>
+            <p>{{ t('Geführtes 3-/4-Punkt-Bettleveling (BED_SCREWS_ADJUST) und Sonden-Schraubenprüfung.') }}</p>
+          </div>
+          <span
+            v-if="bedScrewsActive"
+            class="status-pill lime"
+          >
+            <Activity :size="12" />{{ t('Aktiv · {0} akzeptiert', [liveBedScrews?.acceptedScrews ?? 0]) }}
+          </span>
+        </div>
+
+        <div v-if="data?.bedScrews?.screws?.length" class="screw-list-chips">
+          <span v-for="screw in data.bedScrews.screws" :key="screw.index" class="status-pill muted">
+            {{ screw.index }}. {{ screw.name }}
+          </span>
+        </div>
+
+        <div v-if="bedScrewsActive" class="bed-screws-live-box" role="status">
+          <p class="bed-screws-prompt">
+            {{
+              liveBedScrews?.state === 'fine'
+                ? t('Feinabgleich aktiv: Papier-Test an der aktuellen Schraube prüfen.')
+                : t('Grobabgleich aktiv: Schraube einstellen, dann „Nachgestellt“ oder „Akzeptieren“ wählen.')
+            }}
+          </p>
+          <div class="cal-action-row">
+            <button
+              type="button"
+              class="confirm-button"
+              :disabled="!!blockReason()"
+              @click="runAction({ action: 'bed_screws_accept' })"
+            >
+              <Check :size="14" />{{ t('Akzeptieren') }} (ACCEPT)
+            </button>
+            <button
+              type="button"
+              class="subtle-button"
+              :disabled="!!blockReason()"
+              @click="runAction({ action: 'bed_screws_adjusted' })"
+            >
+              <SlidersHorizontal :size="14" />{{ t('Nachgestellt') }} (ADJUSTED)
+            </button>
+            <button
+              type="button"
+              class="danger-button"
+              :disabled="!!blockReason()"
+              @click="runAction({ action: 'bed_screws_abort' })"
+            >
+              <X :size="14" />{{ t('Abbrechen') }} (ABORT)
+            </button>
+          </div>
+        </div>
+
+        <div v-else class="cal-action-row">
+          <template v-if="data?.capabilities?.bedScrews">
+            <template v-if="confirmKey === 'bed_screws_start'">
+              <button
+                type="button"
+                class="confirm-button"
+                @click="runAction({ action: 'bed_screws_start' }, { capKey: 'bedScrews', requireHomed: true })"
+              >
+                {{ t('BED_SCREWS_ADJUST starten?') }}
+              </button>
+              <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+            </template>
+            <button
+              v-else
+              type="button"
+              class="subtle-button"
+              :disabled="!!blockReason({ capKey: 'bedScrews', requireHomed: true })"
+              :title="t(blockReason({ capKey: 'bedScrews', requireHomed: true }) || 'Geführtes manuelles Bett-Leveling starten')"
+              @click="requestConfirm('bed_screws_start', { capKey: 'bedScrews', requireHomed: true })"
+            >
+              <SlidersHorizontal :size="13" />{{ t('Bett-Schrauben ausrichten') }}
+            </button>
+          </template>
+
+          <template v-if="data?.capabilities?.screwsTilt">
+            <template v-if="confirmKey === 'screws_tilt'">
+              <button
+                type="button"
+                class="confirm-button"
+                @click="runAction({ action: 'screws_tilt_calculate' }, { capKey: 'screwsTilt', requireHomed: true })"
+              >
+                {{ t('SCREWS_TILT_CALCULATE starten?') }}
+              </button>
+              <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+            </template>
+            <button
+              v-else
+              type="button"
+              class="subtle-button"
+              :disabled="!!blockReason({ capKey: 'screwsTilt', requireHomed: true })"
+              :title="t(blockReason({ capKey: 'screwsTilt', requireHomed: true }) || 'Schrauben-Neigung per Sonde berechnen')"
+              @click="requestConfirm('screws_tilt', { capKey: 'screwsTilt', requireHomed: true })"
+            >
+              <Crosshair :size="13" />{{ t('Schrauben-Neigung prüfen') }}
+            </button>
+          </template>
+        </div>
+
+        <div v-if="screwsTiltRows.length" class="cal-table-wrap">
+          <table class="cal-table">
+            <thead>
+              <tr>
+                <th>{{ t('Schraube') }}</th>
+                <th>Z (mm)</th>
+                <th>{{ t('Drehung') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in screwsTiltRows" :key="row.key">
+                <td>{{ row.name }}</td>
+                <td>{{ number(row.z, 4) }}</td>
+                <td>{{ row.isBase ? t('Basis') : `${row.sign} ${row.adjust}` }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section v-if="hasPidOrProbeSection" class="cal-section" :aria-label="t('PID-Tuning & Sonde')">
+        <div class="system-panel-head" style="margin-bottom: 0">
+          <div>
+            <h2>{{ t('PID-Tuning & Sonde') }}</h2>
+            <p>{{ t('Heizregler für Extruder und Druckbett abstimmen oder Sonden-Wiederholgenauigkeit prüfen.') }}</p>
+          </div>
+        </div>
+
+        <div class="pid-grid">
+          <div v-if="data?.capabilities?.pidExtruder" class="pid-row">
+            <div class="pid-row-label">
+              <Flame :size="14" />
+              <strong>{{ t('Extruder PID') }}</strong>
+            </div>
+            <label class="pid-input-wrap">
+              <input
+                v-model.number="pidExtruderTarget"
+                type="number"
+                min="40"
+                :max="pidExtruderMax"
+                step="5"
+                inputmode="numeric"
+                :aria-label="t('PID-Zieltemperatur Extruder in Grad Celsius')"
+                :disabled="!!blockReason({ capKey: 'pidExtruder' })"
+              />
+              <span>°C</span>
+            </label>
+            <div class="confirm-inline">
+              <template v-if="confirmKey === 'pid_extruder'">
+                <button
+                  type="button"
+                  class="confirm-button"
+                  @click="
+                    runAction(
+                      { action: 'calibrate_pid', heater: 'extruder', target: Math.round(pidExtruderTarget) },
+                      { capKey: 'pidExtruder' },
+                    )
+                  "
+                >
+                  {{ t('PID bei {0} °C starten?', [Math.round(pidExtruderTarget)]) }}
+                </button>
+                <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+              </template>
+              <button
+                v-else
+                type="button"
+                class="subtle-button"
+                :disabled="!validPidExtruder || !!blockReason({ capKey: 'pidExtruder' })"
+                :title="t(blockReason({ capKey: 'pidExtruder' }) || 'PID_CALIBRATE für Extruder starten')"
+                @click="requestConfirm('pid_extruder', { capKey: 'pidExtruder' })"
+              >
+                {{ t('PID starten') }}
+              </button>
+            </div>
+          </div>
+
+          <div v-if="data?.capabilities?.pidBed" class="pid-row">
+            <div class="pid-row-label">
+              <Flame :size="14" />
+              <strong>{{ t('Druckbett PID') }}</strong>
+            </div>
+            <label class="pid-input-wrap">
+              <input
+                v-model.number="pidBedTarget"
+                type="number"
+                min="40"
+                :max="pidBedMax"
+                step="5"
+                inputmode="numeric"
+                :aria-label="t('PID-Zieltemperatur Druckbett in Grad Celsius')"
+                :disabled="!!blockReason({ capKey: 'pidBed' })"
+              />
+              <span>°C</span>
+            </label>
+            <div class="confirm-inline">
+              <template v-if="confirmKey === 'pid_bed'">
+                <button
+                  type="button"
+                  class="confirm-button"
+                  @click="
+                    runAction(
+                      { action: 'calibrate_pid', heater: 'heater_bed', target: Math.round(pidBedTarget) },
+                      { capKey: 'pidBed' },
+                    )
+                  "
+                >
+                  {{ t('PID bei {0} °C starten?', [Math.round(pidBedTarget)]) }}
+                </button>
+                <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+              </template>
+              <button
+                v-else
+                type="button"
+                class="subtle-button"
+                :disabled="!validPidBed || !!blockReason({ capKey: 'pidBed' })"
+                :title="t(blockReason({ capKey: 'pidBed' }) || 'PID_CALIBRATE für Druckbett starten')"
+                @click="requestConfirm('pid_bed', { capKey: 'pidBed' })"
+              >
+                {{ t('PID starten') }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="cal-action-row">
+          <template v-if="data?.capabilities?.probeAccuracy">
+            <template v-if="confirmKey === 'probe_accuracy'">
+              <button
+                type="button"
+                class="confirm-button"
+                @click="runAction({ action: 'probe_accuracy' }, { capKey: 'probeAccuracy', requireHomed: true })"
+              >
+                {{ t('PROBE_ACCURACY starten?') }}
+              </button>
+              <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+            </template>
+            <button
+              v-else
+              type="button"
+              class="subtle-button"
+              :disabled="!!blockReason({ capKey: 'probeAccuracy', requireHomed: true })"
+              :title="t(blockReason({ capKey: 'probeAccuracy', requireHomed: true }) || 'Wiederholgenauigkeit der Z-Sonde prüfen (10 Proben)')"
+              @click="requestConfirm('probe_accuracy', { capKey: 'probeAccuracy', requireHomed: true })"
+            >
+              <Crosshair :size="13" />{{ t('Probe-Genauigkeit') }}
+            </button>
+          </template>
+
+          <button type="button" class="subtle-button" @click="emit('open-console')">
+            <Terminal :size="13" />{{ t('Ergebnisse in der Konsole ansehen') }}
+          </button>
+        </div>
+        <p class="muted" style="margin: 0">
+          {{ t('Nach PID- oder Shaper-Läufen erscheint oben automatisch das SAVE_CONFIG-Banner.') }}
+        </p>
+      </section>
+    </div>
+
     <section class="cal-section" :aria-label="t('Input Shaper & ShakeTune')">
       <div class="system-panel-head" style="margin-bottom: 0">
         <div>
           <h2>{{ t('Input Shaper & ShakeTune') }}</h2>
-          <p>{{ t('Aktive Resonanzdämpfung (FOC) und gespeicherte ShakeTune-Messdiagramme.') }}</p>
+          <p>{{ t(shaperSubtitle) }}</p>
         </div>
-        <div class="cal-action-row">
+        <div v-if="hasStandardShaper || hasShaperFoc || isToolchanger" class="cal-action-row">
           <div style="width: 112px">
             <CockpitSelect
               v-model="shaperAxis"
@@ -885,13 +1296,64 @@ onMounted(() => {
               size="compact"
             />
           </div>
-          <template v-if="confirmKey === 'shaper_foc'">
+
+          <template v-if="hasStandardShaper">
+            <template v-if="confirmKey === 'shaper_std'">
+              <button
+                type="button"
+                class="confirm-button"
+                @click="runAction({ action: 'calibrate_shaper', axis: shaperAxis }, { capKey: 'resonanceTester', requireHomed: true })"
+              >
+                {{ t('SHAPER_CALIBRATE starten?') }}
+              </button>
+              <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+            </template>
+            <button
+              v-else
+              type="button"
+              class="subtle-button"
+              :disabled="!!blockReason({ capKey: 'resonanceTester', requireHomed: true })"
+              :title="t(blockReason({ capKey: 'resonanceTester', requireHomed: true }) || 'Standard-Resonanzmessung (SHAPER_CALIBRATE) starten')"
+              @click="requestConfirm('shaper_std', { capKey: 'resonanceTester', requireHomed: true })"
+            >
+              <Activity :size="13" />{{ t('Shaper kalibrieren') }}
+            </button>
+          </template>
+
+          <template v-if="hasShaperFoc || isToolchanger">
+            <template v-if="confirmKey === 'shaper_foc'">
+              <button
+                type="button"
+                class="confirm-button"
+                @click="runAction({ action: 'calibrate_shaper_foc', axis: shaperAxis }, { capKey: 'shaperFoc', requireHomed: true })"
+              >
+                {{ t('FOC-Shaper starten?') }}
+              </button>
+              <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+            </template>
+            <button
+              v-else
+              type="button"
+              class="subtle-button"
+              :disabled="!!blockReason({ capKey: 'shaperFoc', requireHomed: true })"
+              :title="t(blockReason({ capKey: 'shaperFoc', requireHomed: true }) || 'Resonanzmessung im FOC-Messmodus starten')"
+              @click="requestConfirm('shaper_foc', { capKey: 'shaperFoc', requireHomed: true })"
+            >
+              <Activity :size="13" />{{ t('Shaper kalibrieren (FOC)') }}
+            </button>
+          </template>
+        </div>
+      </div>
+
+      <div v-if="hasShakeTuneMacros" class="cal-action-row">
+        <template v-if="data?.capabilities?.shaketuneShaper">
+          <template v-if="confirmKey === 'st_shaper'">
             <button
               type="button"
               class="confirm-button"
-              @click="runAction({ action: 'calibrate_shaper_foc', axis: shaperAxis }, { capKey: 'shaperFoc', requireHomed: true })"
+              @click="runAction({ action: 'shaketune_shaper' }, { capKey: 'shaketuneShaper', requireHomed: true })"
             >
-              {{ t('FOC-Shaper starten?') }}
+              {{ t('ShakeTune Achsen-Shaper starten?') }}
             </button>
             <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
           </template>
@@ -899,13 +1361,59 @@ onMounted(() => {
             v-else
             type="button"
             class="subtle-button"
-            :disabled="!!blockReason({ capKey: 'shaperFoc', requireHomed: true })"
-            :title="t(blockReason({ capKey: 'shaperFoc', requireHomed: true }) || 'Resonanzmessung im FOC-Messmodus starten')"
-            @click="requestConfirm('shaper_foc', { capKey: 'shaperFoc', requireHomed: true })"
+            :disabled="!!blockReason({ capKey: 'shaketuneShaper', requireHomed: true })"
+            :title="t(blockReason({ capKey: 'shaketuneShaper', requireHomed: true }) || 'AXES_SHAPER_CALIBRATION ausführen')"
+            @click="requestConfirm('st_shaper', { capKey: 'shaketuneShaper', requireHomed: true })"
           >
-            <Activity :size="13" />{{ t('Shaper kalibrieren (FOC)') }}
+            {{ t('ShakeTune · Achsen-Shaper') }}
           </button>
-        </div>
+        </template>
+
+        <template v-if="data?.capabilities?.shaketuneBelts">
+          <template v-if="confirmKey === 'st_belts'">
+            <button
+              type="button"
+              class="confirm-button"
+              @click="runAction({ action: 'shaketune_belts' }, { capKey: 'shaketuneBelts', requireHomed: true })"
+            >
+              {{ t('ShakeTune Riemen-Vergleich starten?') }}
+            </button>
+            <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+          </template>
+          <button
+            v-else
+            type="button"
+            class="subtle-button"
+            :disabled="!!blockReason({ capKey: 'shaketuneBelts', requireHomed: true })"
+            :title="t(blockReason({ capKey: 'shaketuneBelts', requireHomed: true }) || 'COMPARE_BELTS_RESPONSES ausführen')"
+            @click="requestConfirm('st_belts', { capKey: 'shaketuneBelts', requireHomed: true })"
+          >
+            {{ t('ShakeTune · Riemen-Vergleich') }}
+          </button>
+        </template>
+
+        <template v-if="data?.capabilities?.shaketuneVibrations">
+          <template v-if="confirmKey === 'st_vib'">
+            <button
+              type="button"
+              class="confirm-button"
+              @click="runAction({ action: 'shaketune_vibrations' }, { capKey: 'shaketuneVibrations', requireHomed: true })"
+            >
+              {{ t('ShakeTune Vibrationsprofil starten?') }}
+            </button>
+            <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+          </template>
+          <button
+            v-else
+            type="button"
+            class="subtle-button"
+            :disabled="!!blockReason({ capKey: 'shaketuneVibrations', requireHomed: true })"
+            :title="t(blockReason({ capKey: 'shaketuneVibrations', requireHomed: true }) || 'CREATE_VIBRATIONS_PROFILE ausführen')"
+            @click="requestConfirm('st_vib', { capKey: 'shaketuneVibrations', requireHomed: true })"
+          >
+            {{ t('ShakeTune · Vibrationen') }}
+          </button>
+        </template>
       </div>
 
       <div class="shaper-cards">

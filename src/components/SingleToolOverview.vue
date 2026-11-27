@@ -18,6 +18,9 @@ import {
   ChartNoAxesCombined,
   ChevronDown,
   Disc,
+  Power,
+  Terminal,
+  SlidersHorizontal,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import { heatState } from '../../server/status.mjs'
@@ -393,6 +396,84 @@ const activityLabel = computed(() => {
 })
 
 const sensors = computed(() => props.status?.sensors ?? [])
+const genericHeaters = computed(() => props.status?.genericHeaters ?? [])
+const outputPins = computed(() => props.status?.outputPins ?? [])
+const publicMacros = computed(() => props.status?.publicMacros ?? [])
+
+const tempFanEditing = ref('')
+const tempFanDraft = ref(0)
+const pinDrafts = ref({})
+const macroQuery = ref('')
+const confirmMacro = ref('')
+let confirmMacroTimer = null
+
+const filteredMacros = computed(() => {
+  const q = macroQuery.value.trim().toLowerCase()
+  const list = publicMacros.value
+  if (!q) return list
+  return list.filter(item => item.name.toLowerCase().includes(q) || item.label.toLowerCase().includes(q))
+})
+
+function openTempFanEditor(sensor) {
+  if (!enabled.value || sensor.kind !== 'temperature_fan') return
+  if (tempFanEditing.value === sensor.name) {
+    tempFanEditing.value = ''
+    return
+  }
+  tempFanEditing.value = sensor.name
+  tempFanDraft.value = Number.isFinite(sensor.target) ? Math.round(sensor.target) : 0
+}
+
+async function applyTempFanTarget(sensor) {
+  if (!enabled.value) return
+  const target = Math.round(Number(tempFanDraft.value))
+  const max = Number.isFinite(sensor.maxTemp) ? Math.floor(sensor.maxTemp) : 100
+  if (!Number.isInteger(target) || target < 0 || target > max) return
+  const ok = await props.send({ action: 'temperature_fan', fan: sensor.name, target })
+  if (ok) tempFanEditing.value = ''
+}
+
+function pinValueFor(pin) {
+  return pinDrafts.value[pin.name] != null ? pinDrafts.value[pin.name] : (pin.value ?? 0)
+}
+
+function pinPercent(pin, val) {
+  const scale = pin.scale > 0 ? pin.scale : 1
+  return Math.round(Math.max(0, Math.min(1, val / scale)) * 100)
+}
+
+async function setOutputPin(pin, value) {
+  if (!enabled.value) return
+  const prior = pinDrafts.value[pin.name]
+  const ok = await props.send({ action: 'output_pin', pin: pin.name, value })
+  if (ok && pinDrafts.value[pin.name] === prior) {
+    delete pinDrafts.value[pin.name]
+  }
+}
+
+function toggleOutputPin(pin) {
+  if (!enabled.value) return
+  const isOn = (pin.value ?? 0) > 0
+  setOutputPin(pin, isOn ? 0 : (pin.scale > 0 ? pin.scale : 1))
+}
+
+function resetMacroConfirm() {
+  confirmMacro.value = ''
+  clearTimeout(confirmMacroTimer)
+  confirmMacroTimer = null
+}
+
+function triggerPublicMacro(name) {
+  if (!motion.value) return
+  if (confirmMacro.value !== name) {
+    confirmMacro.value = name
+    clearTimeout(confirmMacroTimer)
+    confirmMacroTimer = setTimeout(resetMacroConfirm, 5000)
+    return
+  }
+  resetMacroConfirm()
+  emit('command', { action: 'macro', name })
+}
 
 const hasLedDeck = computed(() => {
   const installed = props.status?.capabilities?.ledProfiles ?? []
@@ -451,6 +532,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   presetController.abort()
   resetMotorsConfirm()
+  resetMacroConfirm()
 })
 </script>
 
@@ -699,6 +781,56 @@ onBeforeUnmount(() => {
               </span>
             </div>
           </article>
+
+          <!-- Active Generic Heaters (e.g. Chamber Heater) -->
+          <article
+            v-for="gh in genericHeaters"
+            :key="gh.id"
+            class="single-thermal-card"
+            :class="{ stale: !online }"
+          >
+            <div class="single-thermal-head">
+              <div class="single-thermal-title">
+                <Flame :size="16" class="single-icon-state" :class="heatPillMode(heatState(gh))" />
+                <h2>{{ t(gh.label) }}</h2>
+              </div>
+              <span class="single-heat-pill" :class="heatPillMode(heatState(gh))">
+                {{ t(heatState(gh)) }}
+              </span>
+            </div>
+
+            <div class="single-thermal-readout">
+              <div class="single-big-temp">
+                {{ number(gh.temperature, 1) }}<span>°C</span>
+              </div>
+              <span v-if="online && gh.power != null" class="single-power-pill">
+                {{ number(gh.power * 100, 0) }} %
+              </span>
+            </div>
+
+            <ThermalGauge
+              :label="t(gh.label)"
+              :temperature="gh.temperature"
+              :target="gh.target"
+              :power="gh.power"
+              :max-temperature="gh.maxTemp"
+              :online="online"
+              hide-label
+            />
+
+            <TemperatureTarget
+              :heater="gh.id"
+              :label="t(gh.label)"
+              :target="gh.target"
+              :max="gh.maxTemp"
+              :online="online"
+              :ready="status?.klipperState === 'ready'"
+              :pending="busy"
+              :send="send"
+              :steppers="displayMode"
+              :step-size="5"
+            />
+          </article>
         </div>
       </div>
     </div>
@@ -722,9 +854,46 @@ onBeforeUnmount(() => {
         </strong>
       </div>
 
-      <div v-for="sensor in sensors" :key="sensor.id" class="single-metric-cell">
-        <span class="single-metric-label">{{ t(sensor.label) }}</span>
-        <strong class="single-metric-value single-tabular">
+      <div
+        v-for="sensor in sensors"
+        :key="sensor.id"
+        class="single-metric-cell"
+        :class="{ 'is-temp-fan': sensor.kind === 'temperature_fan' }"
+      >
+        <span class="single-metric-label">
+          {{ t(sensor.label) }}
+          <button
+            v-if="sensor.kind === 'temperature_fan'"
+            type="button"
+            class="temp-fan-edit-trigger"
+            :disabled="!enabled"
+            :aria-expanded="tempFanEditing === sensor.name"
+            :title="t('Zieltemperatur für {0} einstellen', [t(sensor.label)])"
+            @click="openTempFanEditor(sensor)"
+          >
+            <SlidersHorizontal :size="11" />
+          </button>
+        </span>
+        <form
+          v-if="sensor.kind === 'temperature_fan' && tempFanEditing === sensor.name"
+          class="temp-fan-inline-form"
+          @submit.prevent="applyTempFanTarget(sensor)"
+          @keydown.esc="tempFanEditing = ''"
+        >
+          <input
+            v-model.number="tempFanDraft"
+            type="number"
+            min="0"
+            :max="sensor.maxTemp ?? 100"
+            step="1"
+            inputmode="numeric"
+            :aria-label="t('Zieltemperatur für {0} in Grad Celsius', [t(sensor.label)])"
+          />
+          <button type="submit" class="apply-temperature" :disabled="!enabled" :aria-label="t('Übernehmen')">
+            <Check :size="12" />
+          </button>
+        </form>
+        <strong v-else class="single-metric-value single-tabular">
           {{ number(sensor.temperature, 1) }} °C
           <small v-if="sensor.target != null && sensor.target > 0">/ {{ Math.round(sensor.target) }}°</small>
         </strong>
@@ -1001,6 +1170,62 @@ onBeforeUnmount(() => {
 
         <FanControl :status="status" :online="online" :pending="pending" :send="send" />
 
+        <section v-if="outputPins.length" class="control-panel single-pins-card" :aria-label="t('Ausgänge')">
+          <div class="fan-heading">
+            <h2><Power :size="17" />{{ t('Ausgänge') }}</h2>
+          </div>
+          <div class="pin-list">
+            <div v-for="pin in outputPins" :key="pin.id" class="pin-item">
+              <template v-if="pin.pwm">
+                <form class="fan-item" @submit.prevent="setOutputPin(pin, pinValueFor(pin))">
+                  <div class="fan-item-head">
+                    <strong>{{ t(pin.label) }}</strong>
+                    <span>{{ online && pin.value != null ? `${pinPercent(pin, pin.value)} %` : '—' }}</span>
+                  </div>
+                  <div class="fan-setting">
+                    <input
+                      type="range"
+                      min="0"
+                      :max="pin.scale"
+                      :step="pin.scale / 100"
+                      :value="pinValueFor(pin)"
+                      :disabled="!enabled"
+                      :aria-label="t('Ausgangsleistung für {0}', [t(pin.label)])"
+                      @input="pinDrafts[pin.name] = Number($event.target.value)"
+                    />
+                    <output>{{ pinPercent(pin, pinValueFor(pin)) }} %</output>
+                  </div>
+                  <div class="fan-actions">
+                    <button type="button" class="subtle-button" :disabled="!enabled" @click="setOutputPin(pin, 0)">
+                      <Power :size="13" />{{ t('Aus') }}
+                    </button>
+                    <button
+                      class="subtle-button"
+                      type="submit"
+                      :disabled="!enabled || Math.abs(pinValueFor(pin) - (pin.value ?? 0)) < 1e-4"
+                    >
+                      <Check :size="13" />{{ t('Setzen') }}
+                    </button>
+                  </div>
+                </form>
+              </template>
+              <div v-else class="pin-toggle-row">
+                <strong>{{ t(pin.label) }}</strong>
+                <button
+                  type="button"
+                  class="subtle-button pin-toggle-btn"
+                  :class="{ active: online && (pin.value ?? 0) > 0 }"
+                  :disabled="!enabled"
+                  :aria-pressed="online && (pin.value ?? 0) > 0"
+                  @click="toggleOutputPin(pin)"
+                >
+                  <Power :size="13" />{{ online && (pin.value ?? 0) > 0 ? t('An') : t('Aus') }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section v-if="hasLedDeck" class="single-led-card" :aria-label="t('LED-Steuerung')">
           <LedControls
             :status="status"
@@ -1010,6 +1235,44 @@ onBeforeUnmount(() => {
             @command="emit('command', $event)"
           />
         </section>
+
+        <details v-if="publicMacros.length" class="single-macros-disclosure">
+          <summary>
+            <span><Terminal :size="15" />{{ t('Makros') }} ({{ publicMacros.length }})</span>
+            <ChevronDown :size="15" class="single-graph-chevron" />
+          </summary>
+          <div class="single-macros-body" @keydown.esc="resetMacroConfirm">
+            <input
+              v-if="publicMacros.length > 6"
+              v-model="macroQuery"
+              type="search"
+              class="macro-search-input"
+              :placeholder="t('Makro filtern …')"
+              :aria-label="t('Makro filtern')"
+            />
+            <div class="single-macros-grid">
+              <button
+                v-for="m in filteredMacros"
+                :key="m.name"
+                type="button"
+                class="subtle-button single-macro-btn"
+                :class="{ confirming: confirmMacro === m.name }"
+                :disabled="!motion"
+                :title="
+                  !motion
+                    ? t('Während Druck oder Bewegung gesperrt.')
+                    : confirmMacro === m.name
+                      ? t('Erneut klicken, um {0} auszuführen', [m.name])
+                      : m.description || m.name
+                "
+                @click="triggerPublicMacro(m.name)"
+                @blur="confirmMacro === m.name && resetMacroConfirm()"
+              >
+                {{ confirmMacro === m.name ? t('Ausführen?') : m.name }}
+              </button>
+            </div>
+          </div>
+        </details>
       </aside>
     </div>
 

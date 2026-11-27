@@ -24,6 +24,7 @@ import {
   RotateCw,
   Power,
   Settings,
+  Save,
   X,
 } from '@lucide/vue'
 import { t, locale, language, setLanguage, setDocumentTitle } from './i18n.mjs'
@@ -314,6 +315,7 @@ onBeforeUnmount(() => {
   document.removeEventListener('keydown', onGlobalKeydown)
   clearInterval(clockTimer)
   clearTimeout(recoveryConfirmTimer)
+  clearTimeout(saveConfigConfirmTimer)
 })
 
 const activeJob = computed(() => {
@@ -565,6 +567,44 @@ async function triggerKlipperRecovery(target) {
     restartingRecoveryTarget.value = ''
   }
 }
+
+const confirmSaveConfig = ref(false)
+let saveConfigConfirmTimer = null
+
+function cancelSaveConfigConfirm() {
+  confirmSaveConfig.value = false
+  clearTimeout(saveConfigConfirmTimer)
+  saveConfigConfirmTimer = null
+}
+
+function requestSaveConfigConfirm() {
+  if (!canRunSaveConfig.value) return
+  confirmSaveConfig.value = true
+  clearTimeout(saveConfigConfirmTimer)
+  saveConfigConfirmTimer = setTimeout(cancelSaveConfigConfirm, 6000)
+}
+
+async function runSaveConfig() {
+  if (!canRunSaveConfig.value) return
+  cancelSaveConfigConfirm()
+  await send({ action: 'save_config' })
+}
+
+const showSaveConfigBanner = computed(
+  () => online.value && status.value?.klipperState === 'ready' && status.value?.saveConfigPending === true,
+)
+const canRunSaveConfig = computed(
+  () =>
+    showSaveConfigBanner.value &&
+    !isPrintActive.value &&
+    !pending.value &&
+    !activeJob.value &&
+    status.value?.idleState !== 'Printing',
+)
+
+watch(showSaveConfigBanner, shown => {
+  if (!shown) cancelSaveConfigConfirm()
+})
 
 watch(klipperNeedsRecovery, down => {
   if (!down) {
@@ -1010,6 +1050,50 @@ async function acknowledgeUncertain() {
         >
           {{ t(recoveryFeedback.message) }}
         </p>
+      </div>
+
+      <div v-if="showSaveConfigBanner" class="save-config-banner" role="status">
+        <div class="save-config-copy">
+          <Save :size="16" />
+          <span>
+            <strong>{{ t('Konfiguration nicht gespeichert') }}</strong>
+            <template v-if="isPrintActive">
+              · {{ t('Während eines Drucks gesperrt — nach Druckende speichern.') }}
+            </template>
+            <template v-else>
+              · {{ t('Kalibrierungswerte warten auf SAVE_CONFIG (Klipper startet neu).') }}
+            </template>
+          </span>
+        </div>
+        <div class="save-config-actions" @keydown.esc="cancelSaveConfigConfirm">
+          <template v-if="confirmSaveConfig">
+            <button
+              type="button"
+              class="confirm-button"
+              :disabled="!canRunSaveConfig"
+              @click="runSaveConfig"
+            >
+              <Save :size="14" />{{ t('Jetzt speichern & neu starten?') }}
+            </button>
+            <button type="button" class="subtle-button" @click="cancelSaveConfigConfirm">
+              {{ t('Abbrechen') }}
+            </button>
+          </template>
+          <button
+            v-else
+            type="button"
+            class="subtle-button save-config-btn"
+            :disabled="!canRunSaveConfig"
+            :title="
+              isPrintActive
+                ? t('Nach Druckende speichern')
+                : t('Ausstehende Werte mit SAVE_CONFIG in printer.cfg schreiben')
+            "
+            @click="requestSaveConfigConfirm"
+          >
+            <Save :size="14" />SAVE_CONFIG
+          </button>
+        </div>
       </div>
 
       <div v-if="status?.detectionMismatch && !status?.homingCanInitialize" class="notice" role="alert">

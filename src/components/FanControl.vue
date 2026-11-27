@@ -12,6 +12,7 @@ const props = defineProps({
 
 const drafts = reactive({})
 const fans = computed(() => props.status?.capabilities?.fans ?? [])
+const auxFans = computed(() => props.status?.auxFans ?? [])
 
 watch(
   fans,
@@ -93,6 +94,19 @@ async function apply(name, percent) {
         </p>
       </form>
     </div>
-    <p v-else class="fan-empty">{{ t('Keine manuell regelbaren Lüfter verfügbar.') }}</p>
+    <p v-else-if="!auxFans.length" class="fan-empty">{{ t('Keine manuell regelbaren Lüfter verfügbar.') }}</p>
+
+    <div v-if="auxFans.length" class="aux-fan-strip" :aria-label="t('Automatik-Lüfter')">
+      <span class="aux-fan-heading">{{ t('Automatik-Lüfter') }}</span>
+      <div class="aux-fan-list">
+        <div v-for="aux in auxFans" :key="aux.id" class="aux-fan-pill">
+          <span>{{ t(aux.label) }}</span>
+          <strong>
+            {{ online && aux.percent != null ? `${aux.percent} %` : '—' }}
+            <small v-if="online && aux.rpm != null && aux.rpm > 0">· {{ Math.round(aux.rpm) }} RPM</small>
+          </strong>
+        </div>
+      </div>
+    </div>
   </article>
 </template>

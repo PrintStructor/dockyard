@@ -16,6 +16,7 @@ export const printControlActions = [
   'tune_speed',
   'tune_flow',
   'tune_z_offset',
+  'save_z_offset',
   'exclude_object',
 ]
 
@@ -25,17 +26,27 @@ export const printControlActionKeys = {
   tune_speed: ['action', 'percent'],
   tune_flow: ['action', 'percent'],
   tune_z_offset: ['action', 'delta', 'reset'],
+  save_z_offset: ['action'],
   exclude_object: ['action', 'name'],
 }
 
 export function printControlCapabilities(config, raw) {
   const has = name => !!config[`gcode_macro ${name.toLowerCase()}`]
   const isToolchanger = Boolean(raw?.toolchanger || config.toolchanger)
+  const hasProbe = Boolean(
+    config.probe ||
+      config.beacon ||
+      config.bltouch ||
+      config.scanner ||
+      config.cartographer ||
+      Object.keys(config).some(k => k.toLowerCase().startsWith('probe_eddy_current')),
+  )
   return {
     printStart: !!config.virtual_sdcard,
     printCancel: has('CANCEL_PRINT') || !!config.pause_resume,
     perToolZAdjust: isToolchanger && has('SET_GCODE_OFFSET'),
     zAdjustReset: has('Z_ADJUST_RESET'),
+    zOffsetSaveTarget: hasProbe ? 'probe' : config.stepper_z ? 'endstop' : null,
     excludeObject: raw?.exclude_object != null || !!config.exclude_object,
   }
 }
@@ -126,6 +137,15 @@ export function printControlCommand(input, raw, capabilities) {
       endpoint: '/printer/gcode/script',
       body: { script: `SET_GCODE_OFFSET Z_ADJUST=${formatted} MOVE=1` },
       label: `Z-Offset ${formatted} mm`,
+    }
+  }
+
+  if (action === 'save_z_offset') {
+    const isProbe = capabilities.zOffsetSaveTarget === 'probe'
+    return {
+      endpoint: '/printer/gcode/script',
+      body: { script: isProbe ? 'Z_OFFSET_APPLY_PROBE' : 'Z_OFFSET_APPLY_ENDSTOP' },
+      label: isProbe ? 'Z-Offset für Probe übernehmen' : 'Z-Offset für Endstop übernehmen',
     }
   }
 

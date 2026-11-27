@@ -21,6 +21,15 @@ const allCalibrationMacros = () => ({
   'gcode_macro beacon_measure_gantry_twist': {},
   'gcode_macro beacon_poke_test': {},
   'gcode_macro shaper_calibrate_foc': {},
+  'gcode_macro axes_shaper_calibration': {},
+  'gcode_macro compare_belts_responses': {},
+  'gcode_macro create_vibrations_profile': {},
+  bed_screws: { screw1: '60,5', screw1_name: 'front screw' },
+  screws_tilt_adjust: {},
+  resonance_tester: {},
+  probe: {},
+  extruder: { max_temp: 300 },
+  heater_bed: { max_temp: 130 },
 })
 
 const readyState = () => ({
@@ -50,7 +59,7 @@ test('calibrationCapabilities detects configured macros and returns false when a
   for (const key of Object.keys(empty)) {
     assert.equal(empty[key], false, `expected ${key} to be false`)
   }
-  assert.equal(calibrationActions.length, 12)
+  assert.equal(calibrationActions.length, 27)
 })
 
 test('commandFor routes Nudge XY macros with SAVE_CONFIG restart flag and safety guards', () => {
@@ -316,4 +325,56 @@ test('normalizeCalibrationData exposes bedMesh and QGL config parameters and avo
   assert.equal(data.qgl.horizontalMoveZ, 2)
   assert.equal(data.inputShaper.x.freq, null)
   assert.equal(data.inputShaper.x.damping, null)
+})
+
+test('Paket B2 calibration: mesh profiles, V0.1 bed_screws workflow, screws_tilt, PID, standard shaper, ShakeTune, and probe_accuracy', () => {
+  const base = readyState()
+  base.bed_screws = { is_active: false, state: null, current_stage: 0, accepted_screws: 0 }
+  base.bed_mesh = {
+    profile_name: 'default',
+    profiles: { default: {}, abs_110: {} },
+    probed_matrix: [[0, 0.01], [-0.01, 0]],
+  }
+
+  // Bed Mesh profile commands + injection guard
+  assert.equal(commandFor({ action: 'mesh_profile_load', profile: 'abs_110' }, base).body.script, 'BED_MESH_PROFILE LOAD="abs_110"')
+  assert.equal(commandFor({ action: 'mesh_profile_save', profile: 'petg-80' }, base).body.script, 'BED_MESH_PROFILE SAVE="petg-80"')
+  assert.equal(commandFor({ action: 'mesh_profile_remove', profile: 'abs_110' }, base).body.script, 'BED_MESH_PROFILE REMOVE="abs_110"')
+  assert.equal(commandFor({ action: 'mesh_clear' }, base).body.script, 'BED_MESH_CLEAR')
+  assert.throws(() => commandFor({ action: 'mesh_profile_load', profile: 'bad" G28' }, base), err => err.status === 400)
+
+  // BED_SCREWS_ADJUST start + interactive ACCEPT/ADJUSTED/ABORT guard
+  assert.equal(commandFor({ action: 'bed_screws_start' }, base).body.script, 'BED_SCREWS_ADJUST')
+  assert.throws(() => commandFor({ action: 'bed_screws_accept' }, base), err => err.status === 409)
+  const activeScrews = { ...base, bed_screws: { is_active: true, state: 'adjust', accepted_screws: 1 } }
+  assert.equal(commandFor({ action: 'bed_screws_accept' }, activeScrews).body.script, 'ACCEPT')
+  assert.equal(commandFor({ action: 'bed_screws_adjusted' }, activeScrews).body.script, 'ADJUSTED')
+  assert.equal(commandFor({ action: 'bed_screws_abort' }, activeScrews).body.script, 'ABORT')
+
+  // SCREWS_TILT_CALCULATE & PROBE_ACCURACY
+  assert.equal(commandFor({ action: 'screws_tilt_calculate' }, base).body.script, 'SCREWS_TILT_CALCULATE')
+  assert.equal(commandFor({ action: 'probe_accuracy' }, base).body.script, 'PROBE_ACCURACY')
+
+  // PID_CALIBRATE bounds check
+  const pidE = commandFor({ action: 'calibrate_pid', heater: 'extruder', target: 230 }, base)
+  assert.equal(pidE.body.script, 'PID_CALIBRATE HEATER=extruder TARGET=230')
+  assert.equal(pidE.async, true)
+  assert.equal(commandFor({ action: 'calibrate_pid', heater: 'heater_bed', target: 100 }, base).body.script, 'PID_CALIBRATE HEATER=heater_bed TARGET=100')
+  assert.throws(() => commandFor({ action: 'calibrate_pid', heater: 'extruder', target: 30 }, base), err => err.status === 400)
+  assert.throws(() => commandFor({ action: 'calibrate_pid', heater: 'heater_bed', target: 200 }, base), err => err.status === 400)
+
+  // Standard SHAPER_CALIBRATE & ShakeTune triggers
+  assert.equal(commandFor({ action: 'calibrate_shaper', axis: 'ALL' }, base).body.script, 'SHAPER_CALIBRATE')
+  assert.equal(commandFor({ action: 'calibrate_shaper', axis: 'X' }, base).body.script, 'SHAPER_CALIBRATE AXIS=X')
+  assert.equal(commandFor({ action: 'shaketune_shaper' }, base).body.script, 'AXES_SHAPER_CALIBRATION')
+  assert.equal(commandFor({ action: 'shaketune_belts' }, base).body.script, 'COMPARE_BELTS_RESPONSES')
+  assert.equal(commandFor({ action: 'shaketune_vibrations' }, base).body.script, 'CREATE_VIBRATIONS_PROFILE')
+
+  // normalizeCalibrationData extracts profiles, bedScrews, pidLimits
+  const norm = normalizeCalibrationData({ rawStatus: base, configFiles: [] })
+  assert.deepEqual(norm.bedMesh.profiles, ['abs_110', 'default'])
+  assert.equal(norm.bedScrews.configured, true)
+  assert.deepEqual(norm.bedScrews.screws, [{ index: 1, name: 'front screw' }])
+  assert.equal(norm.pidLimits.extruderMax, 295)
+  assert.equal(norm.pidLimits.bedMax, 125)
 })

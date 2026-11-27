@@ -35,6 +35,12 @@ export function printControlReason(status, action, online = true, pending = fals
     return ''
   }
 
+  if (action === 'save_z_offset') {
+    if (!status.capabilities?.zOffsetSaveTarget) return 'Z-Offset-Übernahme ist nicht konfiguriert.'
+    if (status.zOffset == null || Math.abs(status.zOffset) <= 1e-5) return 'Kein aktiver Z-Offset zum Übernehmen vorhanden.'
+    return ''
+  }
+
   if (action === 'exclude_object') {
     if (!status.capabilities?.excludeObject) return 'Exclude Object ist nicht konfiguriert.'
     if (!isPrintActive) return 'Objekte können nur während eines aktiven oder pausierten Drucks übersprungen werden.'

@@ -1,8 +1,10 @@
 <script setup>
-import { computed, onBeforeUnmount, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import {
   AlertTriangle,
   Check,
+  Cpu,
+  HardDrive,
   Power,
   RefreshCw,
   RotateCw,
@@ -11,6 +13,7 @@ import {
   CameraOff,
   Camera,
   Copy,
+  Zap,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import { computeSystemState } from '../system-state.mjs'
@@ -34,12 +37,103 @@ const confirmingTarget = ref('')
 const restartingTarget = ref('')
 const restartFeedback = ref(null)
 const copiedKioskUrl = ref(false)
+const powerDevices = ref([])
+const powerBusy = ref('')
+const powerError = ref('')
+const confirmPowerOff = ref('')
 let confirmTimer = null
 let copyTimer = null
+let powerConfirmTimer = null
 
 const kioskUrl = computed(() => {
   if (typeof globalThis.location === 'undefined') return '?display=1'
   return `${globalThis.location.origin}${globalThis.location.pathname}?display=1`
+})
+
+async function fetchPowerDevices() {
+  try {
+    const res = await fetch('/api/system/power', { signal: AbortSignal.timeout(6000) })
+    if (!res.ok) return
+    const data = await res.json().catch(() => null)
+    powerDevices.value = data?.available && Array.isArray(data.devices) ? data.devices : []
+  } catch {
+    // Power plugin is optional
+  }
+}
+
+function resetPowerConfirm() {
+  confirmPowerOff.value = ''
+  clearTimeout(powerConfirmTimer)
+  powerConfirmTimer = null
+}
+
+async function togglePowerDevice(dev) {
+  if (!props.moonrakerOnline || powerBusy.value) return
+  const turningOff = dev.status === 'on'
+  if (turningOff && dev.lockedWhilePrinting) {
+    if (props.printLocked) return
+    if (confirmPowerOff.value !== dev.device) {
+      confirmPowerOff.value = dev.device
+      clearTimeout(powerConfirmTimer)
+      powerConfirmTimer = setTimeout(resetPowerConfirm, 6000)
+      return
+    }
+  }
+  resetPowerConfirm()
+  powerBusy.value = dev.device
+  powerError.value = ''
+  try {
+    const action = turningOff ? 'off' : 'on'
+    const res = await fetch('/api/system/power', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Cockpit-Request': '1' },
+      body: JSON.stringify({ device: dev.device, action }),
+      signal: AbortSignal.timeout(10_000),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Schalten fehlgeschlagen.')
+    await fetchPowerDevices()
+  } catch (err) {
+    powerError.value = err.message || 'Schalten fehlgeschlagen.'
+  } finally {
+    powerBusy.value = ''
+  }
+}
+
+async function triggerHostAction(action) {
+  if (isTargetBlocked(`host_${action}`)) return
+  cancelConfirm()
+  restartingTarget.value = `host_${action}`
+  restartFeedback.value = null
+  try {
+    const response = await fetch(`/api/system/host/${action}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Cockpit-Request': '1',
+      },
+      body: '{}',
+      signal: AbortSignal.timeout(12_000),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.error || 'Host-Aktion fehlgeschlagen.')
+    restartFeedback.value = {
+      ok: true,
+      message: data.message || 'Host-Aktion ausgelöst.',
+    }
+    emit('restarted', { target: `host_${action}` })
+  } catch (cause) {
+    restartFeedback.value = {
+      ok: false,
+      message: cause.message || 'Host-Aktion fehlgeschlagen.',
+    }
+  } finally {
+    restartingTarget.value = ''
+  }
+}
+
+onMounted(() => {
+  fetchPowerDevices()
 })
 
 async function copyKioskUrl() {
@@ -58,6 +152,7 @@ async function copyKioskUrl() {
 onBeforeUnmount(() => {
   if (confirmTimer) clearTimeout(confirmTimer)
   if (copyTimer) clearTimeout(copyTimer)
+  if (powerConfirmTimer) clearTimeout(powerConfirmTimer)
 })
 
 const computedState = computed(() =>
@@ -250,6 +345,13 @@ const hostCaption = computed(() => {
             <strong>{{ formatUptime(overview?.uptimeSeconds) }}</strong>
             <small v-if="overview?.klippy?.state">Klippy · {{ formatState(overview.klippy.state) }}</small>
           </div>
+          <div v-if="overview?.disk?.totalBytes" class="system-metric-cell">
+            <span><HardDrive :size="12" style="vertical-align: -2px; margin-right: 4px" />{{ t('Speicherplatz') }}</span>
+            <strong>{{ overview.disk.usedPercent != null ? `${number(overview.disk.usedPercent, 1)} %` : '—' }}</strong>
+            <small>
+              {{ formatGb(overview.disk.freeBytes) }} / {{ formatGb(overview.disk.totalBytes) }} GB {{ t('frei') }}
+            </small>
+          </div>
         </template>
       </div>
 
@@ -409,6 +511,54 @@ const hostCaption = computed(() => {
               {{ t('Firmware-Neustart') }}
             </button>
           </div>
+
+          <div class="confirm-inline">
+            <template v-if="confirmingTarget === 'host_reboot'">
+              <button
+                type="button"
+                class="confirm-button"
+                :disabled="isTargetBlocked('host_reboot')"
+                @click="triggerHostAction('reboot')"
+              >
+                <RotateCw :size="14" />{{ t('Host wirklich neu starten?') }}
+              </button>
+              <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+            </template>
+            <button
+              v-else
+              type="button"
+              class="subtle-button"
+              :disabled="isTargetBlocked('host_reboot')"
+              @click="requestConfirm('host_reboot')"
+            >
+              <RotateCw :size="14" :class="{ spinning: restartingTarget === 'host_reboot' }" />
+              {{ t('Host neu starten') }}
+            </button>
+          </div>
+
+          <div class="confirm-inline">
+            <template v-if="confirmingTarget === 'host_shutdown'">
+              <button
+                type="button"
+                class="danger-button"
+                :disabled="isTargetBlocked('host_shutdown')"
+                @click="triggerHostAction('shutdown')"
+              >
+                <Power :size="14" />{{ t('Host wirklich herunterfahren?') }}
+              </button>
+              <button type="button" class="subtle-button" @click="cancelConfirm">{{ t('Abbrechen') }}</button>
+            </template>
+            <button
+              v-else
+              type="button"
+              class="subtle-button"
+              :disabled="isTargetBlocked('host_shutdown')"
+              @click="requestConfirm('host_shutdown')"
+            >
+              <Power :size="14" />
+              {{ t('Host herunterfahren') }}
+            </button>
+          </div>
         </div>
 
         <div v-if="overview?.services?.length" class="system-services-grid">
@@ -445,6 +595,79 @@ const hostCaption = computed(() => {
           </div>
         </div>
         <p v-else class="muted" style="margin-top: 0">{{ t('Keine verwalteten Systemdienste gemeldet.') }}</p>
+      </article>
+
+      <article v-if="powerDevices.length" class="system-panel system-power-panel">
+        <div class="system-panel-head">
+          <div>
+            <h2><Zap :size="16" style="vertical-align: -2px; margin-right: 6px" />{{ t('Stromgeräte') }}</h2>
+            <p>{{ t('Über Moonraker konfigurierte Schaltsteckdosen, Relais und Beleuchtung.') }}</p>
+          </div>
+        </div>
+        <div v-if="powerError" class="system-banner amber" style="margin-bottom: 12px" role="alert">
+          <AlertTriangle :size="15" />
+          <span>{{ t(powerError) }}</span>
+        </div>
+        <div class="system-services-grid" @keydown.esc="resetPowerConfirm">
+          <div v-for="dev in powerDevices" :key="dev.device" class="service-card">
+            <div class="service-card-info">
+              <strong>{{ dev.device }}</strong>
+              <span class="service-state-pill" :class="dev.status === 'on' ? 'active' : 'inactive'">
+                <span class="status-dot" />
+                {{ dev.status === 'on' ? t('An') : t('Aus') }}
+              </span>
+            </div>
+            <button
+              type="button"
+              class="subtle-button"
+              :class="{ 'confirm-button': confirmPowerOff === dev.device }"
+              :disabled="!moonrakerOnline || !!powerBusy || (dev.status === 'on' && dev.lockedWhilePrinting && printLocked)"
+              @click="togglePowerDevice(dev)"
+            >
+              <Power :size="13" />
+              {{
+                confirmPowerOff === dev.device
+                  ? t('Wirklich ausschalten?')
+                  : dev.status === 'on'
+                    ? t('Ausschalten')
+                    : t('Einschalten')
+              }}
+            </button>
+          </div>
+        </div>
+      </article>
+
+      <article v-if="overview?.mcus?.length" class="system-panel system-mcu-panel">
+        <div class="system-panel-head">
+          <div>
+            <h2><Cpu :size="16" style="vertical-align: -2px; margin-right: 6px" />{{ t('MCU-Diagnose') }}</h2>
+            <p>{{ t('Auslastung, Zykluszeit und Paketwiederholungen der angeschlossenen Controller.') }}</p>
+          </div>
+        </div>
+        <div class="cal-table-wrap">
+          <table class="cal-table">
+            <thead>
+              <tr>
+                <th>MCU</th>
+                <th>{{ t('Auslastung') }}</th>
+                <th>{{ t('Task Ø') }}</th>
+                <th>{{ t('Retransmits') }}</th>
+                <th>{{ t('Version') }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="m in overview.mcus" :key="m.id">
+                <td>{{ m.name }}</td>
+                <td>{{ m.awakePercent != null ? `${number(m.awakePercent, 1)} %` : '—' }}</td>
+                <td>{{ m.taskAvgUs != null ? `${m.taskAvgUs} µs` : '—' }}</td>
+                <td :class="{ 'mcu-warn': (m.bytesRetransmit ?? 0) > 0 }">
+                  {{ m.bytesRetransmit != null ? m.bytesRetransmit : '—' }}
+                </td>
+                <td class="mcu-ver" :title="m.version ?? ''">{{ m.version ?? '—' }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </article>
 
       <article class="system-panel system-display-panel">

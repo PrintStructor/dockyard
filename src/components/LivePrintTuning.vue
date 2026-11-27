@@ -11,6 +11,7 @@ import {
   Droplets,
   Check,
   Ban,
+  Save,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import { auxActionReason } from '../aux-action-state.mjs'
@@ -68,6 +69,7 @@ const cancelReason = computed(() => printControlReason(props.status, 'print_canc
 const speedReason = computed(() => printControlReason(props.status, 'tune_speed', props.online, props.pending))
 const flowReason = computed(() => printControlReason(props.status, 'tune_flow', props.online, props.pending))
 const zReason = computed(() => printControlReason(props.status, 'tune_z_offset', props.online, props.pending))
+const saveZReason = computed(() => printControlReason(props.status, 'save_z_offset', props.online, props.pending))
 const excludeReason = computed(() => printControlReason(props.status, 'exclude_object', props.online, props.pending))
 
 const actualSpeed = computed(() => props.status?.speedPercent ?? null)
@@ -82,6 +84,12 @@ const canResetZ = computed(
     zOffset.value != null &&
     Math.abs(zOffset.value) > 1e-5 &&
     (props.status?.capabilities?.zAdjustReset || !props.status?.capabilities?.perToolZAdjust),
+)
+const canSaveZ = computed(() => !saveZReason.value && Boolean(props.status?.capabilities?.zOffsetSaveTarget))
+const saveZTargetLabel = computed(() =>
+  props.status?.capabilities?.zOffsetSaveTarget === 'probe'
+    ? 'Z-Offset für Probe vormerken (danach SAVE_CONFIG)'
+    : 'Z-Offset für Endstop vormerken (danach SAVE_CONFIG)',
 )
 
 const formattedZOffset = computed(() => {
@@ -117,6 +125,11 @@ async function adjustZ(delta) {
 async function resetZ() {
   if (!canResetZ.value) return
   await props.send({ action: 'tune_z_offset', reset: true })
+}
+
+async function saveZOffset() {
+  if (!canSaveZ.value) return
+  await props.send({ action: 'save_z_offset' })
 }
 
 async function applySpeed(percent) {
@@ -245,6 +258,17 @@ async function requestOrRunExclude(name) {
             @click="resetZ"
           >
             <RotateCcw :size="13" />
+          </button>
+          <button
+            v-if="status?.capabilities?.zOffsetSaveTarget"
+            type="button"
+            class="subtle-button tuning-savez-btn"
+            :disabled="!canSaveZ"
+            :title="saveZReason ? t(saveZReason) : t(saveZTargetLabel)"
+            :aria-label="t('Z-Offset übernehmen')"
+            @click="saveZOffset"
+          >
+            <Save :size="13" />
           </button>
         </div>
       </div>

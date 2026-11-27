@@ -21,6 +21,17 @@ const SENSOR_LABELS = {
   skr_pico: 'SKR Pico',
 }
 
+const INTERNAL_PUBLIC_MACROS = new Set([
+  'PAUSE',
+  'RESUME',
+  'CANCEL_PRINT',
+  'SET_GCODE_OFFSET',
+  'SET_PAUSE_NEXT_LAYER',
+  'SET_PAUSE_AT_LAYER',
+  'SET_PRINT_STATS_INFO',
+  'LOAD_WATCH',
+])
+
 const finite = value => (typeof value === 'number' && Number.isFinite(value) ? value : null)
 const numeric = value => {
   if (typeof value === 'number' && Number.isFinite(value)) return value
@@ -298,15 +309,109 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
     .map(([key, value]) => {
       const isFan = key.startsWith('temperature_fan ')
       const name = key.slice(isFan ? 16 : 19)
+      const cfg = config[key.toLowerCase()] ?? config[key] ?? {}
+      return {
+        id: key,
+        name,
+        kind: isFan ? 'temperature_fan' : 'temperature_sensor',
+        label: formatSensorLabel(name),
+        temperature: finite(value?.temperature),
+        target: isFan ? finite(value?.target) : null,
+        speed: isFan ? finite(value?.speed) : null,
+        minTemp: isFan ? numeric(cfg.min_temp) : null,
+        maxTemp: isFan ? numeric(cfg.max_temp) : null,
+      }
+    })
+    .sort((a, b) => a.label.localeCompare(b.label))
+
+  const genericHeaters = Object.entries(status)
+    .filter(([key]) => /^heater_generic [A-Za-z0-9_-]+$/.test(key))
+    .map(([key, value]) => {
+      const name = key.slice(15)
+      const cfg = config[key.toLowerCase()] ?? config[key] ?? {}
+      const rawMax = numeric(cfg.max_temp)
       return {
         id: key,
         name,
         label: formatSensorLabel(name),
         temperature: finite(value?.temperature),
-        target: isFan ? finite(value?.target) : null,
+        target: finite(value?.target),
+        power: finite(value?.power),
+        maxTemp: rawMax != null ? Math.max(0, Math.round(rawMax - 5)) : null,
       }
     })
     .sort((a, b) => a.label.localeCompare(b.label))
+
+  const outputPins = Object.entries(status)
+    .filter(([key]) => /^output_pin [A-Za-z0-9_-]+$/.test(key))
+    .map(([key, value]) => {
+      const name = key.slice(11)
+      const cfg = config[key.toLowerCase()] ?? config[key] ?? {}
+      const scale = numeric(cfg.scale)
+      const safeScale = scale != null && scale > 0 ? scale : 1
+      const rawVal = finite(value?.value)
+      return {
+        id: key,
+        name,
+        label: formatSensorLabel(name),
+        value: rawVal != null ? Math.round(rawVal * safeScale * 1000) / 1000 : null,
+        pwm: cfg.pwm === true || String(cfg.pwm).toLowerCase() === 'true',
+        scale: safeScale,
+      }
+    })
+    .sort((a, b) => a.label.localeCompare(b.label))
+
+  const auxFans = Object.entries(status)
+    .filter(([key]) => /^(?:heater_fan|controller_fan) [A-Za-z0-9_-]+$/.test(key))
+    .map(([key, value]) => {
+      const isController = key.startsWith('controller_fan ')
+      const name = key.slice(isController ? 15 : 11)
+      const speed = finite(value?.speed)
+      return {
+        id: key,
+        name,
+        kind: isController ? 'controller_fan' : 'heater_fan',
+        label: formatSensorLabel(name),
+        percent: speed == null ? null : Math.round(Math.max(0, Math.min(1, speed)) * 100),
+        rpm: finite(value?.rpm),
+      }
+    })
+    .sort((a, b) => a.label.localeCompare(b.label))
+
+  const publicMacros = Object.keys(config)
+    .filter(key => key.toLowerCase().startsWith('gcode_macro '))
+    .map(key => key.slice(12).trim())
+    .filter(
+      name =>
+        /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(name) &&
+        !/^[GMT]\d+(\.\d+)?$/i.test(name) &&
+        !INTERNAL_PUBLIC_MACROS.has(name.toUpperCase()),
+    )
+    .map(name => ({
+      name: name.toUpperCase(),
+      label: formatSensorLabel(name),
+      description:
+        typeof config[`gcode_macro ${name.toLowerCase()}`]?.description === 'string' &&
+        config[`gcode_macro ${name.toLowerCase()}`].description.trim() !== 'G-Code macro'
+          ? config[`gcode_macro ${name.toLowerCase()}`].description.trim()
+          : null,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name))
+
+  const bedScrews =
+    status.bed_screws || config.bed_screws
+      ? {
+          configured: Boolean(config.bed_screws || status.bed_screws),
+          isActive: status.bed_screws?.is_active === true,
+          state: typeof status.bed_screws?.state === 'string' ? status.bed_screws.state : null,
+          currentStage: Number.isInteger(status.bed_screws?.current_stage) ? status.bed_screws.current_stage : null,
+          acceptedScrews: Number.isInteger(status.bed_screws?.accepted_screws)
+            ? status.bed_screws.accepted_screws
+            : 0,
+        }
+      : null
+
+  const saveConfigPending = status.configfile?.save_config_pending === true
 
   const gcodeMove = status.gcode_move ?? {}
   const speedFactor = finite(gcodeMove.speed_factor)
@@ -378,7 +483,13 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
     rp2350: sensor('rp2350'),
     beacon: sensor('beacon_coil'),
     sensors,
+    genericHeaters,
+    outputPins,
+    auxFans,
+    publicMacros,
     filamentSensors,
+    bedScrews,
+    saveConfigPending,
     homedAxes: status.toolhead?.homed_axes ?? null,
     position: status.toolhead?.position ?? null,
     axisMinimum: status.toolhead?.axis_minimum ?? null,

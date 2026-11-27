@@ -332,7 +332,7 @@ input::placeholder{color:var(--muted);opacity:1}
 /* System Overview: Host metrics strip + services panel. */
 .system-overview-stack{display:flex;flex-direction:column;gap:20px}
 .system-metrics-wrap{display:flex;flex-direction:column;gap:8px}
-.system-metrics-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.system-metrics-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
 .system-metric-cell{padding:14px 18px;display:flex;flex-direction:column;gap:5px;border-right:1px solid var(--line);min-width:0}
 .system-metric-cell:last-child{border-right:0}
 .system-metric-cell>span{font-size:11px;color:var(--muted)}
@@ -589,8 +589,10 @@ input::placeholder{color:var(--muted);opacity:1}
 .tuning-tool-tag{display:inline-flex;padding:1px 5px;border:1px solid var(--line);border-radius:4px;font-size:10px;color:var(--lime)}
 .tuning-steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:2px}
 .tuning-steps button{padding:5px 4px;font-size:11px;font-variant-numeric:tabular-nums;text-align:center}
-.tuning-z-buttons{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 36px;gap:6px}
-.tuning-z-buttons button{justify-content:center;min-height:32px;padding:5px 6px;font-size:12px;font-variant-numeric:tabular-nums}
+.tuning-z-buttons{display:flex;gap:6px;align-items:stretch}
+.tuning-z-buttons button{flex:1 1 0;justify-content:center;min-height:32px;padding:5px 6px;font-size:12px;font-variant-numeric:tabular-nums}
+.tuning-z-buttons .tuning-reset-btn,.tuning-z-buttons .tuning-savez-btn{flex:0 0 36px;width:36px;padding:0}
+.tuning-z-buttons .tuning-savez-btn:not(:disabled){border-color:rgba(197,247,107,.35);color:var(--lime)}
 .tuning-reset-btn{padding:0!important}
 
 .tuning-factor-row{display:flex;flex-direction:column;gap:5px}
@@ -1330,7 +1332,92 @@ main:focus{outline:none}
 .app-shell.display-mode .single-thermal-card .inspector-target input,
 .app-shell.display-mode .axis-reading-card input,
 .app-shell.display-mode .editable-temperature input{min-height:44px;height:44px;font-size:15px}
-.app-shell.display-mode .tuning-z-buttons{grid-template-columns:1fr 1fr 44px}
+.app-shell.display-mode .tuning-z-buttons .tuning-reset-btn,.app-shell.display-mode .tuning-z-buttons .tuning-savez-btn{flex:0 0 44px;width:44px;min-height:44px}
 .app-shell.display-mode .axis-reading-card{min-height:48px;grid-template-columns:auto minmax(0,1fr) auto 44px}
 .app-shell.display-mode .heat-panel .editable-temperature{grid-template-columns:minmax(85px,1fr) auto 58px auto 44px;min-height:48px}
 .app-shell.display-mode input[type=range]{min-height:44px}
+
+/* Paket B2: Global SAVE_CONFIG banner, Calibration workbench, Enclosure controls, Macros, Temp window, MCU & Power */
+.save-config-banner{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 14px;margin-bottom:14px;background:rgba(240,180,84,.08);border:1px solid rgba(240,180,84,.38);border-radius:var(--radius);font-size:12.5px;color:var(--text)}
+.save-config-copy{display:flex;align-items:center;gap:9px;min-width:0;flex:1 1 260px}
+.save-config-copy svg{flex-shrink:0;color:var(--amber)}
+.save-config-copy strong{color:var(--amber);font-weight:600}
+.save-config-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.save-config-btn:not(:disabled){border-color:rgba(240,180,84,.5);color:var(--amber);background:rgba(240,180,84,.1)}
+.save-config-btn:hover:not(:disabled){border-color:var(--amber);background:rgba(240,180,84,.18)}
+
+.mesh-profiles-bar{display:flex;flex-direction:column;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-sm)}
+.mesh-profiles-label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-right:4px}
+.mesh-profile-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.mesh-profile-chip-group{display:inline-flex;align-items:stretch;gap:2px}
+.mesh-profile-btn{min-height:30px;padding:4px 9px;font-size:12px}
+.mesh-profile-btn.active{border-color:rgba(197,247,107,.45);background:var(--lime-tint);color:var(--lime)}
+.mesh-profile-rm-btn{min-height:30px;min-width:28px;padding:4px 6px;color:var(--muted)}
+.mesh-profile-rm-btn:hover:not(:disabled){color:var(--red);border-color:rgba(240,104,104,.4)}
+.mesh-profile-rm-confirm{min-height:30px;padding:4px 8px;font-size:11.5px}
+.mesh-profile-save-form{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.mesh-profile-save-form input{flex:1 1 180px;min-height:34px;padding:5px 10px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--text);font-size:12.5px}
+.mesh-profile-save-form input:focus{outline:none;border-color:var(--lime)}
+
+.screw-list-chips{display:flex;flex-wrap:wrap;gap:6px}
+.bed-screws-live-box{display:flex;flex-direction:column;gap:10px;padding:12px;background:rgba(197,247,107,.06);border:1px solid rgba(197,247,107,.3);border-radius:var(--radius-sm)}
+.bed-screws-prompt{margin:0;font-size:12.5px;color:var(--text)}
+
+.pid-grid{display:flex;flex-direction:column;gap:8px}
+.pid-row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:9px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-sm)}
+.pid-row-label{display:flex;align-items:center;gap:7px;min-width:120px;font-size:13px;color:var(--text)}
+.pid-row-label svg{color:var(--amber)}
+.pid-input-wrap{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--muted)}
+.pid-input-wrap input{width:76px;min-height:34px;padding:4px 8px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--text);font-size:13px;font-variant-numeric:tabular-nums;text-align:right}
+.pid-input-wrap input:focus{outline:none;border-color:var(--lime)}
+
+.graph-heading-right{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.temperature-graph .graph-heading-right{grid-column:1;grid-row:2}
+.graph-window-select button{min-height:26px;padding:2px 8px;font-size:11px}
+
+.aux-fan-strip{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:6px}
+.aux-fan-heading{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.aux-fan-list{display:flex;flex-wrap:wrap;gap:6px}
+.aux-fan-pill{display:inline-flex;align-items:center;gap:7px;padding:4px 9px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-sm);font-size:12px;color:var(--muted)}
+.aux-fan-pill strong{color:var(--text);font-variant-numeric:tabular-nums;font-weight:600}
+.aux-fan-pill small{color:var(--muted);font-weight:400;margin-left:2px}
+
+.single-metric-label{display:inline-flex;align-items:center;gap:5px}
+.temp-fan-edit-trigger{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;background:transparent;border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--muted);cursor:pointer}
+.temp-fan-edit-trigger:hover:not(:disabled){color:var(--lime);border-color:var(--line-strong)}
+.temp-fan-inline-form{display:flex;align-items:center;gap:5px;margin-top:2px}
+.temp-fan-inline-form input{width:64px;min-height:28px;padding:2px 6px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--text);font-size:13px;font-variant-numeric:tabular-nums;text-align:right}
+.temp-fan-inline-form input:focus{outline:none;border-color:var(--lime)}
+
+.single-pins-card{display:flex;flex-direction:column;gap:10px}
+.pin-list{display:flex;flex-direction:column;gap:10px}
+.pin-toggle-row{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:13px}
+.pin-toggle-btn.active{border-color:rgba(197,247,107,.45);background:var(--lime-tint);color:var(--lime)}
+
+.single-macros-disclosure{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.single-macros-disclosure>summary{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;cursor:pointer;list-style:none;font-size:13px;font-weight:600;color:var(--text)}
+.single-macros-disclosure>summary::-webkit-details-marker{display:none}
+.single-macros-disclosure>summary>span{display:inline-flex;align-items:center;gap:7px}
+.single-macros-disclosure[open] .single-graph-chevron{transform:rotate(180deg)}
+.single-macros-body{padding:0 14px 14px;display:flex;flex-direction:column;gap:8px}
+.macro-search-input{width:100%;min-height:34px;padding:5px 10px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-sm);color:var(--text);font-size:12.5px}
+.macro-search-input:focus{outline:none;border-color:var(--lime)}
+.single-macros-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:6px}
+.single-macro-btn{justify-content:center;font-size:11.5px;min-height:34px;padding:5px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.single-macro-btn.confirming{border-color:rgba(240,180,84,.6);background:rgba(240,180,84,.14);color:var(--amber)}
+
+.system-power-panel,.system-mcu-panel{grid-column:1/-1}
+.mcu-warn{color:var(--amber);font-weight:600}
+.mcu-ver{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:11.5px}
+
+.app-shell.display-mode .save-config-btn,
+.app-shell.display-mode .mesh-profile-btn,
+.app-shell.display-mode .mesh-profile-rm-btn,
+.app-shell.display-mode .mesh-profile-save-form input,
+.app-shell.display-mode .pid-input-wrap input,
+.app-shell.display-mode .graph-window-select button,
+.app-shell.display-mode .pin-toggle-btn,
+.app-shell.display-mode .single-macros-disclosure>summary,
+.app-shell.display-mode .single-macro-btn,
+.app-shell.display-mode .temp-fan-edit-trigger{min-height:44px}
+.app-shell.display-mode .temp-fan-edit-trigger{min-width:44px;width:44px}

@@ -10,12 +10,20 @@ const props = defineProps({
 
 const history = ref(null)
 const error = ref('')
+const duration = ref(600)
 const hidden = ref(new Set())
+const seenSeries = new Set()
 const showTargets = ref(false)
 const plot = ref(null)
 const plotWidth = ref(366)
 const plotHeight = ref(230)
 const hoverSeconds = ref(null)
+
+const DURATION_OPTIONS = [
+  { value: 600, label: '10 min' },
+  { value: 1800, label: '30 min' },
+  { value: 3600, label: '60 min' },
+]
 
 let resizeObserver = null
 let timer = null
@@ -37,27 +45,64 @@ watch(plot, element => {
   resizeObserver.observe(element)
 })
 
-const timeTicks = computed(() => (plotWidth.value >= 600 ? [-600, -480, -360, -240, -120, 0] : [-600, -300, 0]))
+const activeDuration = computed(() => Number(history.value?.duration) || duration.value)
+const timeTicks = computed(() => {
+  const dur = activeDuration.value
+  const step = plotWidth.value >= 600 ? dur / 5 : dur / 2
+  const ticks = []
+  for (let s = -dur; s <= 0; s += step) {
+    ticks.push(Math.round(s))
+  }
+  if (ticks.at(-1) !== 0) ticks.push(0)
+  return ticks
+})
 const toolColors = ['#c5f76b', '#6ed5e7', '#bca3ff', '#f3c67b', '#ff9a83', '#ed9fc8', '#7be3b5', '#ffd27d']
 const bedColor = '#edf1ed'
 
-async function refresh() {
-  if (disposed || document.hidden || request) return
+function applySeriesDefaults(list) {
+  let changed = false
+  const next = new Set(hidden.value)
+  for (const item of list ?? []) {
+    if (seenSeries.has(item.id)) continue
+    seenSeries.add(item.id)
+    if (item.defaultVisible === false) {
+      next.add(item.id)
+      changed = true
+    }
+  }
+  if (changed) hidden.value = next
+}
+
+async function refresh({ force = false } = {}) {
+  if (disposed || document.hidden) return
+  if (request) {
+    if (!force) return
+    request.abort()
+  }
   request = new AbortController()
   try {
-    const response = await fetch('/api/temperature-history', {
+    const response = await fetch(`/api/temperature-history?duration=${duration.value}`, {
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(7000)]),
     })
     const data = await response.json()
     if (!response.ok) throw new Error(data.error)
+    applySeriesDefaults(data.series)
     history.value = data
     lastSampleMs = data.sampledAt ? new Date(data.sampledAt).getTime() : Date.now()
     error.value = ''
-  } catch {
+  } catch (err) {
+    if (err?.name === 'AbortError') return
     if (!disposed) error.value = 'Temperaturverlauf nicht erreichbar. Neuer Versuch automatisch.'
   } finally {
     request = null
   }
+}
+
+function setDuration(nextDur) {
+  if (duration.value === nextDur) return
+  duration.value = nextDur
+  hoverSeconds.value = null
+  refresh({ force: true })
 }
 
 // Smoothly append live SSE temperature points every >= 5 s between authoritative 10 s polls.
@@ -76,8 +121,11 @@ watch(
       ...Object.fromEntries(
         (props.status.tools ?? []).map((tool, id) => [id ? `extruder${id}` : 'extruder', tool]),
       ),
+      ...Object.fromEntries((props.status.genericHeaters ?? []).map(item => [item.id, item])),
+      ...Object.fromEntries((props.status.sensors ?? []).map(item => [item.id, item])),
     }
 
+    const dur = activeDuration.value
     history.value = {
       ...history.value,
       sampledAt: at,
@@ -85,7 +133,7 @@ watch(
         const current = liveById[item.id]
         const shifted = item.points
           .map(point => ({ ...point, seconds: point.seconds - dt }))
-          .filter(point => point.seconds >= -600)
+          .filter(point => point.seconds >= -dur)
         shifted.push({
           seconds: 0,
           temperature: Number.isFinite(current?.temperature) ? current.temperature : null,
@@ -135,7 +183,7 @@ const maximum = computed(() => {
 
 const ticks = computed(() => [0, maximum.value / 2, maximum.value])
 const y = value => plotHeight.value - 29 - (value / maximum.value) * (plotHeight.value - 49)
-const x = seconds => 38 + ((600 + seconds) / 600) * (plotWidth.value - 52)
+const x = seconds => 38 + ((activeDuration.value + seconds) / activeDuration.value) * (plotWidth.value - 52)
 
 function path(points, field) {
   let connected = false
@@ -162,9 +210,10 @@ function onPointerMove(event) {
   if (!plot.value || !visible.value.length) return
   const rect = plot.value.getBoundingClientRect()
   if (!rect.width) return
+  const dur = activeDuration.value
   const svgX = ((event.clientX - rect.left) / rect.width) * plotWidth.value
   const clamped = Math.max(38, Math.min(plotWidth.value - 14, svgX))
-  const approxSeconds = ((clamped - 38) / Math.max(1, plotWidth.value - 52)) * 600 - 600
+  const approxSeconds = ((clamped - 38) / Math.max(1, plotWidth.value - 52)) * dur - dur
 
   let bestSeconds = null
   let bestDelta = Infinity
@@ -202,10 +251,11 @@ const hoverData = computed(() => {
   if (hoverSeconds.value == null || !visible.value.length) return null
   const seconds = hoverSeconds.value
   const xPos = x(seconds)
+  const snapTolerance = activeDuration.value <= 600 ? 4 : activeDuration.value <= 1800 ? 12 : 20
   const items = visible.value
     .map(item => {
       let best = null
-      let bestDelta = 3
+      let bestDelta = snapTolerance
       for (const point of item.points) {
         const delta = Math.abs(point.seconds - seconds)
         if (delta <= bestDelta) {
@@ -250,13 +300,26 @@ const updated = computed(() =>
   <article class="control-panel temperature-graph">
     <div class="graph-heading">
       <h2><ChartNoAxesCombined :size="18" />{{ t('Temperaturverlauf') }}</h2>
-      <p
-        class="graph-caption"
-        :title="online && !error ? t('Aktualisierung alle zehn Sekunden') : t('Zuletzt empfangene Werte')"
-      >
-        {{ t('10 Minuten ·') }} {{ online && !error ? 'Live' : t('zuletzt') }}
-        <span v-if="updated">{{ updated }}</span>
-      </p>
+      <div class="graph-heading-right">
+        <div class="segmented graph-window-select" role="group" :aria-label="t('Zeitraum')">
+          <button
+            v-for="opt in DURATION_OPTIONS"
+            :key="opt.value"
+            type="button"
+            :aria-pressed="duration === opt.value"
+            @click="setDuration(opt.value)"
+          >
+            {{ opt.label }}
+          </button>
+        </div>
+        <p
+          class="graph-caption"
+          :title="online && !error ? t('Aktualisierung alle zehn Sekunden') : t('Zuletzt empfangene Werte')"
+        >
+          {{ online && !error ? 'Live' : t('zuletzt') }}
+          <span v-if="updated">{{ updated }}</span>
+        </p>
+      </div>
     </div>
 
     <template v-if="hasData">
@@ -267,7 +330,7 @@ const updated = computed(() =>
           :viewBox="`0 0 ${plotWidth} ${plotHeight}`"
           role="img"
           :aria-label="
-            t('Temperaturverlauf der ausgewählten Werkzeuge und des Druckbetts in Grad Celsius über zehn Minuten')
+            t('Temperaturverlauf der ausgewählten Werkzeuge und des Druckbetts in Grad Celsius')
           "
           @pointermove="onPointerMove"
         >
@@ -301,7 +364,7 @@ const updated = computed(() =>
               :cy="item.yPos ?? 0"
               r="3.2"
               :fill="item.color"
-              stroke="#111618"
+              stroke="var(--bg)"
               stroke-width="1.2"
             />
           </g>
@@ -310,9 +373,9 @@ const updated = computed(() =>
             :key="seconds"
             :x="x(seconds)"
             :y="plotHeight - 7"
-            :text-anchor="seconds === -600 ? 'start' : seconds === 0 ? 'end' : 'middle'"
+            :text-anchor="seconds === -activeDuration ? 'start' : seconds === 0 ? 'end' : 'middle'"
           >
-            {{ seconds === 0 ? t('Datenstand') : `−${-seconds / 60} min` }}
+            {{ seconds === 0 ? t('Datenstand') : `−${Math.round(-seconds / 60)} min` }}
           </text>
         </svg>
 

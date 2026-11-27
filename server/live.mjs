@@ -31,8 +31,14 @@ function matchesDynamicSubscription(name, baseObjects) {
     /^tool T[0-7]$/.test(name) ||
     name === 'z_tilt' ||
     name === 'quad_gantry_level' ||
+    name === 'bed_screws' ||
+    name === 'screws_tilt_adjust' ||
     name === 'fan' ||
     /^fan_generic [A-Za-z0-9_-]+$/.test(name) ||
+    /^heater_fan [A-Za-z0-9_-]+$/.test(name) ||
+    /^controller_fan [A-Za-z0-9_-]+$/.test(name) ||
+    /^heater_generic [A-Za-z0-9_-]+$/.test(name) ||
+    /^output_pin [A-Za-z0-9_-]+$/.test(name) ||
     /^temperature_sensor .+$/.test(name) ||
     /^temperature_fan .+$/.test(name) ||
     /^filament_(?:switch|motion)_sensor .+$/.test(name) ||
@@ -196,7 +202,10 @@ export function createLiveFeed({
           send(
             2,
             'printer.objects.subscribe',
-            Object.fromEntries([...selected.map(name => [name, null]), ['configfile', ['settings']]]),
+            Object.fromEntries([
+              ...selected.map(name => [name, null]),
+              ['configfile', ['settings', 'save_config_pending']],
+            ]),
           )
         } else if (data.id === 2) {
           raw = data.result.status

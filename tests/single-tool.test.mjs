@@ -724,3 +724,83 @@ test('Paket B1 HTTP: G-code upload, delete (active print guard), subfolders, fil
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('Paket B2: save_z_offset, SAVE_CONFIG, generic heaters, temperature_fan, output_pin, auxFans, and public macros', () => {
+  const raw = singleToolTridentRaw({
+    gcode_move: { speed_factor: 1, extrude_factor: 1, homing_origin: [0, 0, -0.045, 0] },
+    'heater_generic chamber_heater': { temperature: 45, target: 50, power: 0.4 },
+    'temperature_fan exhaust': { temperature: 42, target: 50, speed: 0.3 },
+    'output_pin caselight': { value: 0.5 },
+    'output_pin nevermore_relay': { value: 1 },
+    'heater_fan hotend_fan': { speed: 1, rpm: 6400 },
+    'controller_fan electronics': { speed: 0.5 },
+    configfile: {
+      save_config_pending: true,
+      settings: {
+        extruder: { max_temp: 300, min_extrude_temp: 170 },
+        heater_bed: { max_temp: 120 },
+        stepper_z: {},
+        probe: {},
+        'heater_generic chamber_heater': { max_temp: 80 },
+        'temperature_fan exhaust': { min_temp: 0, max_temp: 75 },
+        'output_pin caselight': { pwm: true, scale: 1 },
+        'output_pin nevermore_relay': { pwm: false, scale: 1 },
+        'gcode_macro heatsoak': { description: 'Heat chamber' },
+        'gcode_macro _internal_helper': {},
+        'gcode_macro pause': {},
+      },
+    },
+  })
+
+  const status = normalizeStatus(raw)
+  assert.equal(status.saveConfigPending, true)
+  assert.equal(status.genericHeaters.length, 1)
+  assert.equal(status.genericHeaters[0].maxTemp, 75)
+  assert.equal(status.outputPins.length, 2)
+  assert.equal(status.auxFans.length, 2)
+  assert.equal(status.auxFans.find(f => f.name === 'hotend_fan').rpm, 6400)
+  assert.deepEqual(
+    status.publicMacros.map(m => m.name),
+    ['HEATSOAK'],
+  )
+
+  // Z-Offset Apply routes to Probe when [probe] exists, Endstop otherwise
+  assert.equal(commandFor({ action: 'save_z_offset' }, raw).body.script, 'Z_OFFSET_APPLY_PROBE')
+  const endstopOnly = structuredClone(raw)
+  delete endstopOnly.configfile.settings.probe
+  assert.equal(commandFor({ action: 'save_z_offset' }, endstopOnly).body.script, 'Z_OFFSET_APPLY_ENDSTOP')
+
+  // SAVE_CONFIG restarts Klipper and blocks during active print
+  const saveCmd = commandFor({ action: 'save_config' }, raw)
+  assert.equal(saveCmd.body.script, 'SAVE_CONFIG')
+  assert.equal(saveCmd.restartsKlipper, true)
+  assert.throws(
+    () => commandFor({ action: 'save_config' }, { ...raw, print_stats: { state: 'printing' } }),
+    err => err.status === 409,
+  )
+
+  // Generic heater, temperature_fan, output_pin, and whitelisted macro execution
+  assert.equal(
+    commandFor({ action: 'temperature', heater: 'heater_generic chamber_heater', target: 55 }, raw).body.script,
+    'SET_HEATER_TEMPERATURE HEATER=heater_generic chamber_heater TARGET=55',
+  )
+  assert.throws(
+    () => commandFor({ action: 'temperature', heater: 'heater_generic chamber_heater', target: 79 }, raw),
+    err => err.status === 400,
+  )
+  assert.equal(
+    commandFor({ action: 'temperature_fan', fan: 'exhaust', target: 55 }, raw).body.script,
+    'SET_TEMPERATURE_FAN_TARGET TEMPERATURE_FAN=exhaust TARGET=55',
+  )
+  assert.equal(
+    commandFor({ action: 'output_pin', pin: 'caselight', value: 0.75 }, raw).body.script,
+    'SET_PIN PIN=caselight VALUE=0.75',
+  )
+  assert.throws(
+    () => commandFor({ action: 'output_pin', pin: 'nevermore_relay', value: 0.5 }, raw),
+    err => err.status === 400,
+  )
+  assert.equal(commandFor({ action: 'macro', name: 'HEATSOAK' }, raw).body.script, 'HEATSOAK')
+  assert.throws(() => commandFor({ action: 'macro', name: '_internal_helper' }, raw), err => err.status === 400)
+  assert.throws(() => commandFor({ action: 'macro', name: 'UNKNOWN_MACRO' }, raw), err => err.status === 409)
+})

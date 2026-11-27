@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import { Send, RefreshCw, ArrowDown, ChevronUp, ChevronDown } from '@lucide/vue'
+import { Send, RefreshCw, ArrowDown, ChevronUp, ChevronDown, Filter, Trash2 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import { useConsole } from '../useConsole.js'
 
@@ -22,6 +22,33 @@ const log = ref(null)
 const field = ref(null)
 const following = ref(true)
 const historyIndex = ref(history.value.length)
+const helpCommands = ref([])
+const acIndex = ref(0)
+const acDismissed = ref(false)
+const hideTempNoise = ref(false)
+const clearedAfter = ref(0)
+
+try {
+  hideTempNoise.value = localStorage.getItem('dockyard.console.hideTemp') === '1'
+} catch {
+  // Ignore storage errors
+}
+
+function toggleTempNoise() {
+  hideTempNoise.value = !hideTempNoise.value
+  try {
+    localStorage.setItem('dockyard.console.hideTemp', hideTempNoise.value ? '1' : '0')
+  } catch {
+    // Ignore
+  }
+}
+
+function clearDisplay() {
+  const latestTime = entries.value.at(-1)?.time ?? Date.now() / 1000
+  clearedAfter.value = latestTime + 0.0001
+}
+
+const TEMP_NOISE_RE = /^(?:ok\s+)?(?:B|T\d*):-?\d+(?:\.\d+)?\s*\/-?\d+(?:\.\d+)?/i
 
 let draft = ''
 let fallbackTimer = null
@@ -29,8 +56,102 @@ let fallbackTimer = null
 const enabled = computed(
   () => props.online && props.status?.klipperState === 'ready' && !props.pending && !props.status?.control?.job,
 )
-const visibleEntries = computed(() => (props.compact ? entries.value.slice(-50) : entries.value))
+const visibleEntries = computed(() => {
+  const base = entries.value.filter(entry => {
+    if (clearedAfter.value && Number.isFinite(entry.time) && entry.time < clearedAfter.value) return false
+    if (hideTempNoise.value && entry.type !== 'command' && TEMP_NOISE_RE.test(String(entry.message ?? '').trim())) {
+      return false
+    }
+    return true
+  })
+  return props.compact ? base.slice(-50) : base
+})
 const time = value => new Date(value * 1000).toLocaleTimeString(locale.value)
+
+const allSuggestions = computed(() => {
+  const byName = new Map()
+  for (const item of helpCommands.value) {
+    byName.set(item.name.toUpperCase(), item)
+  }
+  for (const m of props.status?.publicMacros ?? []) {
+    const key = m.name.toUpperCase()
+    if (!byName.has(key)) {
+      byName.set(key, { name: key, help: m.description || '' })
+    }
+  }
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name))
+})
+
+const suggestions = computed(() => {
+  if (acDismissed.value) return []
+  const raw = input.value.trim()
+  if (!raw || raw.includes(' ')) return []
+  const q = raw.toUpperCase()
+  const prefix = []
+  const contains = []
+  for (const cmd of allSuggestions.value) {
+    const u = cmd.name.toUpperCase()
+    if (u === q) continue
+    if (u.startsWith(q)) prefix.push(cmd)
+    else if (u.includes(q)) contains.push(cmd)
+  }
+  return [...prefix, ...contains].slice(0, 8)
+})
+
+watch(input, () => {
+  acDismissed.value = false
+  acIndex.value = 0
+})
+
+async function fetchHelp() {
+  try {
+    const res = await fetch('/api/console/help', { signal: AbortSignal.timeout(5000) })
+    if (!res.ok) return
+    const data = await res.json().catch(() => null)
+    if (Array.isArray(data?.commands)) helpCommands.value = data.commands
+  } catch {
+    // Optional autocomplete
+  }
+}
+
+function acceptSuggestion(item) {
+  if (!item) return
+  input.value = `${item.name} `
+  acDismissed.value = true
+  field.value?.focus()
+}
+
+function onInputKeydown(event) {
+  if (suggestions.value.length) {
+    if (event.key === 'Tab') {
+      event.preventDefault()
+      acceptSuggestion(suggestions.value[acIndex.value])
+      return
+    }
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      acIndex.value = (acIndex.value + 1) % suggestions.value.length
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      acIndex.value = (acIndex.value - 1 + suggestions.value.length) % suggestions.value.length
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      acDismissed.value = true
+      return
+    }
+  }
+  if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    recall(-1)
+  } else if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    recall(1)
+  }
+}
 
 async function scrollToLatest() {
   await nextTick()
@@ -96,6 +217,7 @@ watch(
 onMounted(() => {
   if (!loaded.value) refresh()
   else scrollToLatest()
+  fetchHelp()
 
   // Live SSE delivers notify_gcode_response immediately; only poll as fallback when not live.
   fallbackTimer = setInterval(() => {
@@ -120,6 +242,26 @@ onBeforeUnmount(() => {
     <div class="console-toolbar">
       <h2>{{ compact ? t('Letzte Meldungen') : t('Ausgabe') }}</h2>
       <span>{{ compact ? t('Letzte 50 Einträge') : t('Letzte 200 Einträge') }}</span>
+      <button
+        type="button"
+        class="subtle-button console-filter-btn"
+        :class="{ active: hideTempNoise }"
+        :aria-pressed="hideTempNoise"
+        :title="t('Temperatur-Antworten (ok T0/B) ausblenden')"
+        @click="toggleTempNoise"
+      >
+        <Filter :size="13" />{{ t('Temp-Filter') }}
+      </button>
+      <button
+        v-if="!compact"
+        type="button"
+        class="icon-button"
+        :title="t('Ansicht leeren')"
+        :aria-label="t('Ansicht leeren')"
+        @click="clearDisplay"
+      >
+        <Trash2 :size="16" />
+      </button>
       <button v-if="compact" class="subtle-button console-open" type="button" @click="emit('open')">
         {{ t('Konsole öffnen') }}
       </button>
@@ -168,6 +310,8 @@ onBeforeUnmount(() => {
         v-for="(entry, index) in visibleEntries"
         :key="`${entry.time}-${index}`"
         :class="['console-line', { command: entry.type === 'command', 'console-error': /^(!!|error:)/i.test(entry.message) }]"
+        :title="entry.type === 'command' ? t('Klicken zum Übernehmen') : undefined"
+        @click="entry.type === 'command' && fill(entry.message)"
       >
         <time>{{ time(entry.time) }}</time>
         <pre>{{ entry.type === 'command' ? '> ' : '' }}{{ entry.message }}</pre>
@@ -189,25 +333,41 @@ onBeforeUnmount(() => {
 
     <form v-show="!compact || !collapsed" class="console-form" @submit.prevent="submit">
       <label :for="compact ? 'compact-console-command' : 'console-command'">{{ t('G-Code oder Makro') }}</label>
-      <div class="console-entry">
-        <input
-          :id="compact ? 'compact-console-command' : 'console-command'"
-          ref="field"
-          v-model="input"
-          maxlength="500"
-          autocomplete="off"
-          autocapitalize="off"
-          spellcheck="false"
-          :placeholder="status?.isToolchanger ? t('z. B. DEBUG_TOOL_DETECTION') : t('z. B. QUERY_ENDSTOPS')"
-          @keydown.up.prevent="recall(-1)"
-          @keydown.down.prevent="recall(1)"
-        />
-        <button class="primary-control" :disabled="!enabled || !input.trim()">
-          <Send :size="16" />{{ pending ? t('Läuft …') : t('Senden') }}
-        </button>
+      <div class="console-entry-wrap">
+        <div v-if="suggestions.length" class="console-autocomplete" role="listbox" :aria-label="t('Befehlsvorschläge')">
+          <button
+            v-for="(item, idx) in suggestions"
+            :key="item.name"
+            type="button"
+            role="option"
+            class="console-ac-row"
+            :class="{ active: idx === acIndex }"
+            :aria-selected="idx === acIndex"
+            @mousedown.prevent="acceptSuggestion(item)"
+          >
+            <strong>{{ item.name }}</strong>
+            <small v-if="item.help">{{ item.help }}</small>
+          </button>
+        </div>
+        <div class="console-entry">
+          <input
+            :id="compact ? 'compact-console-command' : 'console-command'"
+            ref="field"
+            v-model="input"
+            maxlength="500"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            :placeholder="status?.isToolchanger ? t('z. B. DEBUG_TOOL_DETECTION') : t('z. B. QUERY_ENDSTOPS')"
+            @keydown="onInputKeydown"
+          />
+          <button class="primary-control" :disabled="!enabled || !input.trim()">
+            <Send :size="16" />{{ pending ? t('Läuft …') : t('Senden') }}
+          </button>
+        </div>
       </div>
       <p class="console-hint">
-        {{ t('Befehle gehen direkt an Klipper und können den Drucker bewegen. ↑ / ↓ ruft deine letzten Eingaben auf.') }}
+        {{ t('Befehle gehen direkt an Klipper. Tab vervollständigt, ↑ / ↓ ruft letzte Eingaben auf.') }}
         {{
           !online
             ? t('Senden gesperrt: keine aktuellen Druckerdaten.')

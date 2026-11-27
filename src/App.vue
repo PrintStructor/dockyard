@@ -25,6 +25,7 @@ import {
   Power,
   Settings,
   Save,
+  Search,
   X,
 } from '@lucide/vue'
 import { t, locale, language, setLanguage, setDocumentTitle } from './i18n.mjs'
@@ -40,6 +41,8 @@ import CockpitSelect from './components/CockpitSelect.vue'
 import LivePrintTuning from './components/LivePrintTuning.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import SingleToolOverview from './components/SingleToolOverview.vue'
+import CommandPalette from './components/CommandPalette.vue'
+import { computePrinterTheme, themeStyleVars } from './theme-accent.mjs'
 import { useControls } from './useControls.js'
 import { usePrinter } from './usePrinter.js'
 import { useConsole } from './useConsole.js'
@@ -71,6 +74,7 @@ const lastUpdateEvent = ref(null)
 const printerSwitchKey = ref(0)
 const settingsOpen = ref(false)
 const settingsInitialSection = ref('printers')
+const paletteOpen = ref(false)
 const printerPopoverOpen = ref(false)
 const switcherRoot = ref(null)
 const popoverDirtyConfirm = ref(null)
@@ -191,10 +195,23 @@ function onGlobalPointerDown(event) {
 }
 
 function onGlobalKeydown(event) {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+    event.preventDefault()
+    if (!settingsOpen.value) {
+      printerPopoverOpen.value = false
+      paletteOpen.value = !paletteOpen.value
+    }
+    return
+  }
   if (event.key === 'Escape' && printerPopoverOpen.value) {
     printerPopoverOpen.value = false
     popoverDirtyConfirm.value = null
   }
+}
+
+function handlePaletteNavigate({ tab: nextTab, sub }) {
+  if (nextTab) tab.value = nextTab
+  if (nextTab === 'system' && sub) systemSubtab.value = sub
 }
 
 const { pending, stopping, feedback, send, syncServerResult, clearFeedback } = useControls(refresh)
@@ -392,6 +409,26 @@ async function handleToolCommand(command) {
   if (ok && ['select', 'pickup'].includes(command.action) && Number.isInteger(command.tool)) {
     selectTool(command.tool)
   }
+}
+
+const activeAccentColor = computed(() => settingsStore.activePrinter.value?.model?.accentColor ?? '#c5f76b')
+const activeTheme = computed(() => computePrinterTheme(activeAccentColor.value))
+const activeThemeVars = computed(() => themeStyleVars(activeAccentColor.value))
+
+watch(
+  activeThemeVars,
+  vars => {
+    if (typeof document === 'undefined') return
+    const rootStyle = document.documentElement.style
+    for (const [key, val] of Object.entries(vars)) {
+      rootStyle.setProperty(key, val)
+    }
+  },
+  { immediate: true },
+)
+
+function printerDotColor(printer) {
+  return computePrinterTheme(printer?.model?.accentColor).accent
 }
 
 const isToolchanger = computed(() => Boolean(status.value?.isToolchanger))
@@ -675,7 +712,12 @@ async function acknowledgeUncertain() {
 </script>
 
 <template>
-  <div class="app-shell" :class="{ 'controls-active': tab === 'controls', 'display-mode': displayMode }">
+  <div
+    class="app-shell"
+    :class="{ 'controls-active': tab === 'controls', 'display-mode': displayMode }"
+    :style="activeThemeVars"
+  >
+    <div class="app-accent-bar" aria-hidden="true" />
     <a class="skip-link" href="#main-content">{{ t('Zum Inhalt springen') }}</a>
     <header class="masthead">
       <div class="brand">
@@ -698,6 +740,7 @@ async function acknowledgeUncertain() {
                 :title="settingsStore.printers.value.length > 1 ? t('Drucker wechseln') : t('Einstellungen')"
                 @click="onPrinterPillClick"
               >
+                <span class="printer-accent-dot" aria-hidden="true" />
                 <span>{{ printerName }}</span>
                 <ChevronDown v-if="settingsStore.printers.value.length > 1" :size="11" />
               </button>
@@ -747,7 +790,14 @@ async function acknowledgeUncertain() {
                   @click="quickSwitchPrinter(printer)"
                 >
                   <span class="printer-popover-meta">
-                    <strong>{{ printer.name || printer.id }}</strong>
+                    <strong class="printer-popover-name">
+                      <span
+                        class="printer-accent-dot"
+                        :style="{ background: printerDotColor(printer) }"
+                        aria-hidden="true"
+                      />
+                      {{ printer.name || printer.id }}
+                    </strong>
                     <small>{{ printer.url }}</small>
                   </span>
                   <Check v-if="settingsStore.activePrinter.value?.id === printer.id" :size="14" />
@@ -764,6 +814,16 @@ async function acknowledgeUncertain() {
         </span>
       </div>
       <div class="header-meta">
+        <button
+          type="button"
+          class="icon-button cmd-palette-trigger"
+          :aria-label="t('Schnellsuche (⌘K / Strg+K)')"
+          :title="t('Schnellsuche (⌘K / Strg+K)')"
+          @click="paletteOpen = true"
+        >
+          <Search :size="15" />
+          <kbd class="cmd-kbd">⌘K</kbd>
+        </button>
         <button
           type="button"
           class="settings-trigger-btn"
@@ -1143,13 +1203,26 @@ async function acknowledgeUncertain() {
         </div>
       </div>
 
-      <div
-        v-if="feedback && tab !== 'controls' && !activeJob && !status?.control?.job?.uncertain"
-        :class="['command-feedback', { failed: !feedback.ok }]"
-        role="status"
-      >
-        {{ t(feedback.message) }}
-      </div>
+      <Transition name="toast-slide">
+        <div
+          v-if="feedback && tab !== 'controls' && !activeJob && !status?.control?.job?.uncertain"
+          :class="['command-feedback', 'floating-toast', { failed: !feedback.ok }]"
+          role="status"
+          aria-live="polite"
+        >
+          <AlertTriangle v-if="!feedback.ok" :size="15" />
+          <Check v-else :size="15" />
+          <span>{{ t(feedback.message) }}</span>
+          <button
+            type="button"
+            class="toast-close-btn"
+            :aria-label="t('Meldung schließen')"
+            @click="clearFeedback"
+          >
+            <X :size="13" />
+          </button>
+        </div>
+      </Transition>
 
       <div class="page-heading">
         <div>
@@ -1531,6 +1604,7 @@ async function acknowledgeUncertain() {
         :pending="pending"
         :send="send"
         :printer-name="printerName"
+        :accent-color="activeTheme.accent"
         :requested-file="requestedPrintFile"
         :can-write="canWrite"
         @refresh="refresh"
@@ -1627,6 +1701,21 @@ async function acknowledgeUncertain() {
       :is-single-tool="isSingleTool"
       @close="settingsOpen = false"
       @switched="onSettingsDialogSwitched"
+    />
+
+    <CommandPalette
+      :open="paletteOpen"
+      :printers="settingsStore.printers.value"
+      :active-printer-id="settingsStore.activePrinter.value?.id ?? ''"
+      :status="status"
+      :online="online"
+      :is-single-tool="isSingleTool"
+      :show-cameras="showCameras"
+      @close="paletteOpen = false"
+      @navigate="handlePaletteNavigate"
+      @switch-printer="quickSwitchPrinter"
+      @open-settings="openSettings"
+      @command="send"
     />
   </div>
 </template>

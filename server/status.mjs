@@ -48,6 +48,46 @@ const color = value =>
     ? [0, 1, 2, 3].map(i => Math.min(1, Math.max(0, value[i] ?? 0)))
     : null
 
+export function extractMacroParams(gcode) {
+  if (typeof gcode !== 'string' || !gcode.includes('params')) return []
+  const found = new Map()
+  const addParam = (rawName, rawDefault = '') => {
+    const name = String(rawName ?? '').trim().toUpperCase()
+    if (!/^[A-Za-z0-9_]{1,40}$/.test(name)) return
+    let def = String(rawDefault ?? '').trim()
+    // Strip matching surrounding single/double quotes for clean prefill.
+    if ((def.startsWith("'") && def.endsWith("'")) || (def.startsWith('"') && def.endsWith('"'))) {
+      def = def.slice(1, -1)
+    }
+    // Discard Jinja expressions or overly complex defaults so the input stays clean.
+    if (!def || /[{}()[\]|]/.test(def) || def.length > 48) def = ''
+    if (!found.has(name) || (!found.get(name) && def)) {
+      found.set(name, def)
+    }
+  }
+
+  // Match params.FOO | default(60) or params.FOO
+  const dotRe = /\bparams\.([A-Za-z_][A-Za-z0-9_]*)(?:\s*\|\s*default\s*\(\s*([^),]+))?/g
+  for (const m of gcode.matchAll(dotRe)) {
+    if (m[1].toLowerCase() === 'get') continue
+    addParam(m[1], m[2] ?? '')
+  }
+
+  // Match params['FOO'] | default(...) or params["FOO"]
+  const bracketRe = /\bparams\[\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]\s*\](?:\s*\|\s*default\s*\(\s*([^),]+))?/g
+  for (const m of gcode.matchAll(bracketRe)) {
+    addParam(m[1], m[2] ?? '')
+  }
+
+  // Match params.get('FOO', 60) or params.get("FOO")
+  const getRe = /\bparams\.get\(\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"](?:\s*,\s*([^)]+))?\)/g
+  for (const m of gcode.matchAll(getRe)) {
+    addParam(m[1], m[2] ?? '')
+  }
+
+  return [...found.entries()].slice(0, 12).map(([name, defaultValue]) => ({ name, defaultValue }))
+}
+
 function formatSensorLabel(rawName) {
   const lower = String(rawName ?? '').trim().toLowerCase()
   if (Object.hasOwn(SENSOR_LABELS, lower)) return SENSOR_LABELS[lower]
@@ -387,15 +427,18 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
         !/^[GMT]\d+(\.\d+)?$/i.test(name) &&
         !INTERNAL_PUBLIC_MACROS.has(name.toUpperCase()),
     )
-    .map(name => ({
-      name: name.toUpperCase(),
-      label: formatSensorLabel(name),
-      description:
-        typeof config[`gcode_macro ${name.toLowerCase()}`]?.description === 'string' &&
-        config[`gcode_macro ${name.toLowerCase()}`].description.trim() !== 'G-Code macro'
-          ? config[`gcode_macro ${name.toLowerCase()}`].description.trim()
-          : null,
-    }))
+    .map(name => {
+      const macroCfg = config[`gcode_macro ${name.toLowerCase()}`] ?? {}
+      return {
+        name: name.toUpperCase(),
+        label: formatSensorLabel(name),
+        description:
+          typeof macroCfg.description === 'string' && macroCfg.description.trim() !== 'G-Code macro'
+            ? macroCfg.description.trim()
+            : null,
+        params: extractMacroParams(macroCfg.gcode),
+      }
+    })
     .sort((a, b) => a.name.localeCompare(b.name))
 
   const bedScrews =

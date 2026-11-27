@@ -35,6 +35,7 @@ const props = defineProps({
   pending: Boolean,
   send: Function,
   printerName: { type: String, default: '' },
+  accentColor: { type: String, default: '#c5f76b' },
   requestedFile: String,
   canWrite: { type: Boolean, default: true },
 })
@@ -829,6 +830,7 @@ onBeforeUnmount(() => {
         :exclude-objects="status?.excludeObjects"
         :bed-size="status?.bedSize"
         :printer-label="printerName"
+        :accent-color="accentColor"
         @update:color-mode="colorMode = $event"
         @update:show-support="showSupport = $event"
         @update:show-ghost="showGhost = $event"

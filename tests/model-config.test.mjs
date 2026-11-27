@@ -25,7 +25,7 @@ const toolheadMeta = {
 test('constants and normalizeAccentColor match spec', () => {
   assert.deepEqual(MODEL_PRESETS, ['auto', 'stormtrooper-6tc', 'stealthburner', 'mini-stealthburner', 'custom', 'none'])
   assert.equal(DEFAULT_ACCENT_COLOR, '#c5f76b')
-  assert.equal(ACCENT_SWATCHES.length, 7)
+  assert.equal(ACCENT_SWATCHES.length, 8)
   assert.equal(TEMPLATE_URLS.stealthburner, '/models/templates/stealthburner.glb')
   assert.equal(TEMPLATE_URLS['mini-stealthburner'], '/models/templates/mini-stealthburner.glb')
   assert.equal(normalizeAccentColor('#D62828'), '#d62828')

@@ -20,6 +20,7 @@ const props = defineProps({
   excludeObjects: { type: Object, default: null },
   bedSize: { type: Object, default: null }, // { originX, originY, width, depth }
   printerLabel: { type: String, default: '' },
+  accentColor: { type: String, default: '#c5f76b' },
   showColorModeToggle: { type: Boolean, default: true },
 })
 
@@ -343,7 +344,7 @@ function buildBedPlate() {
   ctx.lineWidth = 4
   ctx.strokeRect(2, 2, cw - 4, ch - 4)
 
-  ctx.fillStyle = '#c5f76b'
+  ctx.fillStyle = props.accentColor || '#c5f76b'
   ctx.fillRect(0, ch - 6, cw, 6)
 
   ctx.fillStyle = '#7b8f97'
@@ -817,6 +818,7 @@ watch(
     () => props.bedSize?.width,
     () => props.bedSize?.depth,
     () => props.printerLabel,
+    () => props.accentColor,
   ],
   rebuildBedGeometry,
 )

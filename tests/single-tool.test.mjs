@@ -779,10 +779,10 @@ test('Paket B2: save_z_offset, SAVE_CONFIG, generic heaters, temperature_fan, ou
     err => err.status === 409,
   )
 
-  // Generic heater, temperature_fan, output_pin, and whitelisted macro execution
+  // Generic heater (Klipper short name!), temperature_fan, output_pin, and whitelisted macro execution
   assert.equal(
     commandFor({ action: 'temperature', heater: 'heater_generic chamber_heater', target: 55 }, raw).body.script,
-    'SET_HEATER_TEMPERATURE HEATER=heater_generic chamber_heater TARGET=55',
+    'SET_HEATER_TEMPERATURE HEATER=chamber_heater TARGET=55',
   )
   assert.throws(
     () => commandFor({ action: 'temperature', heater: 'heater_generic chamber_heater', target: 79 }, raw),
@@ -803,4 +803,55 @@ test('Paket B2: save_z_offset, SAVE_CONFIG, generic heaters, temperature_fan, ou
   assert.equal(commandFor({ action: 'macro', name: 'HEATSOAK' }, raw).body.script, 'HEATSOAK')
   assert.throws(() => commandFor({ action: 'macro', name: '_internal_helper' }, raw), err => err.status === 400)
   assert.throws(() => commandFor({ action: 'macro', name: 'UNKNOWN_MACRO' }, raw), err => err.status === 409)
+})
+
+test('Paket C1: macro parameter parsing & safe execution + WCAG-safe per-printer UI accent theme', async () => {
+  const { extractMacroParams } = await import('../server/status.mjs')
+  const { computePrinterTheme, contrastRatio } = await import('../src/theme-accent.mjs')
+
+  const gcode = `
+    {% set temp = params.TEMP|default(60)|float %}
+    {% set dur = params['DURATION']|default(15)|int %}
+    {% set fan = params.get("FAN_SPEED", 0.8) %}
+    M140 S{temp}
+  `
+  assert.deepEqual(extractMacroParams(gcode), [
+    { name: 'TEMP', defaultValue: '60' },
+    { name: 'DURATION', defaultValue: '15' },
+    { name: 'FAN_SPEED', defaultValue: '0.8' },
+  ])
+
+  const raw = singleToolTridentRaw({
+    configfile: {
+      settings: {
+        extruder: { max_temp: 300 },
+        heater_bed: { max_temp: 120 },
+        'gcode_macro heatsoak': { description: 'Bauraum aufheizen', gcode },
+      },
+    },
+  })
+  const status = normalizeStatus(raw)
+  assert.equal(status.publicMacros[0].params.length, 3)
+
+  const cmd = commandFor({ action: 'macro', name: 'HEATSOAK', params: { TEMP: 55, DURATION: 20, FAN_SPEED: '' } }, raw)
+  assert.equal(cmd.body.script, 'HEATSOAK TEMP=55 DURATION=20')
+  assert.throws(
+    () => commandFor({ action: 'macro', name: 'HEATSOAK', params: { TEMP: '55\nG28' } }, raw),
+    err => err.status === 400,
+  )
+  assert.throws(
+    () => commandFor({ action: 'macro', name: 'HEATSOAK', params: { TEMP: '55 G28' } }, raw),
+    err => err.status === 400,
+  )
+
+  // Every printer accent swatch produces >= 5.2:1 contrast against dark #192125 surface
+  const surface = [25, 33, 37]
+  const hexToRgb = hex => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16))
+  for (const hex of ['#c5f76b', '#d62828', '#38d9c0', '#3b82f6', '#f3c67b', '#9b5de5', '#dce6e2', '#495860']) {
+    const theme = computePrinterTheme(hex)
+    const ratio = contrastRatio(hexToRgb(theme.accent), surface)
+    assert.ok(ratio >= 5.1, `expected ${hex} -> ${theme.accent} to have >= 5.1:1 contrast, got ${ratio.toFixed(2)}`)
+  }
+  // Acid Lime stays exact signature color
+  assert.equal(computePrinterTheme('#c5f76b').accent, '#c5f76b')
 })

@@ -98,7 +98,7 @@ export function commandFor(input, raw) {
         temperature_all: ['action', 'target'],
         temperature_fan: ['action', 'fan', 'target'],
         output_pin: ['action', 'pin', 'value'],
-        macro: ['action', 'name'],
+        macro: ['action', 'name', 'params'],
         save_config: ['action'],
         preheat: ['action', 'extruder', 'bed'],
         led: ['action', 'profile'],
@@ -231,9 +231,34 @@ export function commandFor(input, raw) {
       fail(`Makro ${input.name} ist auf diesem Drucker nicht konfiguriert.`, 409)
     }
     const macroUpper = input.name.toUpperCase()
+    const paramParts = []
+    if (input.params !== undefined && input.params !== null) {
+      if (typeof input.params !== 'object' || Array.isArray(input.params)) {
+        fail('Ungültige Makro-Parameter.')
+      }
+      const entries = Object.entries(input.params)
+      if (entries.length > 20) fail('Zu viele Makro-Parameter.')
+      for (const [rawKey, rawVal] of entries) {
+        const key = String(rawKey).trim().toUpperCase()
+        if (!/^[A-Za-z0-9_]{1,40}$/.test(key)) {
+          fail(`Ungültiger Parametername: ${rawKey}`)
+        }
+        if (rawVal === undefined || rawVal === null || rawVal === '') continue
+        if (!['string', 'number', 'boolean'].includes(typeof rawVal)) {
+          fail(`Ungültiger Wert für Parameter ${key}.`)
+        }
+        const val = String(rawVal).trim()
+        if (!val) continue
+        if (val.length > 80 || !/^[A-Za-z0-9_.,:+\-/]+$/.test(val)) {
+          fail(`Ungültiger Wert für Parameter ${key} (keine Leer- oder Sonderzeichen erlaubt).`)
+        }
+        paramParts.push(`${key}=${val}`)
+      }
+    }
+    const script = paramParts.length ? `${macroUpper} ${paramParts.join(' ')}` : macroUpper
     return {
       endpoint: '/printer/gcode/script',
-      body: { script: macroUpper },
+      body: { script },
       label: `Makro ${macroUpper}`,
       async: true,
       timeoutMs: 300_000,
@@ -451,10 +476,13 @@ export function commandFor(input, raw) {
     }
     let max
     let heaterLabel
+    let gcodeHeater = input.heater
     if (isGeneric) {
       const rawMax = Number(genericCfg?.max_temp)
       max = Number.isFinite(rawMax) ? Math.max(0, Math.floor(rawMax) - 5) : null
       heaterLabel = input.heater.slice(15)
+      // Klipper's SET_HEATER_TEMPERATURE expects the short name (e.g. HEATER=chamber_heater), not 'heater_generic chamber_heater'.
+      gcodeHeater = heaterLabel
     } else {
       const i = input.heater === 'extruder' ? 0 : Number(input.heater.replace('extruder', ''))
       max = input.heater === 'heater_bed' ? limits.bedMax : limits.toolMax[i]
@@ -462,7 +490,7 @@ export function commandFor(input, raw) {
     }
     if (max == null) fail('Temperaturgrenze ist unbekannt.', 409)
     if (input.target < 0 || input.target > max) fail(`Zieltemperatur muss zwischen 0 und ${max} °C liegen.`)
-    script = `SET_HEATER_TEMPERATURE HEATER=${input.heater} TARGET=${input.target}`
+    script = `SET_HEATER_TEMPERATURE HEATER=${gcodeHeater} TARGET=${input.target}`
     label = `${heaterLabel} auf ${input.target} °C`
   } else if (action === 'preheat') {
     const limits = capabilities(raw)

@@ -19,7 +19,6 @@ import {
   ChevronDown,
   Disc,
   Power,
-  Terminal,
   SlidersHorizontal,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
@@ -32,6 +31,7 @@ import FanControl from './FanControl.vue'
 import LedControls from './LedControls.vue'
 import SpoolmanPicker from './SpoolmanPicker.vue'
 import TemperatureGraph from './TemperatureGraph.vue'
+import MacroDeck from './MacroDeck.vue'
 
 const PrinterScene = defineAsyncComponent(() => import('./PrinterScene.vue'))
 
@@ -403,16 +403,6 @@ const publicMacros = computed(() => props.status?.publicMacros ?? [])
 const tempFanEditing = ref('')
 const tempFanDraft = ref(0)
 const pinDrafts = ref({})
-const macroQuery = ref('')
-const confirmMacro = ref('')
-let confirmMacroTimer = null
-
-const filteredMacros = computed(() => {
-  const q = macroQuery.value.trim().toLowerCase()
-  const list = publicMacros.value
-  if (!q) return list
-  return list.filter(item => item.name.toLowerCase().includes(q) || item.label.toLowerCase().includes(q))
-})
 
 function openTempFanEditor(sensor) {
   if (!enabled.value || sensor.kind !== 'temperature_fan') return
@@ -455,24 +445,6 @@ function toggleOutputPin(pin) {
   if (!enabled.value) return
   const isOn = (pin.value ?? 0) > 0
   setOutputPin(pin, isOn ? 0 : (pin.scale > 0 ? pin.scale : 1))
-}
-
-function resetMacroConfirm() {
-  confirmMacro.value = ''
-  clearTimeout(confirmMacroTimer)
-  confirmMacroTimer = null
-}
-
-function triggerPublicMacro(name) {
-  if (!motion.value) return
-  if (confirmMacro.value !== name) {
-    confirmMacro.value = name
-    clearTimeout(confirmMacroTimer)
-    confirmMacroTimer = setTimeout(resetMacroConfirm, 5000)
-    return
-  }
-  resetMacroConfirm()
-  emit('command', { action: 'macro', name })
 }
 
 const hasLedDeck = computed(() => {
@@ -532,7 +504,6 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   presetController.abort()
   resetMotorsConfirm()
-  resetMacroConfirm()
 })
 </script>
 
@@ -1236,43 +1207,12 @@ onBeforeUnmount(() => {
           />
         </section>
 
-        <details v-if="publicMacros.length" class="single-macros-disclosure">
-          <summary>
-            <span><Terminal :size="15" />{{ t('Makros') }} ({{ publicMacros.length }})</span>
-            <ChevronDown :size="15" class="single-graph-chevron" />
-          </summary>
-          <div class="single-macros-body" @keydown.esc="resetMacroConfirm">
-            <input
-              v-if="publicMacros.length > 6"
-              v-model="macroQuery"
-              type="search"
-              class="macro-search-input"
-              :placeholder="t('Makro filtern …')"
-              :aria-label="t('Makro filtern')"
-            />
-            <div class="single-macros-grid">
-              <button
-                v-for="m in filteredMacros"
-                :key="m.name"
-                type="button"
-                class="subtle-button single-macro-btn"
-                :class="{ confirming: confirmMacro === m.name }"
-                :disabled="!motion"
-                :title="
-                  !motion
-                    ? t('Während Druck oder Bewegung gesperrt.')
-                    : confirmMacro === m.name
-                      ? t('Erneut klicken, um {0} auszuführen', [m.name])
-                      : m.description || m.name
-                "
-                @click="triggerPublicMacro(m.name)"
-                @blur="confirmMacro === m.name && resetMacroConfirm()"
-              >
-                {{ confirmMacro === m.name ? t('Ausführen?') : m.name }}
-              </button>
-            </div>
-          </div>
-        </details>
+        <MacroDeck
+          :macros="publicMacros"
+          :printer-id="printerId"
+          :enabled="motion"
+          @run="emit('command', $event)"
+        />
       </aside>
     </div>
 

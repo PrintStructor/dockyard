@@ -176,4 +176,14 @@ test('display-mode touch targets for SpoolmanPicker meet 44px minimum and style.
   assert.match(css, /\.app-shell\.display-mode\s+\.spoolman-clear-btn\{[^}]*min-height:44px/)
   assert.doesNotMatch(css, /var\(--surface-hi\)/)
   assert.doesNotMatch(css, /box-shadow\s*:/)
+  const defined = new Set([...css.matchAll(/(--[a-z0-9-]+)\s*:/gi)].map(m => m[1]))
+  const runtimeInline = new Set(['--series-color', '--filament-color', '--tool-cols'])
+  const undefinedVars = [
+    ...new Set(
+      [...css.matchAll(/var\((--[a-z0-9-]+)/gi)]
+        .map(m => m[1])
+        .filter(v => !defined.has(v) && !runtimeInline.has(v)),
+    ),
+  ]
+  assert.deepEqual(undefinedVars, [], `Undefined CSS variables in style.css: ${undefinedVars.join(', ')}`)
 })

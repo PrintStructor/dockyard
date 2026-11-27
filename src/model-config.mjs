@@ -3,12 +3,13 @@ export const DEFAULT_ACCENT_COLOR = '#c5f76b'
 export const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/i
 
 export const ACCENT_SWATCHES = [
-  { id: 'voron-red', label: 'VORON-Rot', hex: '#d62828' },
   { id: 'acid-lime', label: 'Acid-Lime', hex: '#c5f76b' },
-  { id: 'arctic-white', label: 'Arctic-Weiß', hex: '#dce6e2' },
-  { id: 'signal-amber', label: 'Signal-Amber', hex: '#f3c67b' },
+  { id: 'voron-red', label: 'VORON-Rot', hex: '#d62828' },
+  { id: 'voron-teal', label: 'Cyan / Teal', hex: '#38d9c0' },
   { id: 'cobalt-blue', label: 'Kobaltblau', hex: '#3b82f6' },
+  { id: 'signal-amber', label: 'Signal-Amber', hex: '#f3c67b' },
   { id: 'violet', label: 'Violett', hex: '#9b5de5' },
+  { id: 'arctic-white', label: 'Arctic-Weiß', hex: '#dce6e2' },
   { id: 'graphite', label: 'Graphit', hex: '#495860' },
 ]
 

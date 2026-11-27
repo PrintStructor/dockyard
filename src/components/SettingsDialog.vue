@@ -1140,9 +1140,9 @@ watch(
                   </small>
                 </div>
 
-                <div v-if="showModelExtras" class="settings-field settings-field-full">
-                  <span>{{ t('VORON-Akzentfarbe') }}</span>
-                  <div class="settings-accent-row" role="group" :aria-label="t('VORON-Akzentfarbe')">
+                <div class="settings-field settings-field-full">
+                  <span>{{ t('Drucker- & UI-Farbakzent') }}</span>
+                  <div class="settings-accent-row" role="group" :aria-label="t('Drucker- & UI-Farbakzent')">
                     <button
                       v-for="swatch in ACCENT_SWATCHES"
                       :key="swatch.id"

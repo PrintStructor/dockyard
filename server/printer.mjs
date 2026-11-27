@@ -1014,6 +1014,7 @@ function printerMiddleware(req, res, next) {
     path !== '/api/control' &&
     path !== '/api/events' &&
     path !== '/api/console' &&
+    path !== '/api/console/help' &&
     path !== '/api/presets' &&
     path !== '/api/temperature-history' &&
     path !== '/api/history' &&
@@ -2113,6 +2114,23 @@ function printerMiddleware(req, res, next) {
         const data = await response.json()
         if (!Array.isArray(data.result?.gcode_store)) throw new Error('Keine Konsolenausgabe erhalten.')
         return json(200, { entries: data.result.gcode_store })
+      }
+
+      if (path === '/api/console/help') {
+        const response = await fetchUpstream(`${printer}/printer/gcode/help`, { signal: AbortSignal.timeout(5000) }).catch(
+          () => null,
+        )
+        if (!response?.ok) return json(200, { commands: [] })
+        const data = await response.json().catch(() => null)
+        const rawHelp = data?.result && typeof data.result === 'object' ? data.result : {}
+        const commands = Object.entries(rawHelp)
+          .filter(([name]) => typeof name === 'string' && name.trim() && !name.startsWith('_'))
+          .map(([name, help]) => ({
+            name: name.trim(),
+            help: typeof help === 'string' ? help.trim() : '',
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+        return json(200, { commands })
       }
 
       if (path === '/api/status') {

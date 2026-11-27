@@ -12,6 +12,7 @@ import {
   createStudioLights,
   classifyModelNodes,
   detectNozzleTip,
+  detectFilamentInlet,
   disposeObjectTree,
   createModelLoadGuard,
 } from '../src/scene-utils.mjs'
@@ -95,6 +96,48 @@ test('detectNozzleTip prefers explicit NOZZLE_TIP node and falls back to lowest-
   assert.ok(Math.abs(fallback.x - 0.01) < 1e-5)
   assert.ok(Math.abs(fallback.y - 0.0) < 1e-5)
   assert.ok(Math.abs(fallback.z - -0.02) < 1e-5)
+})
+
+test('detectFilamentInlet supports explicit anchors, baked Fusion meshes, and nozzle-axis auto-detection', () => {
+  const root = new THREE.Group()
+
+  // Toolhead body along nozzle axis (x=0.004, z=0.003, height 0..0.118m)
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.118, 0.03), new THREE.MeshStandardMaterial())
+  body.position.set(0.004, 0.059, 0.003)
+
+  // Taller rear CAN board sticking up behind the extruder (z=-0.032, height 0.129m)
+  const rearCan = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.04, 0.01), new THREE.MeshStandardMaterial())
+  rearCan.position.set(0.004, 0.109, -0.032)
+
+  root.add(body, rearCan)
+
+  // 1. Auto-detection follows the vertical nozzle column and ignores the taller rear CAN board
+  const tip = new THREE.Vector3(0.004, 0, 0.003)
+  const autoInlet = detectFilamentInlet(root, null, tip)
+  assert.ok(Math.abs(autoInlet.x - 0.004) < 1e-5)
+  assert.ok(Math.abs(autoInlet.y - 0.118) < 1e-4, `expected collet top 0.118, got ${autoInlet.y}`)
+  assert.ok(Math.abs(autoInlet.z - 0.003) < 1e-5)
+
+  // 2. Baked Fusion mesh named FILAMENT_INLET (node at origin, vertices offset in world space)
+  const bakedGeo = new THREE.BoxGeometry(0.008, 0.006, 0.008)
+  bakedGeo.translate(0.012, 0.115, -0.002)
+  const bakedInlet = new THREE.Mesh(bakedGeo, new THREE.MeshStandardMaterial())
+  bakedInlet.name = 'FILAMENT_INLET'
+  root.add(bakedInlet)
+  const fromMesh = detectFilamentInlet(root, bakedInlet, tip)
+  assert.ok(Math.abs(fromMesh.x - 0.012) < 1e-5)
+  assert.ok(Math.abs(fromMesh.y - 0.118) < 1e-5)
+  assert.ok(Math.abs(fromMesh.z - -0.002) < 1e-5)
+
+  // 3. Explicit empty Object3D anchor (built-in templates)
+  const emptyAnchor = new THREE.Object3D()
+  emptyAnchor.name = 'FILAMENT_INLET'
+  emptyAnchor.position.set(-0.002, 0.124, 0.001)
+  root.add(emptyAnchor)
+  const fromAnchor = detectFilamentInlet(root, emptyAnchor, tip)
+  assert.ok(Math.abs(fromAnchor.x - -0.002) < 1e-5)
+  assert.ok(Math.abs(fromAnchor.y - 0.124) < 1e-5)
+  assert.ok(Math.abs(fromAnchor.z - 0.001) < 1e-5)
 })
 
 test('applyLedTargets and stepLedMeshes handle immediate updates and smooth interpolation', () => {

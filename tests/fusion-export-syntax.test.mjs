@@ -159,6 +159,8 @@ assert mod.is_transparent_appearance('Polycarbonate Clear') is True
 assert mod.is_transparent_appearance('Black Anodized Aluminum') is False
 assert mod.detect_dockyard_role('LED_LOGO_Assembly v2:1+Diffuser:1 Body1', '') == 'led-logo'
 assert mod.detect_dockyard_role('NOZZLE_MOUNT:1+LED_NOZZLE_L:1 Body1', '') == 'led-nozzle-l'
+assert mod.detect_dockyard_role('ECAS_FILAMENT_INLET:1 Body1', '') == 'filament-inlet'
+assert mod.detect_dockyard_role('Body1', 'XID_NOZZLETIP_1234') == 'nozzle-tip'
 
 class _MockComp:
     id = 'comp-xref-42'

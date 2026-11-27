@@ -189,6 +189,8 @@ function resolveRole(object) {
   if (matNames.some(m => m.includes('LED_NOZZLE_R'))) return 'led-nozzle-r'
   if (matNames.some(m => m.includes('LED_LOGO'))) return 'led-logo'
   if (matNames.some(m => m.includes('VORON_ACCENT'))) return 'accent'
+  if (matNames.some(m => m.includes('NOZZLE_TIP'))) return 'nozzle-tip'
+  if (matNames.some(m => m.includes('FILAMENT_INLET'))) return 'filament-inlet'
 
   return null
 }
@@ -274,6 +276,13 @@ export function classifyModelNodes(root) {
 export function detectNozzleTip(root, nozzleTipNode = null) {
   root.updateMatrixWorld(true)
   if (nozzleTipNode) {
+    if (nozzleTipNode.isMesh && nozzleTipNode.geometry?.attributes?.position) {
+      const box = new THREE.Box3().setFromObject(nozzleTipNode)
+      if (!box.isEmpty()) {
+        const center = box.getCenter(new THREE.Vector3())
+        return new THREE.Vector3(center.x, box.min.y, center.z)
+      }
+    }
     return nozzleTipNode.getWorldPosition(new THREE.Vector3())
   }
   let minY = Infinity
@@ -304,6 +313,79 @@ export function detectNozzleTip(root, nozzleTipNode = null) {
     }
   }
   return count > 0 ? new THREE.Vector3(sumX / count, minY, sumZ / count) : null
+}
+
+export function detectFilamentInlet(root, filamentInletNode = null, nozzleTip = null) {
+  if (!root) return null
+  root.updateMatrixWorld(true)
+  if (filamentInletNode) {
+    if (filamentInletNode.isMesh && filamentInletNode.geometry?.attributes?.position) {
+      const box = new THREE.Box3().setFromObject(filamentInletNode)
+      if (!box.isEmpty()) {
+        const center = box.getCenter(new THREE.Vector3())
+        return new THREE.Vector3(center.x, box.max.y, center.z)
+      }
+    }
+    return filamentInletNode.getWorldPosition(new THREE.Vector3())
+  }
+
+  const fullBox = new THREE.Box3().setFromObject(root)
+  if (fullBox.isEmpty()) return null
+  const height = fullBox.max.y - fullBox.min.y
+  if (!Number.isFinite(height) || height <= 0.01) return null
+
+  const tip = nozzleTip ?? detectNozzleTip(root)
+  const center = fullBox.getCenter(new THREE.Vector3())
+  const ax = tip ? tip.x : center.x
+  const az = tip ? tip.z : center.z
+
+  const meshes = []
+  root.traverse(object => {
+    if (object.isMesh && object.geometry?.attributes?.position) {
+      meshes.push(object)
+    }
+  })
+
+  // Cast a compact 5-ray crosshair straight down along the vertical filament axis
+  // (center + 4mm collet rim ring) so flat top plates and hollow 4mm ECAS bores
+  // both hit the exact extruder top without being fooled by taller rear CAN boards.
+  const down = new THREE.Vector3(0, -1, 0)
+  const startY = fullBox.max.y + 0.05
+  const ring = 0.004
+  const rayOffsets = [
+    [0, 0],
+    [ring, 0],
+    [-ring, 0],
+    [0, ring],
+    [0, -ring],
+  ]
+  const raycaster = new THREE.Raycaster()
+  let bestY = -Infinity
+  for (const [dx, dz] of rayOffsets) {
+    raycaster.set(new THREE.Vector3(ax + dx, startY, az + dz), down)
+    const hits = raycaster.intersectObjects(meshes, false)
+    if (hits.length > 0 && hits[0].point.y > bestY) {
+      bestY = hits[0].point.y
+    }
+  }
+
+  if (bestY <= fullBox.min.y + height * 0.45) {
+    const radius = Math.max(0.006, Math.min(0.012, height * 0.07))
+    const v = new THREE.Vector3()
+    for (const mesh of meshes) {
+      const pos = mesh.geometry.attributes.position
+      const mat = mesh.matrixWorld
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(mat)
+        if (Math.abs(v.x - ax) <= radius && Math.abs(v.z - az) <= radius && v.y > bestY) {
+          bestY = v.y
+        }
+      }
+    }
+  }
+
+  const inletY = bestY > fullBox.min.y + height * 0.45 ? bestY : fullBox.max.y
+  return new THREE.Vector3(ax, inletY, az)
 }
 
 export function disposeObjectTree(root) {

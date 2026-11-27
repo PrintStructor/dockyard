@@ -22,6 +22,7 @@ import {
   buildStudioFloorVeil,
   classifyModelNodes,
   detectNozzleTip,
+  detectFilamentInlet,
   disposeObjectTree,
   createModelLoadGuard,
 } from '../scene-utils.mjs'
@@ -307,8 +308,8 @@ function rebuildStageExtras(box) {
     thermalGroup.add(poolMesh)
     world.add(thermalGroup)
 
-    if (filamentInlet) {
-      const inletPos = filamentInlet.getWorldPosition(new THREE.Vector3())
+    const inletPos = detectFilamentInlet(currentModel, filamentInlet, nozzleTip)
+    if (inletPos) {
       feedGroup = new THREE.Group()
       const curve = new THREE.CatmullRomCurve3([
         new THREE.Vector3(inletPos.x, inletPos.y - 0.002, inletPos.z),

@@ -1202,7 +1202,7 @@ watch(
                       }}
                     </p>
                     <p class="settings-mono">
-                      {{ t('Optionale Live-Tags:') }} VORON_ACCENT · LED_LOGO · LED_NOZZLE_L · LED_NOZZLE_R
+                      {{ t('Optionale Live-Tags:') }} VORON_ACCENT · LED_LOGO · LED_NOZZLE_L · LED_NOZZLE_R · FILAMENT_INLET · NOZZLE_TIP
                     </p>
                   </details>
                 </div>

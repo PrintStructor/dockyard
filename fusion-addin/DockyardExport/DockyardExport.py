@@ -90,6 +90,10 @@ def detect_dockyard_role(name, appearance_name=""):
         return "led-logo"
     if "VORON_ACCENT" in combined or "VORONACCENT" in compact:
         return "accent"
+    if "FILAMENT_INLET" in combined or "FILAMENTINLET" in compact:
+        return "filament-inlet"
+    if "NOZZLE_TIP" in combined or "NOZZLETIP" in compact:
+        return "nozzle-tip"
     if str(appearance_name or "").strip().upper().startswith("LED -"):
         return "led-logo"
     return None
@@ -211,6 +215,10 @@ def build_glb_bytes(mesh_groups, source_name="", extra_meta=None):
             if role == "led-nozzle-l"
             else "LED_NOZZLE_R"
             if role == "led-nozzle-r"
+            else "FILAMENT_INLET"
+            if role == "filament-inlet"
+            else "NOZZLE_TIP"
+            if role == "nozzle-tip"
             else f"part_{idx}"
         )
 
@@ -396,6 +404,10 @@ def _finalize_grouped_meshes(grouped, min_x, max_x, min_y, max_y, min_z, max_z):
             if role == "led-nozzle-l"
             else "LED_NOZZLE_R"
             if role == "led-nozzle-r"
+            else "FILAMENT_INLET"
+            if role == "filament-inlet"
+            else "NOZZLE_TIP"
+            if role == "nozzle-tip"
             else f"mesh_{idx}"
         )
         mesh_groups.append(grp)

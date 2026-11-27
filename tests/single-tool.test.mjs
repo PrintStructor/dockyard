@@ -534,3 +534,193 @@ test('Paket A single-tool fixes: M84 motors_off, atomic preheat, pause filament 
     'SET_FAN_SPEED FAN=nevermore-micro SPEED=0.75',
   )
 })
+
+test('Paket B1: manual extrude/retract with canExtrude guard, pause support, and multi-sensor filament toggles (BTT SFS v2)', () => {
+  const raw = singleToolTridentRaw({
+    'filament_switch_sensor sfs_switch': { enabled: true, filament_detected: true },
+    'filament_motion_sensor sfs_encoder': { enabled: true, filament_detected: false },
+  })
+
+  // Multi-sensor array exposes BOTH switch and motion sensors independently
+  const status = normalizeStatus(raw)
+  assert.equal(status.filamentSensors.length, 2)
+  assert.ok(status.filamentSensors.some(s => s.name === 'sfs_switch' && s.kind === 'switch' && s.detected === true))
+  assert.ok(status.filamentSensors.some(s => s.name === 'sfs_encoder' && s.kind === 'motion' && s.detected === false))
+
+  // Filament sensor toggle works even while actively printing
+  const printing = { ...raw, print_stats: { state: 'printing' } }
+  const toggleOff = commandFor({ action: 'filament_sensor', sensor: 'sfs_encoder', enabled: false }, printing)
+  assert.equal(toggleOff.body.script, 'SET_FILAMENT_SENSOR SENSOR=sfs_encoder ENABLE=0')
+  assert.throws(() => commandFor({ action: 'filament_sensor', sensor: 'unknown_sensor', enabled: false }, printing), /konfiguriert/)
+  assert.throws(() => commandFor({ action: 'filament_sensor', sensor: 'sfs_encoder\nG28', enabled: false }, printing))
+
+  // Manual extrude & retract work in standby AND paused, reject cold extruder and active printing
+  const extrudeCmd = commandFor({ action: 'extrude', distance: 25, speed: 5 }, raw)
+  assert.match(extrudeCmd.body.script, /SAVE_GCODE_STATE NAME=DOCKYARD_UI_EXTRUDE\nM83\nG1 E25 F300\nM400\nRESTORE_GCODE_STATE NAME=DOCKYARD_UI_EXTRUDE MOVE=0/)
+  assert.equal(extrudeCmd.async, true)
+
+  const paused = { ...raw, print_stats: { state: 'paused' } }
+  const retractCmd = commandFor({ action: 'extrude', distance: -10, speed: 10 }, paused)
+  assert.match(retractCmd.body.script, /G1 E-10 F600/)
+
+  assert.throws(() => commandFor({ action: 'extrude', distance: 10, speed: 5 }, printing), /laufenden Drucks/)
+  const cold = { ...raw, extruder: { ...raw.extruder, can_extrude: false } }
+  assert.throws(() => commandFor({ action: 'extrude', distance: 10, speed: 5 }, cold), /zu kalt/)
+  assert.throws(() => commandFor({ action: 'extrude', distance: 200, speed: 5 }, raw), /150 mm/)
+  assert.throws(() => commandFor({ action: 'extrude', distance: 10, speed: 50 }, raw), /30 mm\/s/)
+})
+
+test('Paket B1 HTTP: G-code upload, delete (active print guard), subfolders, fileExists, and job queue', async () => {
+  const gcodeFiles = [
+    { path: 'VORON/benchy.gcode', size: 102400, modified: 2000 },
+    { path: 'active_part.gcode', size: 204800, modified: 3000 },
+  ]
+  const queued = [{ job_id: 'q1', filename: 'VORON/benchy.gcode', time_added: 1000, time_in_queue: 12 }]
+  let queueState = 'ready'
+  let uploadedFilename = ''
+  let deletedPath = ''
+
+  const mockMoonraker = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://127.0.0.1')
+    res.setHeader('Content-Type', 'application/json')
+    if (u.pathname === '/server/files/list') {
+      return res.end(JSON.stringify({ result: gcodeFiles }))
+    }
+    if (u.pathname === '/server/history/list') {
+      return res.end(
+        JSON.stringify({
+          result: {
+            jobs: [
+              { job_id: 'h1', filename: 'VORON/benchy.gcode', status: 'completed', print_duration: 600 },
+              { job_id: 'h2', filename: 'deleted_old.gcode', status: 'completed', print_duration: 300 },
+            ],
+          },
+        }),
+      )
+    }
+    if (u.pathname === '/server/files/upload' && req.method === 'POST') {
+      const chunks = []
+      for await (const c of req) chunks.push(c)
+      const text = Buffer.concat(chunks).toString('utf8')
+      const m = /filename="([^"]+)"/.exec(text)
+      uploadedFilename = m?.[1] ?? 'uploaded.gcode'
+      gcodeFiles.push({ path: `VORON/${uploadedFilename}`, size: 120, modified: 4000 })
+      return res.end(JSON.stringify({ item: { path: `VORON/${uploadedFilename}` } }))
+    }
+    if (u.pathname === '/printer/objects/list') {
+      return res.end(JSON.stringify({ result: { objects: ['webhooks', 'print_stats'] } }))
+    }
+    if (u.pathname === '/printer/objects/query') {
+      return res.end(
+        JSON.stringify({
+          result: {
+            status: {
+              webhooks: { state: 'ready' },
+              print_stats: { state: 'printing', filename: 'active_part.gcode' },
+            },
+          },
+        }),
+      )
+    }
+    if (u.pathname.startsWith('/server/files/gcodes/') && req.method === 'DELETE') {
+      deletedPath = decodeURIComponent(u.pathname.slice('/server/files/gcodes/'.length))
+      return res.end(JSON.stringify({ result: { item: { path: deletedPath } } }))
+    }
+    if (u.pathname === '/server/job_queue/status') {
+      return res.end(JSON.stringify({ result: { queue_state: queueState, queued_jobs: queued } }))
+    }
+    if (u.pathname === '/server/job_queue/job' && req.method === 'POST') {
+      const chunks = []
+      for await (const c of req) chunks.push(c)
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+      queued.push({ job_id: 'q2', filename: body.filenames[0], time_added: 2000, time_in_queue: 0 })
+      return res.end(JSON.stringify({ result: { queue_state: queueState, queued_jobs: queued } }))
+    }
+    if (u.pathname === '/server/job_queue/pause' && req.method === 'POST') {
+      queueState = 'paused'
+      return res.end(JSON.stringify({ result: { queue_state: queueState, queued_jobs: queued } }))
+    }
+    res.statusCode = 404
+    res.end('{}')
+  })
+
+  await new Promise(resolve => mockMoonraker.listen(0, '127.0.0.1', resolve))
+  const mockUrl = `http://127.0.0.1:${mockMoonraker.address().port}`
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'dockyard-b1-print-'))
+  const store = createSettingsStore({
+    filePath: path.join(dir, '.dockyard-settings.json'),
+    env: { PRINTER_URL: mockUrl, PRINTER_NAME: 'Crucible' },
+  })
+  const { printerMiddleware, closeLiveFeed } = createPrinterRuntime({ store })
+  const server = http.createServer((req, res) => printerMiddleware(req, res, () => { res.statusCode = 404; res.end() }))
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const base = `http://127.0.0.1:${server.address().port}`
+
+  try {
+    // Files list includes dir + recentJobs.fileExists
+    const listRes = await (await fetch(`${base}/api/print/files`)).json()
+    assert.equal(listRes.files.find(f => f.path === 'VORON/benchy.gcode').dir, 'VORON')
+    assert.equal(listRes.recentJobs.find(j => j.filename === 'VORON/benchy.gcode').fileExists, true)
+    assert.equal(listRes.recentJobs.find(j => j.filename === 'deleted_old.gcode').fileExists, false)
+
+    // Upload .gcode into subfolder
+    const upRes = await fetch(`${base}/api/print/upload`, {
+      method: 'POST',
+      headers: {
+        Origin: base,
+        'X-Cockpit-Request': '1',
+        'Content-Type': 'application/octet-stream',
+        'X-Gcode-Filename': encodeURIComponent('cube.gcode'),
+        'X-Gcode-Path': encodeURIComponent('VORON'),
+      },
+      body: Buffer.from('; test gcode\nG28\n'),
+    })
+    assert.equal(upRes.status, 200)
+    const upBody = await upRes.json()
+    assert.equal(uploadedFilename, 'cube.gcode')
+    assert.equal(upBody.path, 'VORON/cube.gcode')
+
+    // Reject deleting currently active print file (409)
+    const blockedDel = await fetch(`${base}/api/print/file?filename=active_part.gcode`, {
+      method: 'DELETE',
+      headers: { Origin: base, 'X-Cockpit-Request': '1' },
+    })
+    assert.equal(blockedDel.status, 409)
+
+    // Allow deleting inactive file
+    const okDel = await fetch(`${base}/api/print/file?filename=${encodeURIComponent('VORON/benchy.gcode')}`, {
+      method: 'DELETE',
+      headers: { Origin: base, 'X-Cockpit-Request': '1' },
+    })
+    assert.equal(okDel.status, 200)
+    assert.equal(deletedPath, 'VORON/benchy.gcode')
+
+    // Job queue GET + POST add + POST pause
+    const qGet = await (await fetch(`${base}/api/print/queue`)).json()
+    assert.equal(qGet.available, true)
+    assert.equal(qGet.jobs.length, 1)
+
+    const qAdd = await (
+      await fetch(`${base}/api/print/queue`, {
+        method: 'POST',
+        headers: { Origin: base, 'X-Cockpit-Request': '1', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'add', filename: 'VORON/cube.gcode' }),
+      })
+    ).json()
+    assert.equal(qAdd.jobs.length, 2)
+
+    const qPause = await (
+      await fetch(`${base}/api/print/queue`, {
+        method: 'POST',
+        headers: { Origin: base, 'X-Cockpit-Request': '1', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'pause' }),
+      })
+    ).json()
+    assert.equal(qPause.queueState, 'paused')
+  } finally {
+    closeLiveFeed()
+    await new Promise(resolve => server.close(resolve))
+    await new Promise(resolve => mockMoonraker.close(resolve))
+    await rm(dir, { recursive: true, force: true })
+  }
+})

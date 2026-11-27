@@ -17,6 +17,7 @@ import {
   Clock,
   ChartNoAxesCombined,
   ChevronDown,
+  Disc,
 } from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import { heatState } from '../../server/status.mjs'
@@ -53,7 +54,12 @@ const DEFAULT_FALLBACK_PRESETS = [
   { name: 'ABS', bed: 110, tools: [255] },
 ]
 
+const EXTRUDE_LENGTHS = [5, 10, 25, 50, 100]
+const EXTRUDE_SPEEDS = [2, 5, 10]
+
 const presets = ref(DEFAULT_FALLBACK_PRESETS)
+const extrudeLength = ref(10)
+const extrudeSpeed = ref(5)
 const axisDrafts = ref({})
 const confirmMotors = ref(false)
 let confirmMotorsTimer = null
@@ -62,6 +68,7 @@ const presetController = new AbortController()
 const extruder = computed(() => props.status?.tools?.[0] ?? {})
 const bed = computed(() => props.status?.bed ?? {})
 const has3dScene = computed(() => props.sceneConfig?.kind === 'printer-scene')
+const activeSpool = computed(() => props.status?.spoolman?.activeSpool ?? null)
 
 const number = (value, digits = 1) =>
   typeof value === 'number' && Number.isFinite(value)
@@ -76,18 +83,43 @@ const hasExtruderLeds = computed(() => {
   return Boolean(leds?.number || leds?.left || leds?.right)
 })
 
-const hasFilamentSensor = computed(
-  () => Boolean(extruder.value?.filamentSensorName) || extruder.value?.filamentEnabled != null,
+const filamentSensors = computed(() => {
+  const list = props.status?.filamentSensors
+  if (Array.isArray(list) && list.length > 0) return list
+  const tool = extruder.value
+  if (tool.filamentSensorName || tool.filamentEnabled != null) {
+    return [
+      {
+        id: tool.filamentSensorName || 'filament_sensor',
+        name: tool.filamentSensorName || '',
+        kind: 'switch',
+        label: tool.filamentSensorName || 'Filament',
+        enabled: tool.filamentEnabled,
+        detected: tool.filamentDetected,
+      },
+    ]
+  }
+  return []
+})
+
+function sensorVisual(sensor) {
+  const multi = filamentSensors.value.length > 1
+  const prefix = multi ? `${sensor.label}: ` : ''
+  if (!props.online || sensor.enabled == null) return { kind: 'unknown', label: `${prefix}${t('Filament ?')}` }
+  if (sensor.enabled === false) return { kind: 'disabled', label: `${prefix}${t('Überwachung aus')}` }
+  if (sensor.detected === true) return { kind: 'present', label: `${prefix}${t('Filament erkannt')}` }
+  if (sensor.detected === false) return { kind: 'empty', label: `${prefix}${t('Kein Filament')}` }
+  return { kind: 'unknown', label: `${prefix}${t('Filament ?')}` }
+}
+
+const canToggleSensor = computed(
+  () => props.online && props.canWrite && props.status?.klipperState === 'ready' && !busy.value,
 )
 
-const filamentState = computed(() => {
-  const tool = extruder.value
-  if (!props.online || tool.filamentEnabled == null) return { kind: 'unknown', label: 'Filament ?' }
-  if (tool.filamentEnabled === false) return { kind: 'unknown', label: 'Überwachung aus' }
-  if (tool.filamentDetected === true) return { kind: 'present', label: 'Filament erkannt' }
-  if (tool.filamentDetected === false) return { kind: 'empty', label: 'Kein Filament' }
-  return { kind: 'unknown', label: 'Filament ?' }
-})
+function toggleFilamentSensor(sensor) {
+  if (!canToggleSensor.value || !sensor?.name || sensor.enabled == null) return
+  emit('command', { action: 'filament_sensor', sensor: sensor.name, enabled: !sensor.enabled })
+}
 
 const bedHeat = computed(() => heatState(bed.value))
 const extruderHeat = computed(() => heatState(extruder.value))
@@ -95,8 +127,8 @@ const extruderHeat = computed(() => heatState(extruder.value))
 function heatPillMode(stateLabel) {
   if (!props.online) return 'idle'
   if (stateLabel === 'Heizt auf') return 'heating'
-  if (stateLabel === 'Ziel erreicht') return 'holding'
-  if (stateLabel === 'Kühlt ab') return 'cooling'
+  if (stateLabel === 'Auf Solltemperatur') return 'holding'
+  if (stateLabel === 'Heizung aus · heiß' || stateLabel === 'Über Solltemperatur') return 'cooling'
   return 'idle'
 }
 
@@ -120,30 +152,75 @@ const homing = computed(
 
 const extruderMax = computed(() => props.status?.capabilities?.toolMax?.[0] ?? null)
 const bedMax = computed(() => props.status?.capabilities?.bedMax ?? null)
+const minExtrudeTemp = computed(() => props.status?.capabilities?.extrusionMin?.[0] ?? 170)
+
+const extrudeBlockReason = computed(() => {
+  if (!props.online) return 'Keine aktuellen Druckerdaten.'
+  if (props.status?.klipperState !== 'ready') return 'Klipper ist nicht bereit.'
+  if (busy.value) return 'Ein Befehl läuft noch oder muss geprüft werden.'
+  if (props.status?.loadWatchActive) return 'Einlegehilfe ist scharf. Zuerst mit „Fertig“ beenden.'
+  if (isPrinting.value) return 'Manuelles Extrudieren ist während eines laufenden Drucks gesperrt.'
+  if (props.status?.idleState === 'Printing') return 'Der Drucker führt bereits eine Bewegung oder einen Befehl aus.'
+  if (extruder.value?.canExtrude !== true) {
+    return t('Extruder zu kalt — mindestens {0} °C erforderlich.', [minExtrudeTemp.value])
+  }
+  return ''
+})
+
+function runManualExtrude(sign) {
+  if (extrudeBlockReason.value) return
+  emit('command', {
+    action: 'extrude',
+    distance: sign * extrudeLength.value,
+    speed: extrudeSpeed.value,
+  })
+}
+
+const spoolPreheat = computed(() => {
+  const s = activeSpool.value
+  if (!s) return null
+  const e = Number.isFinite(s.settingsExtruderTemp) ? Math.round(s.settingsExtruderTemp) : null
+  const b = Number.isFinite(s.settingsBedTemp) ? Math.round(s.settingsBedTemp) : null
+  if (e == null && b == null) return null
+  return {
+    name: s.material || 'Spule',
+    color: s.color || null,
+    extruder: e,
+    bed: b,
+  }
+})
 
 function presetExtruderTemp(preset) {
   const temp = preset?.tools?.[0]
   return Number.isFinite(temp) ? Math.round(temp) : null
 }
 
-function presetAllowed(preset) {
+function preheatPairAllowed(e, b) {
   if (!enabled.value) return false
-  const e = presetExtruderTemp(preset)
-  const b = Number.isFinite(preset?.bed) ? Math.round(preset.bed) : null
   if (e == null && b == null) return false
   if (e != null && (extruderMax.value == null || e > extruderMax.value)) return false
   if (b != null && (bedMax.value == null || b > bedMax.value)) return false
   return true
 }
 
-function applyPreheatPreset(preset) {
-  if (!presetAllowed(preset)) return
-  const payload = { action: 'preheat' }
+function presetAllowed(preset) {
   const e = presetExtruderTemp(preset)
   const b = Number.isFinite(preset?.bed) ? Math.round(preset.bed) : null
+  return preheatPairAllowed(e, b)
+}
+
+function sendPreheat(e, b) {
+  if (!preheatPairAllowed(e, b)) return
+  const payload = { action: 'preheat' }
   if (e != null) payload.extruder = e
   if (b != null) payload.bed = b
   emit('command', payload)
+}
+
+function applyPreheatPreset(preset) {
+  const e = presetExtruderTemp(preset)
+  const b = Number.isFinite(preset?.bed) ? Math.round(preset.bed) : null
+  sendPreheat(e, b)
 }
 
 function preheatStandby140() {
@@ -400,6 +477,27 @@ onBeforeUnmount(() => {
         <div class="single-preheat-bar" role="group" :aria-label="t('Schnell-Vorheizen')">
           <div class="single-preheat-chips">
             <button
+              v-if="spoolPreheat"
+              type="button"
+              class="subtle-button single-preset-chip spool-chip"
+              :disabled="!preheatPairAllowed(spoolPreheat.extruder, spoolPreheat.bed)"
+              :title="
+                t('Aktive Spule vorheizen · Extruder {0} °C · Bett {1} °C', [
+                  spoolPreheat.extruder ?? '—',
+                  spoolPreheat.bed ?? '—',
+                ])
+              "
+              @click="sendPreheat(spoolPreheat.extruder, spoolPreheat.bed)"
+            >
+              <span
+                class="spoolman-dot"
+                :style="{ background: spoolPreheat.color ?? 'var(--muted)' }"
+                aria-hidden="true"
+              />
+              <strong>{{ spoolPreheat.name }}</strong>
+              <small>{{ spoolPreheat.extruder ?? '—' }}/{{ spoolPreheat.bed ?? '—' }}°</small>
+            </button>
+            <button
               v-for="preset in presets"
               :key="preset.name"
               type="button"
@@ -506,7 +604,7 @@ onBeforeUnmount(() => {
             />
 
             <div
-              v-if="hasFilamentSensor || Number.isFinite(extruder.pressureAdvance) || (status?.spoolman?.available && status?.spoolman?.connected)"
+              v-if="filamentSensors.length || Number.isFinite(extruder.pressureAdvance) || (status?.spoolman?.available && status?.spoolman?.connected)"
               class="single-thermal-meta"
             >
               <SpoolmanPicker
@@ -516,10 +614,24 @@ onBeforeUnmount(() => {
                 :can-write="canWrite"
                 @changed="emit('refresh')"
               />
-              <span v-if="hasFilamentSensor" class="single-meta-pill" :class="filamentState.kind">
+              <button
+                v-for="sensor in filamentSensors"
+                :key="sensor.id"
+                type="button"
+                class="single-meta-pill sensor-toggle"
+                :class="sensorVisual(sensor).kind"
+                :disabled="!canToggleSensor || !sensor.name || sensor.enabled == null"
+                :aria-pressed="sensor.enabled === true"
+                :title="
+                  sensor.enabled === true
+                    ? t('{0} deaktivieren (während Druck möglich)', [sensor.label])
+                    : t('{0} aktivieren', [sensor.label])
+                "
+                @click="toggleFilamentSensor(sensor)"
+              >
                 <span class="single-meta-dot" />
-                {{ t(filamentState.label) }}
-              </span>
+                <span>{{ sensorVisual(sensor).label }}</span>
+              </button>
               <span
                 v-if="Number.isFinite(extruder.pressureAdvance)"
                 class="single-meta-pill neutral"
@@ -624,7 +736,7 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <!-- Band 3: Unified Motion & Machine Controls + Quick Actions, Fans & LEDs -->
+    <!-- Band 3: Unified Motion & Machine Controls + Extruder/Filament, Fans & LEDs -->
     <div class="single-control-deck">
       <article class="control-panel single-motion-card" :aria-label="t('Achsen & Bewegung')">
         <div class="single-card-head">
@@ -807,9 +919,71 @@ onBeforeUnmount(() => {
       </article>
 
       <aside class="single-side-stack" :aria-label="t('Aktionen, Lüfter und LEDs')">
-        <section v-if="configuredQuickActions.length" class="single-actions-card">
-          <h3>{{ t('Schnellaktionen') }}</h3>
-          <div class="single-actions-grid">
+        <!-- Manual Extrude / Retract + Configured Filament Macros -->
+        <section class="single-actions-card single-extrude-card" :aria-label="t('Extruder & Filament')">
+          <div class="single-extrude-head">
+            <h3><Disc :size="15" />{{ t('Extruder & Filament') }}</h3>
+            <span
+              class="single-heat-pill"
+              :class="online && extruder.canExtrude === true ? 'holding' : 'heating'"
+            >
+              {{
+                !online
+                  ? t('Offline')
+                  : extruder.canExtrude === true
+                    ? t('Extrusion bereit')
+                    : t('Kalt · ≥ {0} °C', [minExtrudeTemp])
+              }}
+            </span>
+          </div>
+
+          <div class="single-extrude-selectors">
+            <div class="segmented single-extrude-chips" role="group" :aria-label="t('Extrusionslänge')">
+              <button
+                v-for="len in EXTRUDE_LENGTHS"
+                :key="len"
+                type="button"
+                :aria-pressed="extrudeLength === len"
+                @click="extrudeLength = len"
+              >
+                {{ len }} mm
+              </button>
+            </div>
+            <div class="segmented single-extrude-chips" role="group" :aria-label="t('Extrusionsgeschwindigkeit')">
+              <button
+                v-for="spd in EXTRUDE_SPEEDS"
+                :key="spd"
+                type="button"
+                :aria-pressed="extrudeSpeed === spd"
+                @click="extrudeSpeed = spd"
+              >
+                {{ spd }} mm/s
+              </button>
+            </div>
+          </div>
+
+          <div class="single-extrude-actions">
+            <button
+              type="button"
+              class="subtle-button"
+              :disabled="!!extrudeBlockReason"
+              :title="extrudeBlockReason ? t(extrudeBlockReason) : t('Filament um {0} mm mit {1} mm/s einziehen', [extrudeLength, extrudeSpeed])"
+              @click="runManualExtrude(-1)"
+            >
+              <ArrowUpFromLine :size="14" />{{ t('Einziehen') }} −{{ extrudeLength }}
+            </button>
+            <button
+              type="button"
+              class="subtle-button single-extrude-push"
+              :disabled="!!extrudeBlockReason"
+              :title="extrudeBlockReason ? t(extrudeBlockReason) : t('Filament um {0} mm mit {1} mm/s extrudieren', [extrudeLength, extrudeSpeed])"
+              @click="runManualExtrude(1)"
+            >
+              <ArrowDownToLine :size="14" />{{ t('Extrudieren') }} +{{ extrudeLength }}
+            </button>
+          </div>
+
+          <div v-if="configuredQuickActions.length" class="single-actions-grid single-macro-divider">
             <button
               v-for="act in configuredQuickActions"
               :key="act.id"

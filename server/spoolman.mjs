@@ -36,6 +36,13 @@ function roundWeight(value) {
   return Math.round(num * 10) / 10
 }
 
+function parseSpoolTemp(value) {
+  if (value == null || (typeof value === 'string' && value.trim() === '')) return null
+  const num = Number(value)
+  if (!Number.isFinite(num) || num <= 0 || num > 500) return null
+  return Math.round(num)
+}
+
 export function normalizeSpool(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const id = Number(raw.id)
@@ -55,6 +62,8 @@ export function normalizeSpool(raw) {
     color: extractSpoolColor(filament),
     remainingWeight: roundWeight(raw.remaining_weight),
     initialWeight: roundWeight(raw.initial_weight),
+    settingsExtruderTemp: parseSpoolTemp(filament.settings_extruder_temp),
+    settingsBedTemp: parseSpoolTemp(filament.settings_bed_temp),
     lotNr,
     archived: Boolean(raw.archived),
   }

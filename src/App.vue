@@ -1448,6 +1448,8 @@ async function acknowledgeUncertain() {
         :send="send"
         :printer-name="printerName"
         :requested-file="requestedPrintFile"
+        :can-write="canWrite"
+        @refresh="refresh"
       />
 
       <HistoryView

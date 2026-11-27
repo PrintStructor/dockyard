@@ -478,14 +478,17 @@ live = createLiveFeed({
 
 const closeLiveFeed = () => live.close()
 
-async function readRawBody(req, max = MAX_MODEL_BYTES) {
+const MAX_GCODE_UPLOAD_BYTES = 100 * 1024 * 1024
+
+async function readRawBody(
+  req,
+  max = MAX_MODEL_BYTES,
+  tooLargeMessage = 'Die GLB-Datei überschreitet das Limit von 25 MB. Bitte zuerst mit scripts/optimize-dockyard-glb.sh komprimieren.',
+) {
   const declared = Number(req.headers['content-length'])
   if (Number.isFinite(declared) && declared > max) {
     req.resume()
-    throw new ControlError(
-      'Die GLB-Datei überschreitet das Limit von 25 MB. Bitte zuerst mit scripts/optimize-dockyard-glb.sh komprimieren.',
-      413,
-    )
+    throw new ControlError(tooLargeMessage, 413)
   }
   const chunks = []
   let total = 0
@@ -493,10 +496,7 @@ async function readRawBody(req, max = MAX_MODEL_BYTES) {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
     total += buf.length
     if (total > max) {
-      throw new ControlError(
-        'Die GLB-Datei überschreitet das Limit von 25 MB. Bitte zuerst mit scripts/optimize-dockyard-glb.sh komprimieren.',
-        413,
-      )
+      throw new ControlError(tooLargeMessage, 413)
     }
     chunks.push(buf)
   }
@@ -984,7 +984,7 @@ function printerMiddleware(req, res, next) {
   }
 
   const camera = path.match(/^\/api\/camera\/([a-z0-9][a-z0-9_-]{0,31})(?:\/(stream|webrtc))?$/)
-  const printRoute = path.match(/^\/api\/print\/(files|metadata|thumbnail|model)$/)
+  const printRoute = path.match(/^\/api\/print\/(files|metadata|thumbnail|model|upload|file|queue)$/)
   const settingsRoute = path.match(/^\/api\/settings(?:\/(switch|test))?$/)
   const modelRoute = path.match(/^\/api\/models\/([a-z0-9][a-z0-9_-]{0,31})\/(toolhead|printer)$/)
   const spoolmanRoute = path.match(/^\/api\/spoolman\/(spools|active)$/)
@@ -1012,17 +1012,26 @@ function printerMiddleware(req, res, next) {
   const systemSub = systemRoute?.[1]
   const settingsSub = settingsRoute?.[1]
   const spoolmanSub = spoolmanRoute?.[1]
+  const printSub = printRoute?.[1]
   const isSettingsGet = path === '/api/settings' && req.method === 'GET'
   const isModelGet = Boolean(modelRoute) && req.method === 'GET'
   const isModelWrite = Boolean(modelRoute) && (req.method === 'POST' || req.method === 'DELETE')
+  const isPrintUpload = printSub === 'upload' && req.method === 'POST'
+  const isPrintDelete = printSub === 'file' && req.method === 'DELETE'
+  const isPrintQueueGet = printSub === 'queue' && req.method === 'GET'
+  const isPrintQueueWrite = printSub === 'queue' && req.method === 'POST'
   const write =
     !isSettingsGet &&
     !isModelGet &&
+    !isPrintQueueGet &&
     (path === '/api/control' ||
       path === '/api/settings' ||
       settingsSub === 'switch' ||
       settingsSub === 'test' ||
       isModelWrite ||
+      isPrintUpload ||
+      isPrintDelete ||
+      isPrintQueueWrite ||
       spoolmanSub === 'active' ||
       camera?.[2] === 'webrtc' ||
       systemSub === 'config/save' ||
@@ -1034,10 +1043,14 @@ function printerMiddleware(req, res, next) {
     if (!['GET', 'POST', 'DELETE'].includes(req.method)) {
       return json(405, { error: 'Methode nicht erlaubt.' })
     }
+  } else if (printSub === 'file') {
+    if (req.method !== 'DELETE') return json(405, { error: 'Methode nicht erlaubt.' })
+  } else if (printSub === 'queue') {
+    if (!['GET', 'POST'].includes(req.method)) return json(405, { error: 'Methode nicht erlaubt.' })
   } else if (!isSettingsGet && req.method !== (write ? 'POST' : 'GET')) {
     return json(405, { error: 'Methode nicht erlaubt.' })
   }
-  const modelWriteAllowed = () => {
+  const binaryWriteAllowed = allowedTypes => {
     if (
       !isOriginWriteAllowed(req, store.getEffectiveAllowedOrigins(), { allowLanOrigins: store.isLanOriginAllowed() }) ||
       req.headers['x-cockpit-request'] !== '1'
@@ -1049,13 +1062,15 @@ function printerMiddleware(req, res, next) {
       .split(';')[0]
       .trim()
       .toLowerCase()
-    return !ct || ct === 'model/gltf-binary' || ct === 'application/octet-stream'
+    return !ct || allowedTypes.includes(ct)
   }
   if (
     write &&
     !(isModelWrite
-      ? modelWriteAllowed()
-      : sameOriginRequest(req, store.getEffectiveAllowedOrigins(), { allowLanOrigins: store.isLanOriginAllowed() }))
+      ? binaryWriteAllowed(['model/gltf-binary', 'application/octet-stream'])
+      : isPrintUpload || isPrintDelete
+        ? binaryWriteAllowed(['application/octet-stream', 'text/plain', 'text/x.gcode'])
+        : sameOriginRequest(req, store.getEffectiveAllowedOrigins(), { allowLanOrigins: store.isLanOriginAllowed() }))
   ) {
     return json(403, { error: 'Befehle sind nur aus dieser lokalen Oberfläche erlaubt.' })
   }
@@ -1671,16 +1686,25 @@ function printerMiddleware(req, res, next) {
           ])
           if (!filesRes.ok) throw new Error('Druckdateien nicht erreichbar.')
           const filesJson = await filesRes.json()
-          const files = (Array.isArray(filesJson.result) ? filesJson.result : [])
-            .filter(item => validateGcodeFilename(item?.path))
+          const validRaw = (Array.isArray(filesJson.result) ? filesJson.result : []).filter(item =>
+            validateGcodeFilename(item?.path),
+          )
+          const existingSet = new Set(validRaw.map(item => item.path))
+          gcodeFileSetCache = existingSet
+          gcodeFileSetAt = Date.now()
+          const files = validRaw
             .sort((a, b) => (b.modified ?? 0) - (a.modified ?? 0))
-            .slice(0, 60)
-            .map(item => ({
-              path: item.path,
-              name: item.path.split('/').pop(),
-              size: Number.isFinite(item.size) ? item.size : null,
-              modified: Number.isFinite(item.modified) ? item.modified : null,
-            }))
+            .slice(0, 500)
+            .map(item => {
+              const idx = item.path.lastIndexOf('/')
+              return {
+                path: item.path,
+                name: idx >= 0 ? item.path.slice(idx + 1) : item.path,
+                dir: idx >= 0 ? item.path.slice(0, idx) : '',
+                size: Number.isFinite(item.size) ? item.size : null,
+                modified: Number.isFinite(item.modified) ? item.modified : null,
+              }
+            })
 
           let recentJobs = []
           if (historyRes?.ok) {
@@ -1697,9 +1721,170 @@ function printerMiddleware(req, res, next) {
                 filamentUsed: Number.isFinite(job.filament_used) ? job.filament_used : null,
                 startTime: Number.isFinite(job.start_time) ? job.start_time : null,
                 endTime: Number.isFinite(job.end_time) ? job.end_time : null,
+                fileExists: existingSet.has(job.filename),
               }))
           }
           return json(200, { files, recentJobs })
+        }
+
+        if (sub === 'upload') {
+          const rawHeaderName = String(req.headers['x-gcode-filename'] ?? parsedUrl.searchParams.get('filename') ?? '')
+          let decodedName = rawHeaderName
+          try {
+            decodedName = decodeURIComponent(rawHeaderName)
+          } catch {
+            // Keep raw filename if not percent-encoded
+          }
+          const rawHeaderDir = String(req.headers['x-gcode-path'] ?? parsedUrl.searchParams.get('path') ?? '').trim()
+          let decodedDir = rawHeaderDir
+          try {
+            decodedDir = decodeURIComponent(rawHeaderDir)
+          } catch {
+            // Keep raw dir
+          }
+          const cleanDir = decodedDir.replace(/^\/+|\/+$/g, '')
+          const baseName = decodedName.split('/').pop()?.trim() || ''
+          const fullRelPath = cleanDir ? `${cleanDir}/${baseName}` : baseName
+          const validRelPath = validateGcodeFilename(fullRelPath)
+          if (!validRelPath) {
+            throw new ControlError('Ungültiger G-Code-Dateiname (.gcode, .gco oder .g erwartet).', 400)
+          }
+          const buffer = await readRawBody(
+            req,
+            MAX_GCODE_UPLOAD_BYTES,
+            'Die G-Code-Datei überschreitet das Limit von 100 MB.',
+          )
+          if (!buffer.byteLength) throw new ControlError('Die hochgeladene G-Code-Datei ist leer.', 400)
+
+          const form = new FormData()
+          form.append('file', new Blob([buffer], { type: 'application/octet-stream' }), baseName)
+          form.append('root', 'gcodes')
+          if (cleanDir) form.append('path', cleanDir)
+          const wantPrint = req.headers['x-gcode-print'] === '1' || parsedUrl.searchParams.get('print') === '1'
+          if (wantPrint) form.append('print', 'true')
+
+          const upRes = await fetchUpstream(`${printer}/server/files/upload`, {
+            method: 'POST',
+            body: form,
+            signal: AbortSignal.timeout(90_000),
+          })
+          const upData = await upRes.json().catch(() => ({}))
+          if (!upRes.ok) {
+            throw new ControlError(
+              upData?.error?.message || upData?.message || 'G-Code-Upload auf Moonraker fehlgeschlagen.',
+              upRes.status >= 400 && upRes.status < 500 ? upRes.status : 502,
+            )
+          }
+          gcodeFileSetCache = null
+          const itemPath = validateGcodeFilename(upData?.item?.path) ?? validRelPath
+          return json(200, {
+            ok: true,
+            path: itemPath,
+            name: itemPath.split('/').pop(),
+            size: buffer.byteLength,
+          })
+        }
+
+        if (sub === 'file') {
+          const filename = validateGcodeFilename(parsedUrl.searchParams.get('filename'))
+          if (!filename) throw new ControlError('Ungültiger Dateiname.', 400)
+          const liveRaw = await query(false).catch(() => null)
+          const livePrintState = liveRaw?.print_stats?.state
+          const liveFilename = liveRaw?.print_stats?.filename
+          if (['printing', 'paused'].includes(livePrintState) && liveFilename === filename) {
+            throw new ControlError('Die aktuell gedruckte Datei kann nicht gelöscht werden.', 409)
+          }
+          const delRes = await fetchUpstream(`${printer}/server/files/gcodes/${encodeMoonrakerPath(filename)}`, {
+            method: 'DELETE',
+            signal: AbortSignal.timeout(8000),
+          })
+          if (!delRes.ok) {
+            const errData = await delRes.json().catch(() => ({}))
+            throw new ControlError(
+              errData?.error?.message || 'Datei konnte nicht gelöscht werden.',
+              delRes.status === 404 ? 404 : 502,
+            )
+          }
+          gcodeFileSetCache = null
+          return json(200, { ok: true, filename })
+        }
+
+        if (sub === 'queue') {
+          const normalizeQueueResult = payload => {
+            const result = payload?.result ?? {}
+            const jobs = (Array.isArray(result.queued_jobs) ? result.queued_jobs : [])
+              .filter(item => item && typeof item.filename === 'string')
+              .map(item => ({
+                jobId: String(item.job_id ?? ''),
+                filename: item.filename,
+                name: item.filename.split('/').pop(),
+                timeAdded: Number.isFinite(item.time_added) ? item.time_added : null,
+                timeInQueue: Number.isFinite(item.time_in_queue) ? item.time_in_queue : null,
+              }))
+            return {
+              available: true,
+              queueState: typeof result.queue_state === 'string' ? result.queue_state : 'ready',
+              jobs,
+            }
+          }
+
+          if (req.method === 'GET') {
+            const qRes = await fetchUpstream(`${printer}/server/job_queue/status`, {
+              signal: AbortSignal.timeout(5000),
+            }).catch(() => null)
+            if (!qRes || qRes.status === 404) {
+              return json(200, { available: false, queueState: null, jobs: [] })
+            }
+            if (!qRes.ok) throw new Error('Warteschlange nicht erreichbar.')
+            return json(200, normalizeQueueResult(await qRes.json().catch(() => ({}))))
+          }
+
+          const payload = await readJson(req, 8192)
+          const action = payload?.action
+          let qRes
+          if (action === 'add') {
+            const filename = validateGcodeFilename(payload?.filename)
+            if (!filename) throw new ControlError('Ungültiger Dateiname.', 400)
+            qRes = await fetchUpstream(`${printer}/server/job_queue/job`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ filenames: [filename] }),
+              signal: AbortSignal.timeout(7000),
+            })
+          } else if (action === 'remove') {
+            const jobId = String(payload?.jobId ?? '').trim()
+            if (!/^[A-Za-z0-9_-]{1,64}$/.test(jobId)) throw new ControlError('Ungültige Job-ID.', 400)
+            qRes = await fetchUpstream(`${printer}/server/job_queue/job?job_ids=${encodeURIComponent(jobId)}`, {
+              method: 'DELETE',
+              signal: AbortSignal.timeout(7000),
+            })
+          } else if (action === 'clear') {
+            qRes = await fetchUpstream(`${printer}/server/job_queue/job?all=true`, {
+              method: 'DELETE',
+              signal: AbortSignal.timeout(7000),
+            })
+          } else if (action === 'start') {
+            qRes = await fetchUpstream(`${printer}/server/job_queue/start`, {
+              method: 'POST',
+              signal: AbortSignal.timeout(7000),
+            })
+          } else if (action === 'pause') {
+            qRes = await fetchUpstream(`${printer}/server/job_queue/pause`, {
+              method: 'POST',
+              signal: AbortSignal.timeout(7000),
+            })
+          } else {
+            throw new ControlError('Ungültige Warteschlangen-Aktion.', 400)
+          }
+
+          if (qRes.status === 404) {
+            throw new ControlError('Moonraker job_queue ist auf diesem Drucker nicht konfiguriert.', 404)
+          }
+          const qData = await qRes.json().catch(() => ({}))
+          if (!qRes.ok) {
+            throw new ControlError(qData?.error?.message || 'Warteschlangen-Aktion fehlgeschlagen.', 502)
+          }
+          return json(200, normalizeQueueResult(qData))
         }
 
         if (sub === 'metadata') {

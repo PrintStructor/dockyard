@@ -61,6 +61,8 @@ export function commandFor(input, raw) {
     'home',
     'jog',
     'move_to',
+    'extrude',
+    'filament_sensor',
     'temperature',
     'temperature_all',
     'preheat',
@@ -86,6 +88,8 @@ export function commandFor(input, raw) {
         home: ['action', 'axis'],
         jog: ['action', 'axis', 'distance'],
         move_to: ['action', 'axis', 'target'],
+        extrude: ['action', 'distance', 'speed', 'tool'],
+        filament_sensor: ['action', 'sensor', 'enabled'],
         temperature: ['action', 'heater', 'target'],
         temperature_all: ['action', 'target'],
         preheat: ['action', 'extruder', 'bed'],
@@ -128,6 +132,73 @@ export function commandFor(input, raw) {
   if (toolActions.includes(action)) return toolActionCommand(input, raw, capabilities(raw))
   if (printControlActions.includes(action)) return printControlCommand(input, raw, capabilities(raw))
   if (calibrationActions.includes(action)) return calibrationCommand(input, raw, capabilities(raw))
+
+  if (action === 'filament_sensor') {
+    if (
+      typeof input.sensor !== 'string' ||
+      !/^[A-Za-z0-9_.-]{1,80}$/.test(input.sensor) ||
+      typeof input.enabled !== 'boolean'
+    ) {
+      fail('Ungültiger Filamentsensor oder Schaltzustand.')
+    }
+    const switchKey = `filament_switch_sensor ${input.sensor}`
+    const motionKey = `filament_motion_sensor ${input.sensor}`
+    const cfg = raw.configfile?.settings ?? raw.configfile?.config ?? {}
+    const exists = Boolean(
+      raw[switchKey] ||
+        raw[motionKey] ||
+        cfg[switchKey.toLowerCase()] ||
+        cfg[motionKey.toLowerCase()],
+    )
+    if (!exists) fail('Filamentsensor ist auf diesem Drucker nicht konfiguriert.', 409)
+    return {
+      endpoint: '/printer/gcode/script',
+      body: { script: `SET_FILAMENT_SENSOR SENSOR=${input.sensor} ENABLE=${input.enabled ? 1 : 0}` },
+      label: `${input.sensor} ${input.enabled ? 'aktiviert' : 'deaktiviert'}`,
+    }
+  }
+
+  if (action === 'extrude') {
+    if (raw['gcode_macro LOAD_WATCH']?.active === 1) {
+      fail('Einlegehilfe ist scharf. Zuerst mit Fertig beenden.', 409)
+    }
+    if (printState === 'printing') {
+      fail('Manuelles Extrudieren ist während eines laufenden Drucks gesperrt.', 409)
+    }
+    if (raw.idle_timeout?.state === 'Printing') {
+      fail('Der Drucker führt bereits eine Bewegung oder einen Befehl aus.', 409)
+    }
+    const limits = capabilities(raw)
+    const toolId = input.tool === undefined ? 0 : input.tool
+    if (!Number.isInteger(toolId) || toolId < 0 || toolId >= limits.toolCount) {
+      fail('Ungültiges Werkzeug.')
+    }
+    const dist = input.distance
+    if (!finite(dist) || Math.abs(dist) < 0.5 || Math.abs(dist) > 150) {
+      fail('Extrusionslänge muss zwischen 0,5 und 150 mm liegen.')
+    }
+    const speed = input.speed === undefined ? 5 : input.speed
+    if (!finite(speed) || speed < 1 || speed > 30) {
+      fail('Extrusionsgeschwindigkeit muss zwischen 1 und 30 mm/s liegen.')
+    }
+    const extruderKey = toolId ? `extruder${toolId}` : 'extruder'
+    const minTemp = limits.extrusionMin?.[toolId] ?? 170
+    if (raw[extruderKey]?.can_extrude !== true) {
+      fail(`Extruder zu kalt — mindestens ${minTemp} °C erforderlich.`, 409)
+    }
+    const distFormatted = Number(dist.toFixed(2))
+    const feed = Math.round(speed * 60)
+    const absLabel = Math.abs(distFormatted)
+    const prefix = limits.isToolchanger && toolId > 0 ? `ACTIVATE_EXTRUDER EXTRUDER=${extruderKey}\n` : ''
+    return {
+      endpoint: '/printer/gcode/script',
+      body: {
+        script: `${prefix}SAVE_GCODE_STATE NAME=DOCKYARD_UI_EXTRUDE\nM83\nG1 E${distFormatted} F${feed}\nM400\nRESTORE_GCODE_STATE NAME=DOCKYARD_UI_EXTRUDE MOVE=0`,
+      },
+      label: `${distFormatted > 0 ? 'Extrudieren' : 'Einziehen'} ${absLabel} mm`,
+      async: true,
+    }
+  }
 
   if (action === 'fan') {
     const fans = capabilities(raw).fans

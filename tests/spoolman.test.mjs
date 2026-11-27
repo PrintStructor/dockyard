@@ -77,6 +77,21 @@ test('normalizeSpool and spoolToToolMaterial handle raw hex, multi-color fallbac
   assert.equal(s7.vendor, 'Polymaker')
   assert.equal(s7.material, 'ABS')
   assert.equal(s7.remainingWeight, 742.4)
+  assert.equal(s7.settingsExtruderTemp, null)
+  assert.equal(s7.settingsBedTemp, null)
+
+  const withTemps = normalizeSpool({
+    id: 33,
+    remaining_weight: 500,
+    filament: {
+      name: 'ASA Black',
+      material: 'ASA',
+      settings_extruder_temp: 255,
+      settings_bed_temp: '105',
+    },
+  })
+  assert.equal(withTemps.settingsExtruderTemp, 255)
+  assert.equal(withTemps.settingsBedTemp, 105)
 
   const s19 = normalizeSpool(sampleSpools[2])
   assert.equal(s19.color, '#ff00aa')

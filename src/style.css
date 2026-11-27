@@ -1181,6 +1181,71 @@ main:focus{outline:none}
   .single-thermal-stack.horizontal{grid-template-columns:1fr}
 }
 
+/* Paket B1: Manual Extrude/Retract, Filament Sensor Toggles, Spool Preheat, G-Code File Browser & Queue */
+.single-preset-chip.spool-chip{border-color:var(--lime-line);background:var(--lime-tint)}
+.single-preset-chip.spool-chip strong{color:var(--lime)}
+.single-meta-pill.sensor-toggle{cursor:pointer;transition:border-color .15s,background .15s,color .15s;min-height:28px}
+.single-meta-pill.sensor-toggle:hover:not(:disabled){border-color:var(--lime-line);background:var(--surface-hover)}
+.single-meta-pill.sensor-toggle.disabled{border-style:dashed;color:var(--muted);background:var(--surface-deep)}
+
+.single-extrude-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.single-extrude-head h3{display:inline-flex;align-items:center;gap:6px;font-size:13.5px;font-weight:500;color:var(--text);margin:0}
+.single-extrude-selectors{display:flex;flex-direction:column;gap:6px}
+.single-extrude-chips{width:100%;display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr)}
+.single-extrude-chips button{padding:6px 4px;font-size:11.5px;font-variant-numeric:tabular-nums;text-align:center;white-space:nowrap}
+.single-extrude-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.single-extrude-actions .subtle-button{justify-content:center;min-height:38px;font-size:12px;font-weight:500;font-variant-numeric:tabular-nums}
+.single-extrude-actions .single-extrude-push:not(:disabled){border-color:var(--lime-line);background:var(--lime-tint);color:var(--lime)}
+.single-extrude-actions .single-extrude-push:hover:not(:disabled){background:#324429;border-color:var(--lime)}
+.single-macro-divider{padding-top:10px;border-top:1px solid var(--line-subtle)}
+
+.print-scene-column.drag-over{outline:2px dashed var(--lime);outline-offset:4px;border-radius:var(--radius)}
+.print-bar-btn{min-height:38px;padding:7px 11px;font-size:12px;white-space:nowrap;flex-shrink:0}
+.print-bar-btn.active{border-color:var(--lime-line);background:var(--lime-tint);color:var(--lime)}
+.print-upload-bar{height:4px;border-radius:2px;background:var(--surface-deep);border:1px solid var(--line);overflow:hidden;margin-bottom:8px}
+.print-upload-fill{height:100%;background:var(--lime);transition:width .12s linear}
+.print-feedback-note{margin:0 0 10px;font-size:12px;padding:8px 12px;border-radius:8px;border:1px solid var(--lime-line);background:var(--lime-tint);color:var(--lime)}
+.print-feedback-note.error{border-color:var(--amber-line);background:var(--amber-tint);color:var(--amber)}
+
+.print-browser-panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:12px;margin-bottom:12px;display:flex;flex-direction:column;gap:10px}
+.print-browser-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.print-browser-search{flex:1 1 200px}
+.print-folder-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.print-folder-chips .subtle-button{padding:4px 9px;font-size:11.5px;min-height:28px}
+.print-folder-chips .subtle-button.active{border-color:var(--lime-line);background:var(--lime-tint);color:var(--lime)}
+.print-browser-empty{font-size:12px;color:var(--muted);padding:10px 4px}
+.print-browser-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;max-height:260px;overflow-y:auto}
+.print-browser-row{display:flex;align-items:center;gap:6px;border:1px solid transparent;border-radius:7px;background:var(--surface-deep);padding:3px 4px 3px 6px;transition:border-color .15s,background .15s}
+.print-browser-row:hover{border-color:var(--line-strong);background:var(--surface-hover)}
+.print-browser-row.selected{border-color:var(--lime-line);background:var(--lime-tint)}
+.print-browser-select{flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 4px;text-align:left}
+.print-browser-name{display:flex;align-items:center;gap:6px;min-width:0;flex:1}
+.print-browser-name strong{font-size:12.5px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.print-browser-row.selected .print-browser-name strong{color:var(--lime)}
+.print-dir-badge{font-size:10.5px;padding:1px 6px;border-radius:4px;border:1px solid var(--line);background:var(--surface);color:var(--muted);white-space:nowrap;flex-shrink:0}
+.print-browser-meta{font-size:11px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+.print-browser-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.print-delete-confirm{display:inline-flex;align-items:center;gap:4px;padding:5px 8px;font-size:11px;min-height:30px}
+
+.print-spoolman-block{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.print-sanity-alert{display:flex;align-items:flex-start;gap:8px;padding:9px 11px;border-radius:8px;border:1px solid var(--amber-line);background:var(--amber-tint);color:var(--amber);font-size:12px;line-height:1.4}
+.print-sanity-alert>svg{margin-top:2px;flex-shrink:0}
+.print-start-actions{display:flex;align-items:stretch;gap:8px}
+.print-start-actions .print-start-btn{flex:1}
+.print-queue-add-btn{min-width:42px;justify-content:center;padding:0 10px}
+
+.print-queue-section{margin-top:14px;padding-top:14px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:8px}
+.print-queue-head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.print-queue-head h3{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:500;color:var(--text);margin:0}
+.print-queue-controls{display:flex;align-items:center;gap:6px}
+.print-queue-controls .subtle-button{padding:4px 8px;font-size:11px;min-height:28px}
+.print-queue-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.print-queue-item{display:flex;align-items:center;gap:7px;padding:5px 6px;border-radius:6px;background:var(--surface-deep);border:1px solid var(--line-subtle)}
+.print-queue-index{font-size:11px;color:var(--muted);min-width:16px;text-align:center;font-variant-numeric:tabular-nums}
+.print-queue-name{flex:1;min-width:0;text-align:left;font-size:12px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.print-queue-name:hover{color:var(--lime)}
+.print-queue-remove{width:28px;height:28px}
+
 /* Mobile & Coarse Touch Ergonomics (>= 44px touch targets + isolated E-Stop + nav scroll affordance) */
 @media(max-width:700px){
   .main-nav{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;mask-image:linear-gradient(to right,#000 90%,transparent 100%);-webkit-mask-image:linear-gradient(to right,#000 90%,transparent 100%);padding-right:20px}
@@ -1188,7 +1253,7 @@ main:focus{outline:none}
   .header-meta .emergency-stop{min-height:44px;margin-left:8px;padding:9px 14px}
   .settings-trigger-btn,.display-toggle-btn,.refresh-button{min-width:44px;min-height:44px;width:44px;height:44px}
   .brand-printer-pill.interactive{min-height:44px;padding:6px 12px}
-  .single-preset-chip,.single-cooldown-btn,.single-prep-bar .subtle-button,.single-actions-grid .subtle-button{min-height:44px}
+  .single-preset-chip,.single-cooldown-btn,.single-prep-bar .subtle-button,.single-actions-grid .subtle-button,.single-extrude-actions .subtle-button,.single-extrude-chips button,.single-meta-pill.sensor-toggle,.print-bar-btn,.print-folder-chips .subtle-button,.print-browser-select,.print-queue-controls .subtle-button{min-height:44px}
   .single-thermal-card .inspector-target input,.single-thermal-card .apply-temperature,.single-thermal-card .target-step-btn{min-height:44px;min-width:44px}
   .spoolman-pill,.spoolman-row,.spoolman-clear-btn{min-height:44px}
   .controls-axis-row button,.axis-reading-card .axis-apply-btn{min-height:44px}
@@ -1198,7 +1263,7 @@ main:focus{outline:none}
   .printer-scene-panel .scene-viewport.printer-scene-viewport{height:250px;min-height:220px}
 }
 @media(pointer:coarse){
-  .single-preset-chip,.single-cooldown-btn,.single-prep-bar .subtle-button,.single-actions-grid .subtle-button,.spoolman-pill,.spoolman-row,.fan-actions button{min-height:44px}
+  .single-preset-chip,.single-cooldown-btn,.single-prep-bar .subtle-button,.single-actions-grid .subtle-button,.single-extrude-actions .subtle-button,.single-extrude-chips button,.single-meta-pill.sensor-toggle,.spoolman-pill,.spoolman-row,.fan-actions button,.print-bar-btn{min-height:44px}
 }
 
 /* 7" Pi Touchscreen Kiosk Mode (?display=1 / 1024x600) — placed LAST so zero cascade overrides can shrink touch targets */
@@ -1224,7 +1289,16 @@ main:focus{outline:none}
 .app-shell.display-mode .single-cooldown-btn,
 .app-shell.display-mode .single-prep-bar .subtle-button,
 .app-shell.display-mode .single-actions-grid .subtle-button,
+.app-shell.display-mode .single-extrude-actions .subtle-button,
+.app-shell.display-mode .single-extrude-chips button,
+.app-shell.display-mode .single-meta-pill.sensor-toggle,
 .app-shell.display-mode .single-graph-disclosure>summary,
+.app-shell.display-mode .print-bar-btn,
+.app-shell.display-mode .print-folder-chips .subtle-button,
+.app-shell.display-mode .print-browser-select,
+.app-shell.display-mode .print-delete-confirm,
+.app-shell.display-mode .print-queue-controls .subtle-button,
+.app-shell.display-mode .print-queue-name,
 .app-shell.display-mode .brand-printer-pill.interactive,
 .app-shell.display-mode .tuning-chip-reset,
 .app-shell.display-mode .exclude-action-btn,
@@ -1240,6 +1314,9 @@ main:focus{outline:none}
 .app-shell.display-mode .spoolman-row{min-height:44px;padding:8px 10px}
 .app-shell.display-mode .spoolman-clear-btn{min-height:44px;padding:6px 10px}
 .app-shell.display-mode .printer-scene-panel .icon-button,
+.app-shell.display-mode .print-browser-actions .icon-button,
+.app-shell.display-mode .print-queue-add-btn,
+.app-shell.display-mode .print-queue-remove,
 .app-shell.display-mode .settings-trigger-btn,
 .app-shell.display-mode .settings-swatch,
 .app-shell.display-mode .settings-model-slot-actions .icon-button,

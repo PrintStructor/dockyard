@@ -1,12 +1,33 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Printer, RefreshCw, Layers, Clock, FileCode2, ChevronRight, Lock, Unlock, Expand, X, Play } from '@lucide/vue'
+import {
+  Printer,
+  RefreshCw,
+  Layers,
+  Clock,
+  FileCode2,
+  ChevronRight,
+  Lock,
+  Unlock,
+  Expand,
+  X,
+  Play,
+  Pause,
+  Upload,
+  Search,
+  Trash2,
+  FolderOpen,
+  ListPlus,
+  AlertTriangle,
+  ListOrdered,
+} from '@lucide/vue'
 import { t, locale } from '../i18n.mjs'
 import { printControlReason } from '../print-control-state.mjs'
 import { computeLayerToolBands } from '../layer-ribbon.mjs'
 import CockpitSelect from './CockpitSelect.vue'
 import PrintScene from './PrintScene.vue'
 import LivePrintTuning from './LivePrintTuning.vue'
+import SpoolmanPicker from './SpoolmanPicker.vue'
 
 const props = defineProps({
   status: Object,
@@ -15,12 +36,32 @@ const props = defineProps({
   send: Function,
   printerName: { type: String, default: '' },
   requestedFile: String,
+  canWrite: { type: Boolean, default: true },
 })
+
+const emit = defineEmits(['refresh'])
 
 const files = ref([])
 const recentJobs = ref([])
 const filesError = ref('')
 const loadingFiles = ref(false)
+
+const fileDrawerOpen = ref(false)
+const fileSearch = ref('')
+const activeFolder = ref('')
+const fileSort = ref('modified') // 'modified' | 'name'
+
+const uploadInputEl = ref(null)
+const dragOver = ref(false)
+const uploading = ref(false)
+const uploadProgress = ref(0)
+const fileActionFeedback = ref(null) // { ok: boolean, message: string }
+const confirmDeletePath = ref('')
+let deleteConfirmTimer = null
+
+const queue = ref({ available: false, queueState: null, jobs: [] })
+const queueBusy = ref(false)
+const queueError = ref('')
 
 const selectedFile = ref('')
 const metadata = ref(null)
@@ -42,6 +83,12 @@ function resetStartConfirm() {
   confirmStart.value = false
   clearTimeout(startConfirmTimer)
   startConfirmTimer = null
+}
+
+function resetDeleteConfirm() {
+  confirmDeletePath.value = ''
+  clearTimeout(deleteConfirmTimer)
+  deleteConfirmTimer = null
 }
 
 const printStartReason = computed(() => {
@@ -124,11 +171,84 @@ const usedToolsList = computed(() => {
 const isToolchanger = computed(() => Boolean(props.status?.isToolchanger))
 const showMultiToolUi = computed(() => isToolchanger.value || usedToolsList.value.length > 1)
 
+// Pre-print Spoolman sanity warnings (1-tool)
+const activeSpool = computed(() => props.status?.spoolman?.activeSpool ?? null)
+const showInlineSpoolman = computed(
+  () => !showMultiToolUi.value && Boolean(props.status?.spoolman?.available && props.status?.spoolman?.connected),
+)
+
+function normalizeMaterialToken(raw) {
+  if (typeof raw !== 'string') return ''
+  return raw
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+}
+
+const prePrintWarnings = computed(() => {
+  if (!showInlineSpoolman.value || !activeSpool.value || !metadata.value || isViewingActivePrint.value) return []
+  const warnings = []
+  const spool = activeSpool.value
+  const neededWeight = metadata.value.filamentWeightTotal ?? metadata.value.tools?.[0]?.weight ?? null
+  if (
+    Number.isFinite(spool.remainingWeight) &&
+    Number.isFinite(neededWeight) &&
+    neededWeight > 0 &&
+    spool.remainingWeight < neededWeight
+  ) {
+    const deficit = Math.max(0.1, neededWeight - spool.remainingWeight)
+    warnings.push({
+      id: 'weight',
+      message: t('Spule reicht evtl. nicht: {0} g übrig, Druck benötigt {1} g (ca. {2} g fehlen).', [
+        formatNumber(spool.remainingWeight, 0),
+        formatNumber(neededWeight, 1),
+        formatNumber(deficit, 1),
+      ]),
+    })
+  }
+  const slicedMat = metadata.value.tools?.[0]?.type
+  const spoolMat = spool.material
+  if (slicedMat && spoolMat) {
+    const a = normalizeMaterialToken(spoolMat)
+    const b = normalizeMaterialToken(slicedMat)
+    if (a && b && a !== b && !a.startsWith(b) && !b.startsWith(a)) {
+      warnings.push({
+        id: 'material',
+        message: t('Material-Abweichung: Geladene Spule ist {0}, Datei ist für {1} gesliced.', [spoolMat, slicedMat]),
+      })
+    }
+  }
+  return warnings
+})
+
+// Subfolder & search filtering for G-Code browser
+const folders = computed(() => {
+  const set = new Set()
+  for (const file of files.value) {
+    if (file.dir) set.add(file.dir)
+  }
+  return [...set].sort((a, b) => a.localeCompare(b))
+})
+
+const filteredFiles = computed(() => {
+  const q = fileSearch.value.trim().toLowerCase()
+  const dir = activeFolder.value
+  let list = files.value.filter(file => {
+    if (dir && file.dir !== dir) return false
+    if (!q) return true
+    return file.path.toLowerCase().includes(q)
+  })
+  if (fileSort.value === 'name') {
+    list = [...list].sort((a, b) => a.name.localeCompare(b.name, locale.value))
+  }
+  return list
+})
+
 const fileOptions = computed(() =>
   files.value.map(file => ({
     value: file.path,
-    label: file.name,
-    sublabel: file.size != null ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` : '',
+    label: file.dir ? `${file.name} (${file.dir})` : file.name,
+    sublabel: formatFileSize(file.size),
   })),
 )
 
@@ -158,6 +278,22 @@ const printStatusBadge = computed(() => {
   }
   return 'Dateivorschau'
 })
+
+function formatFileSize(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) return ''
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`
+}
+
+function formatShortDate(epochSec) {
+  if (!Number.isFinite(epochSec)) return ''
+  return new Date(epochSec * 1000).toLocaleDateString(locale.value, {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
 
 function formatDuration(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '—'
@@ -207,9 +343,13 @@ async function loadFiles() {
     files.value = data.files ?? []
     recentJobs.value = data.recentJobs ?? []
 
+    if (activeFolder.value && !folders.value.includes(activeFolder.value)) {
+      activeFolder.value = ''
+    }
+
     if (props.requestedFile) {
       selectRecentJob(props.requestedFile)
-    } else if (!selectedFile.value) {
+    } else if (!selectedFile.value || !files.value.some(f => f.path === selectedFile.value)) {
       const activePath = isPrintActive.value ? props.status?.printFilename : ''
       if (activePath) {
         selectedFile.value = activePath
@@ -217,12 +357,167 @@ async function loadFiles() {
         selectedFile.value = recentJobs.value[0].filename
       } else if (files.value[0]?.path) {
         selectedFile.value = files.value[0].path
+      } else {
+        selectedFile.value = ''
       }
     }
   } catch (error) {
     filesError.value = error.message || 'Druckdateien nicht erreichbar.'
   } finally {
     loadingFiles.value = false
+  }
+}
+
+async function loadQueue() {
+  try {
+    const res = await fetch('/api/print/queue', { signal: AbortSignal.timeout(6000) })
+    if (!res.ok) return
+    const data = await res.json().catch(() => null)
+    if (data) queue.value = data
+  } catch {
+    // Job queue optional
+  }
+}
+
+async function runQueueAction(payload) {
+  if (!props.canWrite || queueBusy.value) return
+  queueBusy.value = true
+  queueError.value = ''
+  try {
+    const res = await fetch('/api/print/queue', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Cockpit-Request': '1',
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(8000),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Warteschlangen-Aktion fehlgeschlagen.')
+    queue.value = data
+    if (payload.action === 'add') {
+      fileActionFeedback.value = {
+        ok: true,
+        message: t('{0} zur Warteschlange hinzugefügt.', [payload.filename.split('/').pop()]),
+      }
+    }
+  } catch (err) {
+    queueError.value = err.message || 'Warteschlangen-Aktion fehlgeschlagen.'
+  } finally {
+    queueBusy.value = false
+  }
+}
+
+async function uploadGcodeFile(file) {
+  if (!file || !props.canWrite || uploading.value) return
+  if (!/\.(gcode|gco|g)$/i.test(file.name)) {
+    fileActionFeedback.value = { ok: false, message: 'Bitte eine .gcode-, .gco- oder .g-Datei auswählen.' }
+    return
+  }
+  if (file.size > 100 * 1024 * 1024) {
+    fileActionFeedback.value = { ok: false, message: 'Die G-Code-Datei überschreitet das Limit von 100 MB.' }
+    return
+  }
+
+  uploading.value = true
+  uploadProgress.value = 0
+  fileActionFeedback.value = { ok: true, message: t('Lade {0} hoch …', [file.name]) }
+
+  try {
+    // Buffer in memory first so macOS Safari never aborts on File-backed XHR bodies
+    const arrayBuffer = await file.arrayBuffer()
+    const targetDir = activeFolder.value || ''
+    const data = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest()
+      xhr.open('POST', '/api/print/upload')
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream')
+      xhr.setRequestHeader('X-Cockpit-Request', '1')
+      xhr.setRequestHeader('X-Gcode-Filename', encodeURIComponent(file.name))
+      if (targetDir) xhr.setRequestHeader('X-Gcode-Path', encodeURIComponent(targetDir))
+      xhr.timeout = 120_000
+      xhr.upload.onprogress = evt => {
+        if (evt.lengthComputable && evt.total > 0) {
+          uploadProgress.value = Math.min(99, Math.round((evt.loaded / evt.total) * 100))
+        }
+      }
+      xhr.onload = () => {
+        let parsed = {}
+        try {
+          parsed = JSON.parse(xhr.responseText || '{}')
+        } catch {
+          // Ignore malformed JSON
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          uploadProgress.value = 100
+          resolve(parsed)
+        } else {
+          reject(new Error(parsed.error || `Upload fehlgeschlagen (HTTP ${xhr.status}).`))
+        }
+      }
+      xhr.onerror = () => reject(new Error('Verbindungsfehler beim Hochladen.'))
+      xhr.ontimeout = () => reject(new Error('Upload abgebrochen oder Zeitüberschreitung. Bitte erneut versuchen.'))
+      xhr.send(arrayBuffer)
+    })
+
+    await loadFiles()
+    if (data?.path) {
+      selectedFile.value = data.path
+    }
+    fileActionFeedback.value = {
+      ok: true,
+      message: t('{0} hochgeladen und ausgewählt.', [data?.name || file.name]),
+    }
+  } catch (err) {
+    fileActionFeedback.value = { ok: false, message: err.message || 'Upload fehlgeschlagen.' }
+  } finally {
+    uploading.value = false
+    uploadProgress.value = 0
+  }
+}
+
+function triggerUploadPicker() {
+  uploadInputEl.value?.click()
+}
+
+function onUploadInputChange(event) {
+  const file = event.target?.files?.[0]
+  if (event.target) event.target.value = ''
+  if (file) uploadGcodeFile(file)
+}
+
+function onDropGcode(event) {
+  dragOver.value = false
+  const file = event.dataTransfer?.files?.[0]
+  if (file) uploadGcodeFile(file)
+}
+
+function isFileActivePrint(path) {
+  return isPrintActive.value && props.status?.printFilename === path
+}
+
+async function requestOrDeleteFile(file) {
+  if (!props.canWrite || isFileActivePrint(file.path)) return
+  if (confirmDeletePath.value !== file.path) {
+    confirmDeletePath.value = file.path
+    clearTimeout(deleteConfirmTimer)
+    deleteConfirmTimer = setTimeout(resetDeleteConfirm, 5000)
+    return
+  }
+  resetDeleteConfirm()
+  fileActionFeedback.value = null
+  try {
+    const res = await fetch(`/api/print/file?filename=${encodeURIComponent(file.path)}`, {
+      method: 'DELETE',
+      headers: { 'X-Cockpit-Request': '1' },
+      signal: AbortSignal.timeout(8000),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data.error || 'Datei konnte nicht gelöscht werden.')
+    fileActionFeedback.value = { ok: true, message: t('{0} gelöscht.', [file.name]) }
+    await loadFiles()
+  } catch (err) {
+    fileActionFeedback.value = { ok: false, message: err.message || 'Datei konnte nicht gelöscht werden.' }
   }
 }
 
@@ -276,7 +571,17 @@ function onLayerInput(event) {
 
 function selectRecentJob(filename) {
   if (!files.value.some(f => f.path === filename)) {
-    files.value = [{ path: filename, name: filename.split('/').pop(), size: null, modified: null }, ...files.value]
+    const idx = filename.lastIndexOf('/')
+    files.value = [
+      {
+        path: filename,
+        name: idx >= 0 ? filename.slice(idx + 1) : filename,
+        dir: idx >= 0 ? filename.slice(0, idx) : '',
+        size: null,
+        modified: null,
+      },
+      ...files.value,
+    ]
   }
   selectedFile.value = filename
 }
@@ -311,17 +616,25 @@ watch(
 
 onMounted(() => {
   loadFiles()
+  loadQueue()
 })
 
 onBeforeUnmount(() => {
   fetchAbort?.abort()
   resetStartConfirm()
+  resetDeleteConfirm()
 })
 </script>
 
 <template>
   <section class="print-layout" :aria-label="t('Druckansicht')">
-    <div class="print-scene-column">
+    <div
+      class="print-scene-column"
+      :class="{ 'drag-over': dragOver }"
+      @dragover.prevent="canWrite && !uploading && (dragOver = true)"
+      @dragleave="dragOver = false"
+      @drop.prevent="onDropGcode"
+    >
       <div class="print-file-bar">
         <div class="print-file-picker">
           <FileCode2 :size="16" class="print-file-icon" />
@@ -334,18 +647,171 @@ onBeforeUnmount(() => {
           />
         </div>
         <button
+          class="subtle-button print-bar-btn"
+          :class="{ active: fileDrawerOpen }"
+          type="button"
+          :aria-expanded="fileDrawerOpen"
+          :title="t('Dateimanager ein- oder ausblenden')"
+          @click="fileDrawerOpen = !fileDrawerOpen"
+        >
+          <FolderOpen :size="15" />
+          <span>{{ t('Dateien') }} ({{ files.length }})</span>
+        </button>
+        <button
+          v-if="canWrite"
+          class="subtle-button print-bar-btn"
+          type="button"
+          :disabled="uploading"
+          :title="t('.gcode-Datei auf den Drucker hochladen')"
+          @click="triggerUploadPicker"
+        >
+          <Upload :size="15" />
+          <span>{{ uploading ? `${uploadProgress} %` : t('Hochladen') }}</span>
+        </button>
+        <input
+          ref="uploadInputEl"
+          type="file"
+          accept=".gcode,.gco,.g,text/plain"
+          class="sr-only"
+          tabindex="-1"
+          aria-hidden="true"
+          @change="onUploadInputChange"
+        />
+        <button
           class="icon-button"
           type="button"
           :disabled="loadingFiles"
           :title="t('Dateiliste aktualisieren')"
           :aria-label="t('Dateiliste aktualisieren')"
-          @click="loadFiles"
+          @click="loadFiles(); loadQueue()"
         >
           <RefreshCw :size="16" :class="{ spinning: loadingFiles }" />
         </button>
       </div>
 
-      <p v-if="filesError" class="print-inline-error" role="status">{{ t(filesError) }}</p>
+      <div v-if="uploading" class="print-upload-bar" role="status" aria-live="polite">
+        <div class="print-upload-fill" :style="{ width: `${uploadProgress}%` }" />
+      </div>
+
+      <p
+        v-if="fileActionFeedback"
+        class="print-feedback-note"
+        :class="fileActionFeedback.ok ? 'ok' : 'error'"
+        :role="fileActionFeedback.ok ? 'status' : 'alert'"
+      >
+        {{ t(fileActionFeedback.message) }}
+      </p>
+
+      <p v-if="filesError" class="print-inline-error" role="alert">{{ t(filesError) }}</p>
+
+      <!-- Expandable G-Code File Browser (Search, Subfolders, Upload Dropzone, Delete, Queue) -->
+      <section v-if="fileDrawerOpen" class="print-browser-panel" :aria-label="t('G-Code-Dateimanager')">
+        <div class="print-browser-controls">
+          <label class="spoolman-search print-browser-search">
+            <Search :size="14" />
+            <input
+              v-model="fileSearch"
+              type="text"
+              :placeholder="t('G-Code oder Ordner suchen …')"
+              :aria-label="t('G-Code-Dateien durchsuchen')"
+            />
+          </label>
+          <div class="segmented" role="group" :aria-label="t('Sortierung')">
+            <button type="button" :aria-pressed="fileSort === 'modified'" @click="fileSort = 'modified'">
+              {{ t('Neueste') }}
+            </button>
+            <button type="button" :aria-pressed="fileSort === 'name'" @click="fileSort = 'name'">
+              {{ t('Name') }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="folders.length" class="print-folder-chips" role="group" :aria-label="t('Ordner filtern')">
+          <button
+            type="button"
+            class="subtle-button"
+            :class="{ active: activeFolder === '' }"
+            @click="activeFolder = ''"
+          >
+            {{ t('Alle Ordner') }}
+          </button>
+          <button
+            v-for="dir in folders"
+            :key="dir"
+            type="button"
+            class="subtle-button"
+            :class="{ active: activeFolder === dir }"
+            @click="activeFolder = dir"
+          >
+            {{ dir }}
+          </button>
+        </div>
+
+        <div v-if="!filteredFiles.length" class="print-browser-empty" role="status">
+          {{ files.length ? t('Keine passende G-Code-Datei gefunden.') : t('Noch keine G-Code-Dateien vorhanden. Einfach per Drag & Drop ablegen.') }}
+        </div>
+
+        <ul v-else class="print-browser-list">
+          <li
+            v-for="file in filteredFiles"
+            :key="file.path"
+            class="print-browser-row"
+            :class="{ selected: selectedFile === file.path }"
+          >
+            <button
+              type="button"
+              class="print-browser-select"
+              @click="selectedFile = file.path"
+            >
+              <span class="print-browser-name">
+                <strong>{{ file.name }}</strong>
+                <span v-if="file.dir" class="print-dir-badge">{{ file.dir }}</span>
+              </span>
+              <span class="print-browser-meta">
+                {{ formatFileSize(file.size) }}
+                <template v-if="file.modified"> · {{ formatShortDate(file.modified) }}</template>
+              </span>
+            </button>
+
+            <div class="print-browser-actions">
+              <button
+                v-if="queue.available && canWrite"
+                type="button"
+                class="icon-button"
+                :disabled="queueBusy"
+                :title="t('Zur Druck-Warteschlange hinzufügen')"
+                :aria-label="t('{0} zur Warteschlange hinzufügen', [file.name])"
+                @click="runQueueAction({ action: 'add', filename: file.path })"
+              >
+                <ListPlus :size="15" />
+              </button>
+              <button
+                v-if="canWrite"
+                type="button"
+                :class="confirmDeletePath === file.path ? 'confirm-button print-delete-confirm' : 'icon-button'"
+                :disabled="isFileActivePrint(file.path)"
+                :title="
+                  isFileActivePrint(file.path)
+                    ? t('Aktive Druckdatei kann nicht gelöscht werden')
+                    : confirmDeletePath === file.path
+                      ? t('Erneut klicken, um endgültig zu löschen')
+                      : t('Datei löschen')
+                "
+                :aria-label="
+                  confirmDeletePath === file.path
+                    ? t('{0} wirklich löschen?', [file.name])
+                    : t('{0} löschen', [file.name])
+                "
+                @click="requestOrDeleteFile(file)"
+                @keydown.esc="resetDeleteConfirm"
+              >
+                <Trash2 :size="14" />
+                <span v-if="confirmDeletePath === file.path">{{ t('Löschen?') }}</span>
+              </button>
+            </div>
+          </li>
+        </ul>
+      </section>
 
       <PrintScene
         :model="model"
@@ -479,6 +945,25 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
+      <!-- Inline Spoolman Picker + Pre-Print Sanity Warnings (1-Tool) -->
+      <div v-if="showInlineSpoolman" class="print-spoolman-block">
+        <SpoolmanPicker
+          :spoolman="status.spoolman"
+          :online="online"
+          :can-write="canWrite"
+          @changed="emit('refresh')"
+        />
+        <div
+          v-for="warn in prePrintWarnings"
+          :key="warn.id"
+          class="print-sanity-alert"
+          role="alert"
+        >
+          <AlertTriangle :size="14" />
+          <span>{{ warn.message }}</span>
+        </div>
+      </div>
+
       <div v-if="!isPrintActive && selectedFile" class="print-start-bar">
         <div v-if="confirmStart" class="print-confirm-row">
           <button
@@ -501,17 +986,29 @@ onBeforeUnmount(() => {
             <X :size="15" />
           </button>
         </div>
-        <button
-          v-else
-          type="button"
-          class="focus-action print-start-btn"
-          :disabled="!!printStartReason"
-          :title="printStartReason ? t(printStartReason) : t('Ausgewählte Datei auf dem Drucker starten')"
-          @click="requestOrStartPrint"
-        >
-          <span>{{ t('Druck starten') }}</span>
-          <Play :size="15" />
-        </button>
+        <div v-else class="print-start-actions">
+          <button
+            type="button"
+            class="focus-action print-start-btn"
+            :disabled="!!printStartReason"
+            :title="printStartReason ? t(printStartReason) : t('Ausgewählte Datei auf dem Drucker starten')"
+            @click="requestOrStartPrint"
+          >
+            <span>{{ t('Druck starten') }}</span>
+            <Play :size="15" />
+          </button>
+          <button
+            v-if="queue.available && canWrite"
+            type="button"
+            class="subtle-button print-queue-add-btn"
+            :disabled="queueBusy"
+            :title="t('Zur Druck-Warteschlange hinzufügen')"
+            :aria-label="t('Zur Druck-Warteschlange hinzufügen')"
+            @click="runQueueAction({ action: 'add', filename: selectedFile })"
+          >
+            <ListPlus :size="15" />
+          </button>
+        </div>
       </div>
 
       <div v-else-if="isPrintActive && !isViewingActivePrint && status?.printFilename" class="print-start-bar">
@@ -637,6 +1134,63 @@ onBeforeUnmount(() => {
         </ul>
       </section>
 
+      <!-- Moonraker Job Queue (shown when available & non-empty) -->
+      <section v-if="queue.available && queue.jobs.length" class="print-queue-section" :aria-label="t('Warteschlange')">
+        <div class="print-queue-head">
+          <h3><ListOrdered :size="14" />{{ t('Warteschlange') }} ({{ queue.jobs.length }})</h3>
+          <div v-if="canWrite" class="print-queue-controls">
+            <button
+              v-if="queue.queueState === 'paused'"
+              type="button"
+              class="subtle-button"
+              :disabled="queueBusy"
+              :title="t('Warteschlange starten')"
+              @click="runQueueAction({ action: 'start' })"
+            >
+              <Play :size="12" />{{ t('Start') }}
+            </button>
+            <button
+              v-else
+              type="button"
+              class="subtle-button"
+              :disabled="queueBusy"
+              :title="t('Warteschlange pausieren')"
+              @click="runQueueAction({ action: 'pause' })"
+            >
+              <Pause :size="12" />{{ t('Pause') }}
+            </button>
+            <button
+              type="button"
+              class="subtle-button"
+              :disabled="queueBusy"
+              :title="t('Warteschlange leeren')"
+              @click="runQueueAction({ action: 'clear' })"
+            >
+              {{ t('Leeren') }}
+            </button>
+          </div>
+        </div>
+        <p v-if="queueError" class="print-inline-error" role="alert">{{ t(queueError) }}</p>
+        <ul class="print-queue-list">
+          <li v-for="(job, idx) in queue.jobs" :key="job.jobId || `${job.filename}-${idx}`" class="print-queue-item">
+            <span class="print-queue-index">{{ idx + 1 }}</span>
+            <button type="button" class="print-queue-name" @click="selectRecentJob(job.filename)">
+              {{ job.name }}
+            </button>
+            <button
+              v-if="canWrite && job.jobId"
+              type="button"
+              class="icon-button print-queue-remove"
+              :disabled="queueBusy"
+              :aria-label="t('{0} aus Warteschlange entfernen', [job.name])"
+              @click="runQueueAction({ action: 'remove', jobId: job.jobId })"
+            >
+              <X :size="13" />
+            </button>
+          </li>
+        </ul>
+      </section>
+
       <details v-if="recentJobs.length" class="print-history">
         <summary>
           <span>{{ t('Letzte Druckjobs') }}</span>
@@ -648,11 +1202,13 @@ onBeforeUnmount(() => {
               type="button"
               class="print-history-item"
               :class="{ selected: selectedFile === job.filename }"
-              @click="selectRecentJob(job.filename)"
+              :disabled="job.fileExists === false"
+              :title="job.fileExists === false ? t('Datei wurde gelöscht') : job.filename"
+              @click="job.fileExists !== false && selectRecentJob(job.filename)"
             >
               <span class="print-history-name">{{ job.name }}</span>
               <span class="print-history-meta">
-                {{ t(jobStatusLabel(job.status)) }} · {{ formatDuration(job.printDuration) }}
+                {{ job.fileExists === false ? t('Entfernt') : t(jobStatusLabel(job.status)) }} · {{ formatDuration(job.printDuration) }}
               </span>
             </button>
           </li>

@@ -277,6 +277,22 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
     ...genericFans,
   ]
 
+  const filamentSensors = Object.entries(status)
+    .filter(([key]) => key.startsWith('filament_switch_sensor ') || key.startsWith('filament_motion_sensor '))
+    .map(([key, value]) => {
+      const isMotion = key.startsWith('filament_motion_sensor ')
+      const name = key.replace(/^filament_(?:switch|motion)_sensor\s+/, '')
+      return {
+        id: key,
+        name,
+        kind: isMotion ? 'motion' : 'switch',
+        label: formatSensorLabel(name),
+        enabled: flag(value?.enabled),
+        detected: flag(value?.filament_detected),
+      }
+    })
+    .sort((a, b) => a.label.localeCompare(b.label) || a.kind.localeCompare(b.kind))
+
   const sensors = Object.entries(status)
     .filter(([key]) => (key.startsWith('temperature_sensor ') || key.startsWith('temperature_fan ')) && !/^temperature_sensor T[0-7]$/.test(key))
     .map(([key, value]) => {
@@ -362,6 +378,7 @@ export function normalizeStatus(status, at = new Date().toISOString()) {
     rp2350: sensor('rp2350'),
     beacon: sensor('beacon_coil'),
     sensors,
+    filamentSensors,
     homedAxes: status.toolhead?.homed_axes ?? null,
     position: status.toolhead?.position ?? null,
     axisMinimum: status.toolhead?.axis_minimum ?? null,

@@ -340,9 +340,19 @@ async function testConnection(url) {
   }
 }
 
-async function uploadModel(printerId, slot, file) {
+async function uploadModel(printerId, slot, file, filenameOverride = '') {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 120_000)
   try {
-    const filename = file?.name || `${slot}.glb`
+    const filename = filenameOverride || file?.name || `${slot}.glb`
+    // Convert Blob/File to an in-memory ArrayBuffer before POSTing so Safari/WebKit
+    // never aborts synthetic File streams during large uploads over LAN Wi-Fi.
+    const body =
+      file instanceof ArrayBuffer || ArrayBuffer.isView(file)
+        ? file
+        : typeof file?.arrayBuffer === 'function'
+          ? await file.arrayBuffer()
+          : file
     const response = await fetch(`/api/models/${encodeURIComponent(printerId)}/${encodeURIComponent(slot)}`, {
       method: 'POST',
       headers: {
@@ -350,8 +360,8 @@ async function uploadModel(printerId, slot, file) {
         'X-Cockpit-Request': '1',
         'X-Model-Filename': encodeURIComponent(filename),
       },
-      body: file,
-      signal: AbortSignal.timeout(60_000),
+      body,
+      signal: controller.signal,
     })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) {
@@ -360,7 +370,19 @@ async function uploadModel(printerId, slot, file) {
     if (data.settings) applyRemoteSettings(data.settings)
     return { ok: true, meta: data.meta ?? null, settings: data.settings ?? null }
   } catch (cause) {
-    return { ok: false, status: 0, error: cause.message || 'Verbindungsfehler beim Hochladen.' }
+    const aborted =
+      cause?.name === 'AbortError' ||
+      cause?.name === 'TimeoutError' ||
+      /abort/i.test(String(cause?.message || ''))
+    return {
+      ok: false,
+      status: 0,
+      error: aborted
+        ? 'Upload abgebrochen oder Zeitüberschreitung. Bitte erneut versuchen.'
+        : cause?.message || 'Verbindungsfehler beim Hochladen.',
+    }
+  } finally {
+    clearTimeout(timeoutId)
   }
 }
 

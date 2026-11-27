@@ -205,7 +205,8 @@ async function handleModelUpload(slot, file) {
     return
   }
 
-  let uploadFile = file
+  let uploadPayload = file
+  let uploadSize = file.size
   let optimizedSummary = null
   try {
     if (file.size > AUTO_OPTIMIZE_THRESHOLD_BYTES) {
@@ -222,9 +223,16 @@ async function handleModelUpload(slot, file) {
         if (shouldOptimizeGlb(header)) {
           const opt = await optimizeGlbBuffer(rawBuf, { slot })
           if (opt.optimized) {
-            uploadFile = new File([opt.bytes], file.name, { type: 'model/gltf-binary' })
+            uploadPayload = opt.bytes
+            uploadSize = opt.bytes.byteLength
             optimizedSummary = { from: opt.originalBytes, to: opt.optimizedBytes }
+          } else {
+            uploadPayload = rawBuf
+            uploadSize = rawBuf.byteLength
           }
+        } else {
+          uploadPayload = rawBuf
+          uploadSize = rawBuf.byteLength
         }
       } catch (err) {
         console.warn('[DOCKYARD] Browser GLB optimization skipped:', err)
@@ -233,7 +241,7 @@ async function handleModelUpload(slot, file) {
       }
     }
 
-    if (uploadFile.size > MAX_UPLOAD_BYTES) {
+    if (uploadSize > MAX_UPLOAD_BYTES) {
       modelFeedback.value = {
         ok: false,
         message: 'Das 3D-Modell überschreitet selbst nach automatischer Komprimierung das 25-MB-Limit. Bitte in Fusion 360 mit „Kompakt“ exportieren.',
@@ -242,7 +250,11 @@ async function handleModelUpload(slot, file) {
     }
 
     modelUploadState.value[slot] = 'uploading'
-    const res = await settingsStore.uploadModel(printerId, slot, uploadFile)
+    modelFeedback.value = {
+      ok: true,
+      message: `Lade 3D-Modell auf den Drucker hoch (${formatBytes(uploadSize)}) …`,
+    }
+    const res = await settingsStore.uploadModel(printerId, slot, uploadPayload, file.name)
     if (!res.ok) {
       modelFeedback.value = { ok: false, message: res.error || 'Upload fehlgeschlagen.' }
     } else if (optimizedSummary) {

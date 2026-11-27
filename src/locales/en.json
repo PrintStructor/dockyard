@@ -1256,5 +1256,7 @@
   "Neue .glb wählen": "Choose new .glb",
   "Datei auswählen & hochladen": "Choose file & upload",
   "Andere .glb hier ablegen oder klicken zum Ersetzen": "Drop another .glb here or click to replace",
-  "Datei hier ablegen oder klicken zum Auswählen (.glb · automatische Komprimierung)": "Drop file here or click to browse (.glb · automatic compression)"
+  "Datei hier ablegen oder klicken zum Auswählen (.glb · automatische Komprimierung)": "Drop file here or click to browse (.glb · automatic compression)",
+  "Lade 3D-Modell auf den Drucker hoch ({0}) …": "Uploading 3D model to printer ({0}) …",
+  "Upload abgebrochen oder Zeitüberschreitung. Bitte erneut versuchen.": "Upload was aborted or timed out. Please try again."
 }

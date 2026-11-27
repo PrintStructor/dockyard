@@ -295,24 +295,32 @@ export function detectNozzleTip(root, nozzleTipNode = null) {
   })
   if (!Number.isFinite(minY)) return null
 
-  const threshold = minY + 0.0025
+  // Prefer a tight 0.8 mm band around minY so fan ducts / shrouds hovering ~2 mm above
+  // the nozzle tip cannot skew the centroid backward; widen to 2.5 mm only if sparse.
   const v = new THREE.Vector3()
-  let sumX = 0
-  let sumZ = 0
-  let count = 0
-  for (const mesh of meshes) {
-    const pos = mesh.geometry.attributes.position
-    const mat = mesh.matrixWorld
-    for (let i = 0; i < pos.count; i++) {
-      v.fromBufferAttribute(pos, i).applyMatrix4(mat)
-      if (v.y <= threshold) {
-        sumX += v.x
-        sumZ += v.z
-        count++
+  const collectBand = band => {
+    const threshold = minY + band
+    let sumX = 0
+    let sumZ = 0
+    let count = 0
+    for (const mesh of meshes) {
+      const pos = mesh.geometry.attributes.position
+      const mat = mesh.matrixWorld
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i).applyMatrix4(mat)
+        if (v.y <= threshold) {
+          sumX += v.x
+          sumZ += v.z
+          count++
+        }
       }
     }
+    return { sumX, sumZ, count }
   }
-  return count > 0 ? new THREE.Vector3(sumX / count, minY, sumZ / count) : null
+
+  let sample = collectBand(0.0008)
+  if (sample.count < 3) sample = collectBand(0.0025)
+  return sample.count > 0 ? new THREE.Vector3(sample.sumX / sample.count, minY, sample.sumZ / sample.count) : null
 }
 
 export function detectFilamentInlet(root, filamentInletNode = null, nozzleTip = null) {

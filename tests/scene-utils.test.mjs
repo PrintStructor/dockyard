@@ -96,6 +96,14 @@ test('detectNozzleTip prefers explicit NOZZLE_TIP node and falls back to lowest-
   assert.ok(Math.abs(fallback.x - 0.01) < 1e-5)
   assert.ok(Math.abs(fallback.y - 0.0) < 1e-5)
   assert.ok(Math.abs(fallback.z - -0.02) < 1e-5)
+
+  // Fan ducts hovering 2 mm above the nozzle tip must NOT skew the nozzle centroid
+  const ducts = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.02, 0.05), new THREE.MeshStandardMaterial())
+  ducts.position.set(0.01, 0.012, -0.04) // minY = 0.002 m (2 mm above nozzle tip)
+  root.add(ducts)
+  const tight = detectNozzleTip(root, null)
+  assert.ok(Math.abs(tight.x - 0.01) < 1e-5, `expected nozzle x=0.01, got ${tight.x}`)
+  assert.ok(Math.abs(tight.z - -0.02) < 1e-5, `expected nozzle z=-0.02, got ${tight.z}`)
 })
 
 test('detectFilamentInlet supports explicit anchors, baked Fusion meshes, and nozzle-axis auto-detection', () => {
